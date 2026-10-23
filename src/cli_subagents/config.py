@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -23,6 +25,7 @@ REVIEWERS = ("agy", "claude", "off")
 WEB_SEARCH_MODES = ("disabled", "cached", "indexed", "live")
 WINDOWS_SANDBOX_MODES = ("unelevated", "elevated", "off")
 REASONING_SUMMARY_MODES = ("detailed", "concise", "auto", "none", "off")
+SPEND_PERIODS = ("day", "week", "month", "total")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -66,6 +69,12 @@ def default_primary(runtime: str) -> Path:
 
 
 @dataclass
+class SpendCap:
+    amount_usd: float
+    window: str  # rolling duration, e.g. "24h" or "7d"
+
+
+@dataclass
 class Account:
     name: str
     home: Path
@@ -77,6 +86,11 @@ class Account:
     max_jobs: int | None = None
     max_effort: str | None = None
     models: list[str] | None = None
+    explicit_only: bool = False  # only a start that names this account may use it
+    spend_cap_usd: float | None = None
+    spend_period: str = "month"
+    spend_since: str | None = None  # UTC date or ISO datetime; starts a new accounting window
+    spend_caps: list[SpendCap] = field(default_factory=list)
 
 
 @dataclass
@@ -136,7 +150,7 @@ class RuntimeConfig:
 
         if self.runtime in OPT_IN_FAILOVER and self.failover == "off":
             return [self.primary_account()]
-        accounts = [account for account in self.accounts if account.enabled]
+        accounts = [account for account in self.accounts if account.enabled and not account.explicit_only]
         if self.include_primary or not accounts:
             accounts.insert(0, self.primary_account())
         return accounts
@@ -146,14 +160,16 @@ class RuntimeConfig:
 
         if self.runtime in OPT_IN_FAILOVER:
             return [self.primary_account(), *(account for account in self.accounts if account.enabled)]
-        return self.worker_accounts()
+        accounts = [account for account in self.accounts if account.enabled]
+        if self.include_primary or any(account.is_primary for account in self.worker_accounts()):
+            accounts.insert(0, self.primary_account())
+        return accounts
 
     def listed_accounts(self) -> list[Account]:
-        """Accounts shown in reports: for opt-in runtimes the primary and every extra account, disabled ones too."""
+        """Configured accounts, including disabled and explicit-only accounts, plus the active primary."""
 
-        if self.runtime in OPT_IN_FAILOVER:
-            return [self.primary_account(), *self.accounts]
-        return self.worker_accounts()
+        show_primary = self.runtime in OPT_IN_FAILOVER or any(account.is_primary for account in self.worker_accounts())
+        return ([self.primary_account()] if show_primary else []) + self.accounts
 
     def find(self, name: str) -> Account | None:
         if name == "primary":
@@ -241,6 +257,62 @@ def _quota_pools(name: str, value: Any) -> list[QuotaPool]:
     return pools
 
 
+def _spend_amount(label: str, key: str, value: Any) -> float:
+    try:
+        if type(value) not in (int, float) or not math.isfinite(float(value)) or value <= 0:
+            raise ValueError
+        return float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(f"{label} {key} must be a positive finite number") from None
+
+
+def _account_spend(runtime: str, account: str, item: dict[str, Any]) -> dict[str, Any]:
+    """Validate spend settings before any account can be selected or run."""
+
+    label = f"[{runtime}] account '{account}'"
+    keys = ("spend_cap_usd", "spend_period", "spend_since", "spend_caps")
+    if runtime != "claude" and any(key in item for key in keys):
+        raise ValueError(f"{label}: spend caps are supported for Claude accounts only")
+    cap = item.get("spend_cap_usd")
+    if cap is not None:
+        cap = _spend_amount(label, "spend_cap_usd", cap)
+    caps = []
+    if "spend_caps" in item:
+        if "spend_cap_usd" in item:
+            raise ValueError(f"{label}: use spend_caps or spend_cap_usd, not both")
+        values = item["spend_caps"]
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"{label} spend_caps must be a nonempty array of amount_usd/window tables")
+        for value in values:
+            if not isinstance(value, dict) or set(value) != {"amount_usd", "window"}:
+                raise ValueError(f"{label} spend_caps entries need amount_usd and window only")
+            amount = _spend_amount(label, "spend_caps amount_usd", value["amount_usd"])
+            window = value["window"]
+            matched = re.fullmatch(r"([1-9][0-9]*)(h|d)", window) if isinstance(window, str) else None
+            if not matched:
+                raise ValueError(f"{label} spend_caps window must be a positive number of hours or days, for example '24h' or '7d'")
+            if len(matched[1]) > 6 or int(matched[1]) * (24 if matched[2] == "d" else 1) > 36500 * 24:
+                raise ValueError(f"{label} spend_caps window must be at most 36500 days")
+            caps.append(SpendCap(amount, window))
+    period = item.get("spend_period", "month")
+    if period not in SPEND_PERIODS:
+        raise ValueError(f"{label} spend_period must be one of {SPEND_PERIODS}")
+    since = item.get("spend_since")
+    if since is not None:
+        try:
+            if not isinstance(since, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T.+)?", since):
+                raise ValueError
+            if "T" in since:
+                parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+                if parsed.utcoffset() not in (None, timedelta(0)):
+                    raise ValueError
+            else:
+                date.fromisoformat(since)
+        except (TypeError, ValueError):
+            raise ValueError(f"{label} spend_since must be an ISO UTC date or datetime (for example 2026-10-23 or 2026-10-23T12:00:00Z)") from None
+    return {"spend_cap_usd": cap, "spend_period": period, "spend_since": since, "spend_caps": caps}
+
+
 def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
     accounts: list[Account] = []
     for item in data.get("accounts", []) or []:
@@ -249,6 +321,9 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
         account_name = str(item["name"])
         if account_name == "primary":
             raise ValueError("'primary' is reserved for the main setup")
+        explicit_only = item.get("explicit_only", False)
+        if not isinstance(explicit_only, bool):
+            raise ValueError(f"[{name}] account '{account_name}' explicit_only must be true or false")
         accounts.append(
             Account(
                 name=account_name,
@@ -259,6 +334,8 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
                 max_jobs=_opt_int(item.get("max_jobs")),
                 max_effort=_opt_text(item.get("max_effort")),
                 models=_opt_models(item.get("models")),
+                explicit_only=explicit_only,
+                **_account_spend(name, account_name, item),
             )
         )
     opt_in = name in OPT_IN_FAILOVER
@@ -350,7 +427,7 @@ def load_config(path: Path | None = None) -> Config:
 def _toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, int):
+    if isinstance(value, (int, float)):
         return str(value)
     return json.dumps(str(value))
 
@@ -432,6 +509,20 @@ def dump_config(config: Config) -> str:
             ]
             if account.fallback:
                 lines.append("fallback = true")
+            if account.explicit_only:
+                lines.append("explicit_only = true")
+            if account.spend_cap_usd is not None:
+                lines.append(f"spend_cap_usd = {_toml_value(account.spend_cap_usd)}")
+            if account.spend_period != "month":
+                lines.append(f"spend_period = {_toml_value(account.spend_period)}")
+            if account.spend_since is not None:
+                lines.append(f"spend_since = {_toml_value(account.spend_since)}")
+            if account.spend_caps:
+                entries = ", ".join(
+                    f"{{ amount_usd = {_toml_value(cap.amount_usd)}, window = {_toml_value(cap.window)} }}"
+                    for cap in account.spend_caps
+                )
+                lines.append(f"spend_caps = [{entries}]")
             for key, value in (("plan", account.plan), ("max_jobs", account.max_jobs), ("max_effort", account.max_effort)):
                 if value is not None:
                     lines.append(f"{key} = {_toml_value(value)}")

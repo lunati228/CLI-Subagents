@@ -76,9 +76,47 @@ name = "google-2"
 home = "~/.cli-subagents/homes/antigravity/google-2"
 ```
 
-When no extra accounts are configured, workers run on the primary account. That is still useful from another host (for example Codex delegating to Claude Code), and with `include_primary = true` the primary account joins the pool.
+When every extra account is disabled or explicit-only, workers without an `account` run on the primary account. That is still useful from another host (for example Codex delegating to Claude Code), and with `include_primary = true` the primary account joins the pool.
 
 `max_jobs_per_account` defaults to 1 (see Limits for per-account caps) because several Claude Code processes writing the same state file at once have corrupted it in the past. Raise it if you know your version handles it.
+
+## Explicit-only accounts
+
+Set `explicit_only = true` in an account entry to keep it out of automatic selection and failover. This applies to every runtime. The account runs only when a start names it with `account=NAME` in a relay prompt, `--account NAME` on `csa run` or `csa start`, or the MCP `account` field. It must also be enabled and pass the other limits. With only explicit-only extra accounts and `include_primary = false`, unpinned jobs still fall back to the primary account.
+
+`csa accounts list`, `subagent_accounts` and the `Room:` line show the flag. It defaults to `false`. `override` does not make an explicit-only account eligible for an unpinned job.
+
+## Account spend caps
+
+Spend caps currently enforce budgets for Claude workers; other runtimes reject these spend settings. Add these lines to an existing `[[claude.accounts]]` entry, keeping its `name`, `home` and `enabled` settings:
+
+```toml
+explicit_only = true
+spend_caps = [
+  { amount_usd = 300, window = "24h" },
+  { amount_usd = 500, window = "7d" },
+]
+# spend_since = "2026-10-23"  # optional: exclude costs settled before this UTC date
+```
+
+Both caps apply: a $300 allowance over the previous 24 hours and $500 over the previous 7 days. Rolling windows move continuously with the current time. An attempt settled exactly 24 hours or 7 days ago has left that window; an attempt settling now counts.
+
+| Key | Meaning |
+|---|---|
+| `spend_caps` | List of simultaneous caps, each with a positive, finite `amount_usd` and a `window`, such as `"24h"` or `"7d"`. Every cap must have room for the next attempt. Unset means no list of caps. |
+| `spend_since` | Optional ISO UTC date or datetime that excludes costs settled earlier, for example `"2026-10-23"` or `"2026-10-23T14:30:00Z"`. A date starts at midnight UTC; a datetime without an offset is UTC. Other timezone offsets are rejected. Each window also respects this accounting start. Move it forward to start counting anew. |
+| `spend_cap_usd` | Older single-cap form: positive, finite USD cap for accounted spend. Use this with `spend_period` instead of `spend_caps`; combining the two forms is rejected. |
+| `spend_period` | Period for `spend_cap_usd`: `"month"` by default, or `"day"`, `"week"`, `"total"`. Calendar periods use UTC: days start at midnight, weeks on Monday, and months on the first. `"total"` never rolls over. |
+
+csa sums each account's attempt `cost_usd`, including failed attempts, using the time each attempt ends. Costs come from Claude Code's `total_cost_usd`, normally a list-price estimate; managed pricing can change that estimate. A capped attempt that ends without a usable cost consumes its full granted budget, including cancellation, timeout or crash. csa does not guess prices from incomplete token events. Existing job history is imported; records with neither cost nor saved budget also consume allowance conservatively. Set `spend_since` to exclude history you intend to leave outside the allowance. Spend history survives normal job-record cleanup in a separate ledger.
+
+Before starting an attempt, csa subtracts settled spend and running reservations from each cap. It uses the smallest available remainder as the attempt's budget. If any window has less than $1 available, the start is refused with the spend, cap and blocking window. For example, $240 spent in 24 hours and $430 in 7 days leaves $60 and $70 respectively, so the next attempt receives $60.
+
+csa reserves that budget under a lock and passes it to Claude as `--max-budget-usd`. The reservation counts against every cap until settlement. Concurrent starts see that reservation and can use only room left under every cap; increasing `max_jobs` or using `override` cannot allocate the same money twice. All running reservations count even as windows advance or `spend_since` changes. A budget stop has outcome `budget` and ends without retry or failover. `when_full = "queue"` and `override` cannot bypass spend checks.
+
+`csa accounts list`, `subagent_accounts`, `csa doctor` and the `Room:` line show every cap with its spent, reserved and remaining USD. Remaining is the amount available after reservations. `csa accounts reset NAME` clears cooldowns; use `spend_since` to reset spend accounting. A future `spend_since` refuses jobs until that time. Resuming an explicit-only account requires naming it again.
+
+The estimate can be higher than the invoice, so this accounting errs on the safe side. Resumed Claude sessions can report earlier spend again, and summing attempt costs can count it again. Claude checks its native budget after a response completes, so the last response and native subagents stopping can exceed it. Set an organization or workspace spend limit in the Anthropic Console as the authoritative billing-side control, and leave headroom. The local cap covers csa workers using this state folder; interactive sessions and other machines need their own controls. See [spend-cap research](research/spend-caps.md) for sources and caveats.
 
 ## Reasoning summaries
 
@@ -150,7 +188,7 @@ csa run --runtime codex --override "user asked for 6 Codex agents" "Review the p
 
 Never set override on your own judgment; use it only when the user asked for more jobs in this conversation, or confirmed after you warned them and told them how much of the 5-hour window is left. Otherwise follow the refusal's suggestion or use the home model. Use the reported usage and reset time; if the 5-hour window is unknown, say so.
 
-Override bypasses csa's global, runtime and per-account job caps (including plan presets and `max_jobs_per_account`), `max_jobs_by_room`, `usage_ceiling`, pool `per_account`, `total` and `weekly_jobs`, and `when_full` queueing. Real quota or usage-limit cooldowns still apply, including pool cooldowns. Account `models` and `max_effort`, login requirements, depth limits and access levels still apply too.
+Override bypasses csa's global, runtime and per-account job caps (including plan presets and `max_jobs_per_account`), `max_jobs_by_room`, `usage_ceiling`, pool `per_account`, `total` and `weekly_jobs`, and `when_full` queueing. Spend caps and explicit-only selection still apply, as do real quota or usage-limit cooldowns, including pool cooldowns. Account `models` and `max_effort`, login requirements, depth limits and access levels still apply too.
 
 Override jobs count toward later starts and keep their normal quota records. The override text is stored in the job's spec and status, and shown by `csa jobs`, the `csa run --follow` header, `subagent_status` and `subagent_result`. It applies to that start only; continuing a finished job does not inherit it.
 
@@ -233,6 +271,7 @@ The alternative names depend on which other installed runtimes have room. `csa a
 | `homes/antigravity/.reviewer/<account>/` | The bare folder the Antigravity reviewer runs from |
 | `jobs/<job_id>/` | `spec.json`, `status.json`, `events.jsonl`, `result.md`, `stderr-*.log`, `runner.log`, the message logs `inbox.jsonl` and `outbox.jsonl`, for Claude workers the `mcp.json` and `settings.json` they launch with, and for Antigravity workers the review gate's `review-context.json`, `review.jsonl` (every decision) and `review-cache.json` |
 | `state/<runtime>-usage.json` | Last known usage, cooldowns and last use per account |
+| `state/<runtime>-spend.json` | Durable per-attempt spend and running budget reservations; job retention does not remove this history |
 | `state/leases/` | Lock files for per-account job slots |
 | `cache/claude/<account>/` | Generated `settings.json` overlay and MCP config passed to workers |
 

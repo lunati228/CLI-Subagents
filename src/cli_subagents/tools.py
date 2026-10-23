@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from cli_subagents import accounts, jobs, limits, messages, plans, quota, usage_view
+from cli_subagents import accounts, jobs, limits, messages, plans, quota, spend, usage_view
 from cli_subagents.config import load_config
 from cli_subagents.hosts import detect_host
 from cli_subagents.runtimes import AVAILABLE as RUNTIMES, get_runtime
@@ -461,7 +461,11 @@ def account_report(runtime_name: str) -> dict[str, Any]:
     pool_state = quota.pool_state(config, counts, now)
     for account in config.listed_accounts():
         record = usage.get(account.name) or {}
-        entry: dict[str, Any] = {"name": account.name, "home": str(account.home), "enabled": account.enabled}
+        entry: dict[str, Any] = {
+            "name": account.name, "home": str(account.home), "enabled": account.enabled,
+            "explicit_only": account.explicit_only,
+        }
+        entry.update(spend.snapshot(config, account, now=now))
         if binary:
             entry["auth"] = runtime.auth_status(config, account)
         until = accounts.cooldown_until(record, now)

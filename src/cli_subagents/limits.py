@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 import time
 from typing import Any
 
-from cli_subagents import accounts, quota
+from cli_subagents import accounts, quota, spend
 from cli_subagents.config import Config, RUNTIMES, jobs_dir, state_dir
 from cli_subagents.fsutil import pid_alive, read_json, unlock
 from cli_subagents.plans import Limits, account_limits, cap_effort, model_allowed
@@ -132,6 +132,7 @@ class Room:
     pool_full: bool = False
     pool_budget_hit: bool = False
     pool_budget_used: int = 0
+    spend_blocked: list = field(default_factory=list)
 
 
 def _source(limits: Limits) -> str:
@@ -169,6 +170,11 @@ def room(config: Config, runtime_name: str, counts: Counts, *, pinned: str | Non
         result.pool_budget_used = min(budget_counts)
     free_total = 0
     for account, limits in allowed:
+        if spend.configured(account):
+            summary = spend.snapshot(runtime, account, now=now)
+            if summary["remaining_usd"] < spend.MIN_BUDGET_USD:
+                result.spend_blocked.append((account, summary))
+                continue
         if pool:
             if not override and pool.weekly_jobs is not None and state.budget_used(account.name, pool.name) >= pool.weekly_jobs:
                 continue
@@ -356,6 +362,9 @@ def admit(
             f"(allowed: {listed}; from {current.models_source}). {_tail(found, 'use one of those models')}",
             overridable=False,
         )
+    if current.spend_blocked:
+        raise _refusal(config, " ".join(spend.refusal(account, summary)
+                                       for account, summary in current.spend_blocked), overridable=False)
     if current.pool_budget_hit:
         pool = current.pool
         found = [] if account else _alternatives(config, runtime_name, counts, now)

@@ -24,7 +24,7 @@ import time
 from typing import Any
 
 from cli_subagents import limits, quota
-from cli_subagents.config import jobs_dir, load_config, state_dir
+from cli_subagents.config import RUNTIMES, jobs_dir, load_config, state_dir
 from cli_subagents.fsutil import (
     file_lock,
     kill_tree,
@@ -133,6 +133,9 @@ def _create_job(
         if previous.get("runtime") != runtime:
             raise ValueError("resume_job belongs to a different runtime")
         resume_account = closed.get("account") or previous.get("account")
+        resume_config = runtime_config.find(resume_account) if resume_account else None
+        if resume_config and resume_config.explicit_only and account != resume_account:
+            raise ValueError(f"Resuming explicit-only account '{resume_account}' requires account='{resume_account}'")
         if not hasattr(get_runtime(runtime), "transfer_session"):
             # The session lives in one account's folder and can't be moved: stay there.
             account = resume_account or account
@@ -388,6 +391,10 @@ def clean_old_jobs(days: int) -> int:
     folder = jobs_dir()
     if not folder.is_dir():
         return 0
+    from cli_subagents import spend
+
+    for runtime in RUNTIMES:
+        spend.flush(runtime)
     cutoff = time.time() - days * 86400
     removed = 0
     for path in folder.iterdir():

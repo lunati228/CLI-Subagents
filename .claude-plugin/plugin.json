@@ -1,6 +1,6 @@
 {
   "name": "cli-subagents",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "Start subagents in other installed agent CLIs (Claude Code first) under your own accounts, with one shared setup of MCP servers, plugins, skills and settings across all of them.",
   "author": { "name": "lunati", "url": "https://github.com/lunati228" },
   "homepage": "https://github.com/lunati228/CLI-Subagents",

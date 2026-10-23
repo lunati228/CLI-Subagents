@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cli_subagents import accounts, quota
+from cli_subagents import accounts, quota, spend
 from cli_subagents.config import Config, RuntimeConfig
 from cli_subagents.limits import NAMES, utilization
 
@@ -85,7 +85,14 @@ def reset_text(resets_at: float, now: float) -> str:
 
 def _account_text(runtime: RuntimeConfig, account: Any, record: dict[str, Any], now: float) -> str | None:
     cooling = accounts.cooldown_until(record, now)
-    tag = " fallback" if account.fallback else ""
+    tags = []
+    if account.fallback:
+        tags.append("fallback")
+    if account.explicit_only:
+        tags.append("explicit-only")
+    if not account.enabled:
+        tags.append("disabled")
+    tag = (" " + " ".join(tags)) if tags else ""
     if cooling:
         return f"{account.name}{tag} at its limit until {time.strftime('%H:%M', time.localtime(cooling))}"
     open_windows = {
@@ -96,7 +103,7 @@ def _account_text(runtime: RuntimeConfig, account: Any, record: dict[str, Any], 
         and not (isinstance(window.get("resets_at"), (int, float)) and window["resets_at"] <= now)
     }
     if not open_windows or utilization(record, now) is None:
-        return f"{account.name} fallback" if account.fallback else None
+        return f"{account.name}{tag}" if tags else None
     name, window = max(open_windows.items(), key=lambda item: item[1]["utilization"])
     left = max(0, round((1 - float(window["utilization"])) * 100))
     detail = [WINDOW_LABELS.get(name, name)]
@@ -120,12 +127,14 @@ def room_line(config: Config, runtimes: list[str] | None = None, now: float | No
     for name in runtimes or list(NAMES):
         runtime = config.runtime(name)
         usage = accounts.load_usage(name)
-        listed = runtime.worker_accounts()
+        listed = runtime.listed_accounts()
         state = quota.pool_state(runtime, counts, now)
         texts = []
         for account in listed:
             record = usage.get(account.name) or {}
             text = _account_text(runtime, account, record, now)
+            if spend.configured(account):
+                text = (text or account.name) + " [" + spend.describe(spend.snapshot(runtime, account, now=now)) + "]"
             pools = quota.pool_report(runtime, account.name, state, record, now)
             if pools:
                 text = (text or account.name) + " [" + "; ".join(pool["state"] for pool in pools) + "]"
@@ -136,10 +145,10 @@ def room_line(config: Config, runtimes: list[str] | None = None, now: float | No
             detail = f"{left:g}% left" if left is not None else "no usage data"
             effective = min(cap, runtime.max_jobs) if runtime.max_jobs is not None else cap
             texts.append(f"{cap} jobs at a time (max_jobs_by_room, {detail}; {counts.by_runtime.get(name, 0)} running; effective runtime cap {effective})")
-        if runtime.pools or cap is not None or any("%" in text or "limit until" in text for text in texts):
+        if texts or runtime.pools or cap is not None:
             parts.append(f"{NAMES[name]} " + ", ".join(texts))
         elif _available_runtime(name):
-            count = len(listed)
+            count = len(runtime.worker_accounts())
             noun = "account" if count == 1 else "accounts"
             parts.append(f"{NAMES[name]} {count} {noun} (no usage data)")
     return ("Room: " + " · ".join(parts)) if parts else ""

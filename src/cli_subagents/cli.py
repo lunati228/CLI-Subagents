@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any
 
-from cli_subagents import __version__, accounts, jobs, rules, setup, sync, tools
+from cli_subagents import __version__, accounts, jobs, rules, setup, spend, sync, tools
 from cli_subagents.config import NAME_RE, Account, homes_dir, load_config, save_config
 from cli_subagents.fsutil import make_private_dir
 from cli_subagents.runtimes import AVAILABLE as RUNTIMES, get_runtime
@@ -218,6 +218,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             text += f", models {', '.join(shown['models'])} ({shown.get('models_from')})"
         if shown.get("suggested_plan"):
             text += f"; suggested plan {shown['suggested_plan']}"
+        if entry.get("explicit_only"):
+            text += "; explicit-only"
+        if not entry.get("enabled", True):
+            text += "; disabled"
+        if entry.get("spend_cap_usd") is not None:
+            text += "; " + spend.describe(entry)
         print(text)
         for pool in entry.get("pools", []):
             print(f"    {pool['state']}")

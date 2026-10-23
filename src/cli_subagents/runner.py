@@ -15,13 +15,14 @@ import threading
 import time
 from typing import Any
 
-from cli_subagents import accounts, limits, messages, plans, quota
+from cli_subagents import accounts, limits, messages, plans, quota, spend
 from cli_subagents.config import OPT_IN_FAILOVER, Account, RuntimeConfig, load_config
 from cli_subagents.fsutil import kill_tree, open_private, process_start_time, unlock, worker_process, write_text
 from cli_subagents.jobs import job_dir, mark_pending, read_spec, update_status
 from cli_subagents.runtimes import get_runtime
 from cli_subagents.runtimes.base import (
     AUTH,
+    BUDGET,
     CANCELLED,
     ERROR,
     NO_ACCOUNT,
@@ -81,6 +82,7 @@ class Runner:
         self.attempts: list[dict[str, Any]] = []
         self.warnings: list[str] = []
         self._early: AttemptResult | None = None  # set when check_stderr stops a worker early
+        self._spend_error: str | None = None
 
     # Helpers ---------------------------------------------------------------
 
@@ -155,6 +157,8 @@ class Runner:
             if lease is None:
                 if self.cancelled():
                     return self.finish(CANCELLED, "cancelled", last)
+                if self._spend_error:
+                    return self.finish(BUDGET, self._spend_error, last)
                 if last is not None:
                     return self.finish(last.outcome, last.message, last)
                 return self.finish(NO_ACCOUNT, self._no_account_message(excluded))
@@ -296,6 +300,9 @@ class Runner:
                     if lease is not None:
                         lease.pool_slots.extend(slots)
                         slots = []
+            except spend.SpendLimitError as exc:
+                self._spend_error = str(exc)
+                return None
             except ValueError as exc:
                 self.warnings.append(str(exc))
                 return None
@@ -323,8 +330,34 @@ class Runner:
         owner: str | None = None,
         fallback_prompt: str | None = None,
     ) -> AttemptResult:
+        index = len(self.attempts)
+        try:
+            budget = spend.reserve(self.runtime_config, lease.account, self.job_id, index)
+        except spend.SpendLimitError as exc:
+            return AttemptResult(BUDGET, message=str(exc), before_start=True)
+        try:
+            result = self._execute_attempt(lease, prompt, session, owner, fallback_prompt, budget)
+        except Exception:
+            attempt = self.attempts[index] if len(self.attempts) > index else {}
+            spend.settle(self.runtime_config, lease.account, self.job_id, index,
+                         AttemptResult(ERROR, before_start=bool(attempt.get("before_start", True))))
+            raise
+        spend.settle(self.runtime_config, lease.account, self.job_id, index, result)
+        return result
+
+    def _execute_attempt(
+        self,
+        lease: accounts.Lease,
+        prompt: str,
+        session: str | None = None,
+        owner: str | None = None,
+        fallback_prompt: str | None = None,
+        budget: float | None = None,
+    ) -> AttemptResult:
         account = lease.account
         attempt: dict[str, Any] = {"account": account.name, "attempted_at": time.time(), "before_start": True}
+        if budget is not None:
+            attempt["budget_usd"] = budget
         if self.pool:
             attempt["pool"] = self.pool.name
         self.attempts.append(attempt)
@@ -339,7 +372,7 @@ class Runner:
             else:
                 self.warnings.append(f"could not move the session from {owner}; starting a new one with a summary")
                 session, prompt = None, fallback_prompt or prompt
-        spec = dataclasses.replace(self.spec, resume_session=session)
+        spec = dataclasses.replace(self.spec, resume_session=session, max_budget_usd=budget)
         limits = plans.account_limits(self.runtime_config, account)
         capped = plans.cap_effort(spec.effort, limits)
         if capped != spec.effort:
@@ -389,6 +422,7 @@ class Runner:
                 ) as process:
                     attempt.update(started_at=time.time(), before_start=False)
                     started = process_start_time(process.pid)
+                    spend.started(self.runtime_config, self.job_id, len(self.attempts) - 1, process.pid, started)
                     try:
                         lease.set_owner(process.pid, started, self.job_id)
                     except OSError as exc:
@@ -435,6 +469,14 @@ class Runner:
                 result = AttemptResult(ERROR, message=f"could not read the result: {exc}", text=parser.last_text)
         if result.session_id is None:
             result.session_id = launch.session_id
+        if stop_reason:
+            # A result may have arrived before a hung CLI was cancelled or timed
+            # out. Preserve its reported cost while keeping the stop outcome.
+            try:
+                reported = parser.finish(exit_code, stderr_tail)
+                result.cost_usd, result.usage = reported.cost_usd, reported.usage
+            except Exception:
+                pass
         attempt.update(
             ended_at=time.time(),
             outcome=result.outcome,

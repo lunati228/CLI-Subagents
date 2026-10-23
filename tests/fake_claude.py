@@ -3,8 +3,10 @@
 Behaviour is chosen by environment variables:
   FAKE_CLAUDE_LIMITED   comma-separated account folder names that are "out of quota"
   FAKE_CLAUDE_SCENARIO  success (default) | auth | slow | crash | nostdin | max_turns |
-                       success_exit_1 | success_pause | success_quota | success_auth
+                       success_exit_1 | success_pause | success_quota | success_auth |
+                       budget | usage_no_result
   FAKE_CLAUDE_RECORD    file to append {"argv", "env", "stdin"} records to
+  FAKE_CLAUDE_COST      result's total_cost_usd (default 0.01; budget uses its cap)
 """
 
 import json
@@ -95,8 +97,24 @@ def main():
         emit({"type": "result", "subtype": "error_max_turns", "is_error": True,
               "session_id": session, "num_turns": 1})
         return 1
+    if scenario == "usage_no_result":
+        # stream-json can repeat usage for each content block of one API message.
+        for text in ("first block", "second block"):
+            emit({"type": "assistant", "message": {
+                "id": "message-1", "model": "claude-haiku-5-5",
+                "usage": {"input_tokens": 1000, "output_tokens": 100},
+                "content": [{"type": "text", "text": text}],
+            }, "session_id": session})
+        sys.stderr.write("worker stopped before emitting its final cost\n")
+        return 3
+    if scenario == "budget":
+        budget = argv[argv.index("--max-budget-usd") + 1] if "--max-budget-usd" in argv else "0.01"
+        emit({"type": "result", "subtype": "error_max_budget_usd", "is_error": True,
+              "errors": ["Maximum dollar budget exceeded"], "session_id": session,
+              "total_cost_usd": float(os.environ.get("FAKE_CLAUDE_COST", budget)), "num_turns": 1})
+        return 1
     emit({"type": "result", "subtype": "success", "is_error": False, "result": f"done on {account}",
-          "session_id": session, "total_cost_usd": 0.01, "num_turns": 1})
+          "session_id": session, "total_cost_usd": float(os.environ.get("FAKE_CLAUDE_COST", "0.01")), "num_turns": 1})
     if scenario == "success_pause":
         time.sleep(120)
     if scenario in ("success_exit_1", "success_quota", "success_auth"):

@@ -18,6 +18,7 @@ ERROR = "error"
 TIMEOUT = "timeout"
 CANCELLED = "cancelled"
 MAX_TURNS = "max_turns"
+BUDGET = "budget"
 NO_ACCOUNT = "no_account"
 LOST = "lost"
 
@@ -99,6 +100,7 @@ class JobSpec:
     depth: int = 1
     created: float = 0.0
     override: str | None = None  # user's words authorizing this start to exceed csa's caps
+    max_budget_usd: float | None = None  # internal: granted per-attempt reservation, never caller-controlled
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

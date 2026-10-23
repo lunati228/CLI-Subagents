@@ -46,6 +46,7 @@ from cli_subagents.runtimes.base import (
     WORKER_TOOLS_NOTE,
     parent_server,
     AUTH,
+    BUDGET,
     ERROR,
     MAX_TURNS,
     SUCCESS,
@@ -231,6 +232,10 @@ class ClaudeParser:
             "usage": result.get("usage"),
             "num_turns": result.get("num_turns"),
         }
+        # Claude can emit a synthetic crash result with zeroed totals. It does
+        # not establish that the failed run was free; debit its reservation.
+        if result.get("subtype") == "error_during_execution" and not common["cost_usd"]:
+            common["cost_usd"] = None
         succeeded = bool(self.result and result.get("subtype") == "success" and not result.get("is_error"))
         # A successful result is still useful if the process failed afterward.
         # Error results contain diagnostics; keep the last answer for those.
@@ -239,6 +244,9 @@ class ClaudeParser:
             return AttemptResult(SUCCESS, text=text, **common)
         if result.get("subtype") == "error_max_turns":
             return AttemptResult(MAX_TURNS, message="stopped at the max_turns limit", text=text, **common)
+        if result.get("subtype") == "error_max_budget_usd":
+            return AttemptResult(BUDGET, message="stopped at the account's dollar budget (--max-budget-usd)",
+                                 text=text, **common)
 
         # Only error text counts here: the model's own words may mention limits.
         is_error = bool(self.result and result.get("is_error"))
@@ -529,6 +537,8 @@ class ClaudeRuntime:
             argv += ["--effort", spec.effort]
         if spec.max_turns:
             argv += ["--max-turns", str(spec.max_turns)]
+        if spec.max_budget_usd is not None:
+            argv += ["--max-budget-usd", format(spec.max_budget_usd, ".6f")]
         warnings: list[str] = []
         argv += ["--settings", str(self._job_settings(spec.job_id, setup, warnings, access=spec.access))]
         servers = dict((read_json(Path(setup["mcp_config_path"]), {}) or {}).get("mcpServers") or {}) if setup.get("mcp_config_path") else {}

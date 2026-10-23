@@ -61,6 +61,8 @@ Codex and Antigravity workers have their own web search and page reading, which 
 
 Limits are enforced by csa. If a start is refused, follow the suggestion in the message; don't count quotas yourself.
 
+Accounts marked `explicit_only` require an explicit `account`; automatic selection and failover skip them. All account spend caps apply together, including rolling windows, and cannot be bypassed with `override`; a `budget` outcome stops without retry or failover, so follow its message or wait for room under every cap.
+
 Never set override on your own judgment; use it only when the user asked for more jobs in this conversation, or confirmed after you warned them and told them how much of the 5-hour window is left. Use csa's reported usage and reset time; if the window is unknown, say so. Otherwise ask the user or use the home model.
 
 Put the user's own words in `override`, for example the relay line `override=user asked for 6 Codex agents`, the `override` field on `subagent_start`, or `--override "user asked for 6 Codex agents"` on `csa run` or `csa start`. Empty values are rejected. This bypasses only csa's job caps, quota steps, usage ceiling, pool budgets and queueing. Account and pool cooldowns after real usage-limit errors, `models`, `max_effort`, login, depth and access still apply. Override jobs count toward later starts. The text is stored and shown in job lists, follow headers and status/result summaries. A new start needs its own override; a follow-up to a finished job does not inherit it.

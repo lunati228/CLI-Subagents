@@ -380,7 +380,7 @@ def _acquire(
     all_busy=True means accounts exist but every slot is taken right now.
     """
 
-    from cli_subagents import limits, quota
+    from cli_subagents import limits, quota, spend
 
     pool = quota.pool_for(runtime, model)
     state = quota.pool_state(runtime, limits.count_active(), time.time(), exclude_job=job_id) if pool else None
@@ -390,7 +390,14 @@ def _acquire(
     if not override and pool and pool.total is not None and state.executing_totals.get(pool.name, 0) >= pool.total:
         return None, earliest, bool(accounts)
     budget_blocked = 0
+    spend_blocked = []
     for account in accounts:
+        if spend.configured(account):
+            summary = spend.snapshot(runtime, account)
+            if summary["remaining_usd"] < spend.MIN_BUDGET_USD:
+                budget_blocked += 1
+                spend_blocked.append(spend.refusal(account, summary))
+                continue
         if not override and pool and pool.weekly_jobs is not None and state.budget_used(account.name, pool.name) >= pool.weekly_jobs:
             budget_blocked += 1
             continue
@@ -410,6 +417,8 @@ def _acquire(
                     raise
             update_usage(runtime.runtime, account.name, last_used=time.time())
             return lease, None, False
+    if spend_blocked and len(accounts) == len(spend_blocked):
+        raise spend.SpendLimitError(" ".join(spend_blocked))
     return None, earliest, len(accounts) > budget_blocked
 
 

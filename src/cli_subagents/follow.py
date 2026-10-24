@@ -783,6 +783,19 @@ class Follower:
             time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
 
 
+def failed_start(message: str, out: TextIO | None = None) -> int:
+    """Frame a rejected relay request without creating or starting a job."""
+
+    stream = out or sys.stdout
+    suffix = f" · job {jobs.new_job_id()} · token {secrets.token_hex(16)}"
+    lines = ["[csa] CLI Subagents · rejected request" + suffix, RESULT_RULE]
+    lines.extend(WORKER_PREFIX + line.translate(_DISPLAY_ESCAPES) for line in message.split("\n"))
+    lines.extend((RESULT_END_RULE, "[csa] FAILED · request rejected" + suffix))
+    stream.write("\n".join(lines) + "\n")
+    stream.flush()
+    return 1
+
+
 def follow(job_id: str, start: int | None = None, max_wait: float = DEFAULT_MAX_WAIT, out: TextIO | None = None,
            window: int | None = None) -> int:
     """Print a job's events from byte `start` until it ends, asks a question, or `max_wait` passes."""

@@ -69,7 +69,8 @@ class AntigravityAgentDefinitionTests(unittest.TestCase):
             "`run_command`", "`command_status`", "until that same command exits",
             "A running shell handle is not a csa status", "If output was truncated",
             "Never deduplicate repeated worker lines", "Never restart the initial task",
-            "PowerShell", "PYTHONIOENCODING", "multiline single-quoted string", "double each embedded single quote",
+            "PowerShell", "PYTHONIOENCODING", "prefix EVERY payload line", "Never escape or double any quotes",
+            "--relay -", "WHOLE prompt unchanged", "append `_NEXT`",
             "Do not add commentary or a summary", "WINDOW and OFFSET across native follow-ups",
         )
         for runtime in RUNTIMES:

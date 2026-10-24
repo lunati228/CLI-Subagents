@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -38,7 +40,7 @@ def _job_arguments(parser: argparse.ArgumentParser) -> None:
         "never set this on your own judgment. Use only when the user asked for more jobs in this conversation "
         "or confirmed after a warning explaining how much of the 5-hour window is left.",
     )
-    parser.add_argument("--access", default="edit", choices=ACCESS_LEVELS)
+    parser.add_argument("--access", choices=ACCESS_LEVELS)
     parser.add_argument("--max-turns", type=int)
     parser.add_argument("--timeout", type=int, default=1800, help="Seconds (default 1800).")
     parser.add_argument("--add-dir", action="append", default=[])
@@ -46,7 +48,17 @@ def _job_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _start(args: argparse.Namespace) -> dict[str, Any]:
+    relay = getattr(args, "relay", False)
+    if relay and args.prompt == "-" and hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8")
     prompt = sys.stdin.read() if args.prompt == "-" else args.prompt
+    if relay:
+        if args.prompt != "-":
+            raise ValueError("--relay requires '-' to read the complete relay prompt from stdin")
+        options, prompt = _relay_prompt(prompt)
+        for key, value in options.items():
+            setattr(args, key, value)
+    access = args.access or ("read" if relay and args.runtime != "claude" else "edit")
     return jobs.create_job(
         runtime=args.runtime,
         prompt=prompt,
@@ -55,12 +67,62 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
         model=args.model,
         effort=args.effort,
         override=args.override,
-        access=args.access,
+        access=access,
         max_turns=args.max_turns,
         timeout_seconds=args.timeout,
         add_dirs=[str(Path(item).resolve()) for item in args.add_dir],
         resume_job=args.resume_job,
     )
+
+
+_RELAY_KEYS = frozenset(("model", "effort", "access", "account", "cwd", "timeout", "window", "override"))
+_RELAY_OPTION = re.compile(r"([a-zA-Z_][a-zA-Z0-9_-]*)(=|:[ \t]*)(.*)")
+
+
+def _relay_prompt(text: str) -> tuple[dict[str, Any], str]:
+    """Read only the leading option block; values are data, never shell syntax.
+
+    A blank separator after the options is consumed once. From the first task
+    line onward, including any later key=value lines, preserve the text exactly.
+    Known keys also accept the older `model: value` spelling.
+    """
+
+    options: dict[str, Any] = {}
+    position = 0
+    for line in io.StringIO(text):
+        body = line.removesuffix("\n").removesuffix("\r")
+        match = _RELAY_OPTION.fullmatch(body)
+        if not match or (match[2].startswith(":") and match[1] not in _RELAY_KEYS):
+            if options and not body.strip():
+                position += len(line)
+            break
+        key, value = match[1], match[3]
+        if key not in _RELAY_KEYS:
+            raise ValueError(f"unknown relay option: {key}")
+        if key in options:
+            raise ValueError(f"duplicate relay option: {key}")
+        if not value.strip():
+            raise ValueError(f"relay option {key} must not be empty")
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError(f"relay option {key} must not contain control characters")
+        if key in ("window", "timeout"):
+            if not re.fullmatch(r"[0-9]+", value):
+                raise ValueError(f"relay option {key} must be a positive integer")
+            value = int(value)
+            if key == "window" and value < 1:
+                raise ValueError("relay option window must be a positive integer")
+            if key == "timeout" and not 30 <= value <= 21600:
+                raise ValueError("relay option timeout must be between 30 and 21600")
+        elif key == "access" and value not in ACCESS_LEVELS:
+            raise ValueError(f"relay option access must be one of {ACCESS_LEVELS}")
+        elif key == "account" and not NAME_RE.fullmatch(value):
+            raise ValueError("relay option account must be an account name")
+        options[key] = value
+        position += len(line)
+    task = text[position:]
+    if not task.strip():
+        raise ValueError("relay task is empty")
+    return options, task
 
 
 # Accounts --------------------------------------------------------------------
@@ -295,7 +357,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    status = _start(args)
+    try:
+        status = _start(args)
+    except (ValueError, RuntimeError, OSError, tools.ToolError) as exc:
+        if not args.relay:
+            raise
+        from cli_subagents.follow import failed_start
+
+        return failed_start(str(exc))
     if args.follow:
         from cli_subagents.follow import follow
 
@@ -468,6 +537,8 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (("run", "Run a task and print the result."), ("start", "Start a task in the background.")):
         _job_arguments(sub.add_parser(name, help=help_text))
     run_parser = sub.choices["run"]
+    run_parser.add_argument("--relay", action="store_true",
+                            help="Read leading relay key=value options and the task from stdin ('-').")
     run_parser.add_argument(
         "--follow", action="store_true",
         help="Print the worker's steps as they happen, then the result (see csa follow).",

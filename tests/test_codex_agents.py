@@ -60,7 +60,8 @@ class CodexAgentDefinitionTests(unittest.TestCase):
             "A finished job continues the same worker conversation", "resetting OFFSET if JOB changed",
             "`session_id`", "`write_stdin`", "Retain every output chunk in order",
             '"process still running" notice is not a csa status', "If output was truncated, stop",
-            "PowerShell", "PYTHONIOENCODING", "multiline single-quoted string", "double each embedded single quote",
+            "PowerShell", "PYTHONIOENCODING", "prefix EVERY payload line", "Never escape or double any quotes",
+            "--relay -", "WHOLE prompt unchanged", "append `_NEXT`",
         )
         for runtime in RUNTIMES:
             with self.subTest(runtime=runtime):

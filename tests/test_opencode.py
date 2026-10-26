@@ -170,6 +170,28 @@ class LaunchTests(OpenCodeHome):
         with patch.dict(os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}), patch("cli_subagents.runtimes.opencode.shutil.which", return_value=str(shim)):
             self.assertEqual(self.runtime.find_binary(self.config), [str(node), str(launcher)])
 
+    def test_windows_npm_shim_prefers_the_published_native_binary(self):
+        shim = self.root / "npm" / "opencode.cmd"
+        native = shim.parent / "node_modules" / "@opencode" / "cli" / "bin" / "opencode.exe"
+        native.parent.mkdir(parents=True)
+        native.write_text("fake", encoding="utf-8")
+        (native.parent / "opencode.cjs").write_text("fake", encoding="utf-8")
+        shim.write_text("fake", encoding="utf-8")
+        with patch.dict(os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}), patch("cli_subagents.runtimes.opencode.shutil.which", return_value=str(shim)):
+            self.assertEqual(self.runtime.find_binary(self.config), [str(native)])
+
+    def test_real_v2_version_output_is_accepted(self):
+        for output in ("opencode v2.1.4", "2.1.4", "v2.0"):
+            with self.subTest(output=output):
+                os.environ["FAKE_OPENCODE_VERSION"] = output
+                self.runtime._checked = None
+                self.assertIsNone(self.runtime.preflight(self.config, self.account))
+        for output in ("opencode v1.19.4", "1.19.4"):
+            with self.subTest(output=output):
+                os.environ["FAKE_OPENCODE_VERSION"] = output
+                self.runtime._checked = None
+                self.assertEqual(self.runtime.preflight(self.config, self.account).outcome, "error")
+
     def test_v1_version_refused_before_run(self):
         os.environ["FAKE_OPENCODE_VERSION"] = "1.19.4"
         blocked = self.runtime.preflight(self.config, self.account)

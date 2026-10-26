@@ -53,7 +53,8 @@ GATE_NOTE = (
     " CLI Subagents' fixed review rules approve or deny your tool calls. If denied, don't repeat "
     "the action; find another way or say what you couldn't do. OpenCode has no OS sandbox."
 )
-VERSION_RE = re.compile(r"\b(\d+)\.\d+(?:\.\d+)?")
+# v2.1.4 prints "opencode v2.1.4"; without the optional "v", \b would skip to "1.4".
+VERSION_RE = re.compile(r"\bv?(\d+)\.\d+(?:\.\d+)?")
 LIMIT_RE = re.compile(r"rate.?limit|usage limit|quota|too many requests|\b429\b", re.IGNORECASE)
 AUTH_RE = re.compile(r"\b401\b|unauthorized|authentication (?:failed|required)|invalid (?:api )?key|not logged in", re.IGNORECASE)
 CAPACITY_RE = re.compile(r"\boverloaded\b|\bat capacity\b|no capacity|high demand|\b503\b.*unavailable", re.IGNORECASE)
@@ -253,6 +254,10 @@ class OpenCodeRuntime:
         path = Path(found)
         if path.suffix.lower() in (".cmd", ".bat", ".ps1"):
             # Bypass cmd/PowerShell shims, including v1 so --version can explain the mismatch.
+            # The published v2 package links the native binary itself; source builds use a Node launcher.
+            native = path.parent / "node_modules/@opencode/cli/bin/opencode.exe"
+            if native.is_file():
+                return [str(native)]
             for relative in ("node_modules/@opencode/cli/bin/opencode.cjs", "node_modules/opencode-ai/bin/opencode"):
                 launcher = path.parent / relative
                 node = path.parent / "node.exe"

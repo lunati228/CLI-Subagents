@@ -235,6 +235,56 @@ Total about 1,100 to 1,500 lines across 17 to 20 files, plus a version bump in t
 4. Then: keyed accounts with per-account XDG homes, `opencode auth login` in `csa accounts login`, and failover that skips rotation for free-limit errors.
 5. Later: read-safety plugin (`tool.execute.before`), session export/import for cross-account failover, OpenCode as a host.
 
+## 10. Follow-up 2026-10-26: model fallback, plugin loading and variants
+
+Read in a fresh shallow clone of tag v2.1.4 (commit 68bc26b, "release: v2.1.4"), deleted afterwards. Paths are relative to https://github.com/anomalyco/opencode/tree/v2.1.4. One live check by the owner on 2026-10-26 is marked [live].
+
+### Silent fallback to Big Pickle
+
+* `packages/core/src/model.ts`, `Model.default`: returns the configured default only when that model exists and is enabled, otherwise the first entry of `available`. With only free OpenCode models enabled (anonymous use), `preferFree` puts `PREFERRED_FREE` first, and that list starts with `big-pickle`, then `deepseek-v4.1-flash-free`. So a configured default that is missing or disabled silently becomes Big Pickle.
+* `packages/core/src/session/runner/model.ts`, `SessionRunnerModel.resolve`: a session without a model uses its agent's model if available, else `ModelResolver.resolve()` (`packages/core/src/model-resolver.ts`), which goes through `Model.default` above. A session *with* a model must find it in the available list, or the run fails with `ModelUnavailableError` ("Model unavailable: provider/id"); there is no fallback on that path.
+* `packages/core/src/session/to-session-error.ts`: `ModelUnavailableError`, `VariantUnavailableError` and the other resolver errors become `{"type": "provider.no-route", "message": ...}`.
+* `packages/cli/src/run/run.ts` and `run/noninteractive.ts`: `-m provider/model#variant` is parsed by `Model.Ref.parse` (`packages/schema/src/model.ts`), stored on a new session and set with `session.switchModel` before every prompt, also on `-s` resumes. `Session.switchModel` (`packages/core/src/session/session.ts`) does not check availability; the check happens when the runner resolves the model.
+* `packages/core/src/tool/plugin/subagent.ts`: child sessions take the tool's `model` argument, else the agent's model, else the parent session's model. The tool's own description tells the model never to set `model` unless the user asks.
+
+csa therefore always runs with an explicit session model: `-m cli-subagents/gate-not-ready` (a model that can't exist), which its plugin replaces in the `session` `prompt` hook (`packages/core/src/session/prompt.ts`, `SessionPrompt.prepare`, which first awaits plugin activation) with the user's model or csa's default. Without the plugin, the session keeps the gate model and the run ends with `provider.no-route` before any request.
+
+`editor.default.get()` in a model transform returns only the configured `model` (`packages/core/src/config/plugin/provider.ts` sets it from config; `model.ts` returns `data.defaultModel`), and the agent editor's `build.model` is only the configured agent model (`packages/core/src/config/plugin/agent.ts`). Neither reports Big Pickle unless the user configured it.
+
+### Plugin load failures
+
+* `packages/core/src/plugin/supervisor.ts`, `resolve`: a configured plugin whose module fails to load is logged with `Effect.logWarning("failed to load plugin", ...)` and recorded as `{status: "failed"}` in the plugin inventory. Activation continues with the other plugins.
+* `packages/core/src/plugin.ts`, `load`: a plugin whose setup fails is logged the same way, its scope is closed (its hook registrations are disposed) and it is listed as failed.
+* Neither reaches `opencode run --format json`; the session runs without the plugin. Only `--print-logs` or the plugin inventory (`plugin.list`) shows it.
+* `packages/core/src/plugin/module.ts`: configured local plugins are directories resolved through their package entry (`server`); the default export must be `{id, setup}` (Promise API) or `{id, effect}`.
+
+So csa can't learn about a failed load from OpenCode's output. It makes the failure stop the job instead: the gate model above, plus registration order inside `setup` (review hook, then model guard, then the prompt hook that unlocks the model). Any failed registration fails setup and disposes the hooks already registered.
+
+### Hook semantics
+
+* `packages/plugin/src/promise/adapter.ts`: an error thrown in `tool` `execute.before` becomes a `Tool.Error` that rejects only that call. Errors thrown in `session` hooks (`Effect.promise`) fail the operation that triggered them.
+* `packages/plugin/src/promise/session.ts`: `SessionHooks` includes `prompt` and `model.request`; the latter carries the request's `model` ref and fires before every provider request (`packages/core/src/session/model-request.ts`). csa uses it to refuse Big Pickle, MiMo, Flint and Nemotron unless that model was the selected one.
+
+### Variants and effort
+
+* `packages/core/src/model-resolver.ts`, `withVariant`: a requested variant missing from the model's `variants` fails with `VariantUnavailableError`, "Variant unavailable for provider/id: variant" (`provider.no-route`). `default` means no variant.
+* `packages/core/src/variant.ts`: variant ids are effort words (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), or `none`/`thinking` for toggles, built per provider package from the catalog's `reasoning_options`.
+* `packages/core/src/models-dev/snapshot.txt` (bundled catalog snapshot): `opencode/deepseek-v4.1-flash-free` has `reasoning_options` toggle plus effort `["low", "high", "max"]`; through the `openai-compatible` protocol (`openaiChat`) that gives the variants `low`, `high` and `max`. The live catalog (https://models.opencode.ai) may differ.
+* [live] `opencode/deepseek-v4.1-flash-free#max` is accepted; `#bogus` fails with `provider.no-route` "Variant unavailable for opencode/deepseek-v4.1-flash-free: bogus".
+
+csa passes its effort word as the variant unchanged and turns `Variant unavailable` into a FAILED result that names the model and variant.
+
+### Code that runs outside the gate (review findings, checked 2026-10-26)
+
+* `packages/core/src/config/discovery.ts`: without `project: false`, OpenCode walks from the cwd up through every parent folder and loads `opencode.json(c)`, `.opencode/` (plugins, agents) and project `.claude`/`.agents` folders. `packages/cli/src/server-process.ts` sets `project` from `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`, so the first name wins when both are set. csa sets both for read and edit jobs. Project plugins could otherwise also take csa's plugin ID (`packages/core/src/plugin/supervisor.ts` keeps the first of two plugins with the same ID), so csa's ID is now random per job.
+* `packages/core/src/formatter/builtins.ts`: the built-in prettier formatter turns on when a `package.json` depends on prettier and runs the project's own prettier (and its config) after edits. `packages/schema/src/config/formatter.ts` and `config/lsp.ts` accept `false`; csa sets `formatter: false` and `lsp: false` for read and edit jobs.
+* `packages/util/src/patch.ts`, `parse`: splits patch text on `\n` only, drops one trailing `\r`, trims headers with JavaScript `trim()` and reads `*** Move to:` after `trimEnd()`. Python's `splitlines()` also splits on `\x0b \x0c \x1c-\x1e \x85    `, so csa now denies patches containing those and parses the rest the same way.
+* `packages/core/src/config/variable.ts`, `substitute`: `{env:NAME}` values go in raw first, and the JSON-escaped pass runs only if the raw text no longer parses. csa adds one reference whose value is `"`, so the raw pass always fails and every value is escaped.
+* The same `project` flag turns off instruction discovery (`packages/core/src/config/plugin/instruction.ts`: `AGENTS.md` from the cwd up to the home folder when the cwd is inside it, else up to the project root) and the project `.claude`/`.agents` roots whose `skills/` folders `config/plugin/compatibility.ts` loads. csa passes those files and folders through `instructions` and `skills` for read and edit jobs.
+* `packages/core/src/session/compaction.ts`, `selectModel`: the `compaction` agent's model, when available, summarizes long sessions; otherwise the session model does. csa's read/edit model guard allows that model unless it is a restricted free model.
+* Per the 2026-10-26 code review (not re-read here), OpenCode's grep runs ripgrep with `--hidden` (`packages/core/src/ripgrep.ts`) and `tool/plugin/grep.ts` doesn't check read permission per matched file, so csa walks a folder before a grep and refuses it when a searched file looks like a secrets file.
+* A `#variant` on the root `model` is dropped by `opencode run` itself when no `-m` is given: `ModelResolver.resolve` loads the default with `requested?.variant`, which is undefined, and `editor.default.get()` has no variant field. Only the TUI applies it (`packages/tui/src/context/local.tsx`). csa behaves like `opencode run` here.
+
 ## Sources
 
 All accessed 2026-10-23.

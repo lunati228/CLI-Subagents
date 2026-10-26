@@ -13,12 +13,12 @@ from test_setup import SetupBase
 
 
 ROOT = Path(__file__).resolve().parent.parent
-RUNTIMES = ("claude", "codex", "antigravity")
+RUNTIMES = ("claude", "codex", "antigravity", "opencode")
 TEMPLATES = files("cli_subagents").joinpath("templates", "codex-agents")
 
 
 class CodexAgentDefinitionTests(unittest.TestCase):
-    def test_three_standalone_roles_use_luna_low_and_supported_capability_limits(self):
+    def test_four_standalone_roles_use_luna_low_and_supported_capability_limits(self):
         self.assertEqual(
             sorted(path.name for path in TEMPLATES.iterdir()),
             sorted(f"cli-subagents-{runtime}.toml" for runtime in RUNTIMES),
@@ -67,6 +67,10 @@ class CodexAgentDefinitionTests(unittest.TestCase):
             with self.subTest(runtime=runtime):
                 instructions = tomllib.loads(TEMPLATES.joinpath(f"cli-subagents-{runtime}.toml").read_text(encoding="utf-8"))["developer_instructions"]
                 for text in required:
+                    if runtime == "opencode" and text == "`account=...`":
+                        # OpenCode has no extra accounts, so its relay doesn't offer the option.
+                        self.assertNotIn(text, instructions)
+                        continue
                     # Wrapping does not change an instruction's meaning.
                     self.assertIn(text, " ".join(instructions.split()))
 

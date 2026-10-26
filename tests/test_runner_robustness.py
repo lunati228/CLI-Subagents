@@ -34,6 +34,8 @@ class RobustnessBase(TempHome):
             os.environ.pop(key, None)
         config = load_config()
         for name, runtime in config.runtimes.items():
+            if name == "opencode":  # the native profile has its own adapter tests
+                continue
             runtime.primary = self.root / name
             runtime.primary.mkdir(exist_ok=True)
             runtime.include_primary = False

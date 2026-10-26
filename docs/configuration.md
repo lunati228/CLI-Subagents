@@ -6,7 +6,7 @@ CLI Subagents keeps everything under `~/.cli-subagents/` (or `CLI_SUBAGENTS_HOME
 
 When a worker exits because the model is temporarily overloaded, csa retries on the same account. It resumes the conversation if the CLI supplied a session ID; otherwise it repeats the task. The default waits are 30, 60 and 120 seconds. The CLI's own retries finish before csa starts this schedule.
 
-Set these keys under `[claude]`, `[codex]` or `[antigravity]`:
+Set these keys under `[claude]`, `[codex]`, `[antigravity]` or `[opencode]`:
 
 ```toml
 [codex]
@@ -17,6 +17,21 @@ capacity_retry_seconds = 30   # initial wait, doubled for each retry
 `capacity_retries` must be a nonnegative integer; `capacity_retry_seconds` must be a positive integer. Both default to the values above for every runtime. During a wait, status shows the retry number and delay, and `csa follow` prints a `[csa] model at capacity, retrying in 30 s (1 of 3)` notice with its job ID and token. The account slot stays reserved, and cancellation and the task timeout still apply. Capacity retries and waits share the task's timeout budget. Exhausting the retries ends the job as `error` with `model at capacity after 3 retries`. Capacity failures do not set quota cooldowns or switch accounts.
 
 See [the signal research](research/capacity-errors.md) for the overload messages each runtime recognizes.
+
+## OpenCode discovery
+
+OpenCode is available without account registration when csa finds `opencode` on PATH. If it is missing, csa leaves it out of the available runtimes and checks again on later starts. OpenCode v2 (`@opencode/cli`) is required; v1 gets a clear upgrade message. To disable discovery:
+
+```toml
+[opencode]
+enabled = false
+```
+
+`enabled` defaults to `true`. Optional `binary` overrides detection, and `default_model` overrides your OpenCode model for csa jobs. An explicit job model has priority. Without either override, csa keeps the model in your OpenCode config; if none is set, it chooses `opencode/deepseek-v4.1-flash-free`. An unavailable model or effort variant fails the job; csa never lets OpenCode fall back to another model. See [OpenCode](opencode.md#choosing-a-model-and-starting-a-job).
+
+This first version uses one primary OpenCode profile and your existing XDG directories. It does not accept extra OpenCode account tables. Free models are for personal projects only. Their per-IP daily allowance resets at UTC midnight, and a free-limit error stops without account rotation. Clear capacity errors use the retry settings above.
+
+OpenCode `read` and `edit` workers get csa's fixed review rules; a reviewer model is not wired up yet. OpenCode has no OS sandbox, so `edit` workers may change files in the project but can't run tests, builds or other commands that change anything, and web access and other MCP servers are denied. See [OpenCode](opencode.md) for the access levels, generated MCP and instruction config, data terms and Fence sandbox recommendation.
 
 ## config.toml
 
@@ -53,7 +68,7 @@ name = "plus-2"
 home = "~/.cli-subagents/homes/codex/plus-2"
 ```
 
-The `[codex]` section takes the same keys as `[claude]`, but ignores `connectors` and `edit_permission_mode`. `connectors` only applies to Claude. Codex uses its own approval and sandbox flags for each `access` level; see [Codex](codex.md#using-it). `share_parent_mcp` (default `true`) applies to Codex and Antigravity: workers started from Claude Code get its MCP servers (see [codex.md](codex.md#what-a-worker-gets-from-a-claude-code-session)); for Antigravity your own Gemini servers win when two have the same name. `web_search` only applies to Codex: `"disabled"`, `"cached"`, `"indexed"` or `"live"`, passed as `-c web_search="<value>"` on new and resumed runs. Leaving it unset preserves Codex's own default (`"cached"`). `windows_sandbox` only applies to Codex: on Windows, read and edit jobs get `-c windows.sandbox="<value>"` unless your Codex `config.toml` already sets `[windows] sandbox`; `"off"` adds nothing. `network_access` only applies to Codex and defaults to `true`: `edit` jobs get `-c sandbox_workspace_write.network_access=true`, so commands in the sandbox can reach the network and open local sockets (test runners such as VSTest need them). Set it to `false` to keep Codex's own default, which blocks both; see [codex.md](codex.md#using-it). `[antigravity]` takes `binary`, `default_model`, `edit_permission_mode` (`accept-edits` by default, or `auto` where the account supports it) and `share_parent_mcp`, the review keys below, and the account keys further down.
+The `[codex]` section takes the same keys as `[claude]`, but ignores `connectors` and `edit_permission_mode`. `connectors` only applies to Claude. Codex uses its own approval and sandbox flags for each `access` level; see [Codex](codex.md#using-it). `share_parent_mcp` (default `true`) applies to Codex, Antigravity and OpenCode: workers get the parent's MCP servers (see [codex.md](codex.md#what-a-worker-gets-from-a-claude-code-session)); for Antigravity your own Gemini servers win when two have the same name. `web_search` only applies to Codex: `"disabled"`, `"cached"`, `"indexed"` or `"live"`, passed as `-c web_search="<value>"` on new and resumed runs. Leaving it unset preserves Codex's own default (`"cached"`). `windows_sandbox` only applies to Codex: on Windows, read and edit jobs get `-c windows.sandbox="<value>"` unless your Codex `config.toml` already sets `[windows] sandbox`; `"off"` adds nothing. `network_access` only applies to Codex and defaults to `true`: `edit` jobs get `-c sandbox_workspace_write.network_access=true`, so commands in the sandbox can reach the network and open local sockets (test runners such as VSTest need them). Set it to `false` to keep Codex's own default, which blocks both; see [codex.md](codex.md#using-it). `[antigravity]` takes `binary`, `default_model`, `edit_permission_mode` (`accept-edits` by default, or `auto` where the account supports it) and `share_parent_mcp`, the review keys below, and the account keys further down.
 
 ```toml
 [antigravity]

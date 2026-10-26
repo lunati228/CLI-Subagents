@@ -246,7 +246,7 @@ def relay_write_permission(payload: dict[str, Any]) -> dict[str, Any] | None:
 
     from cli_subagents.relay_input import MAX_BYTES, validate_path
 
-    names = {f"cli-subagents-{runtime}" for runtime in ("claude", "codex", "antigravity")}
+    names = {f"cli-subagents-{runtime}" for runtime in ("claude", "codex", "antigravity", "opencode")}
     names |= {f"cli-subagents:{name}" for name in tuple(names)}
     agent_type = payload.get("agent_type")
     if (payload.get("hook_event_name") != "PreToolUse" or payload.get("tool_name") != "Write"

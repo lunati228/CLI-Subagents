@@ -128,8 +128,8 @@ class RelayShellTests(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines()[0], "SHELL_RAN_AFTER_TERMINATOR")
         self.assertEqual(json.loads(result.stdout.splitlines()[1])["stdin"], "first\n")
 
-    def test_all_nine_relays_use_file_tools_and_short_commands(self):
-        for runtime in ("claude", "codex", "antigravity"):
+    def test_all_twelve_relays_use_file_tools_and_short_commands(self):
+        for runtime in ("claude", "codex", "antigravity", "opencode"):
             for path in (ROOT / "agents" / f"cli-subagents-{runtime}.md",
                          ROOT / "src/cli_subagents/templates/codex-agents" / f"cli-subagents-{runtime}.toml",
                          ROOT / "src/cli_subagents/templates/antigravity-plugin/agents" / f"cli-subagents-{runtime}.md"):

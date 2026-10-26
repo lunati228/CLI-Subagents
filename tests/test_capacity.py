@@ -88,6 +88,8 @@ class CapacityRunnerTests(TempHome):
         )
         config = load_config()
         for name, runtime in config.runtimes.items():
+            if name == "opencode":  # this first adapter uses one native profile
+                continue
             runtime.primary = self.root / name
             runtime.primary.mkdir(exist_ok=True)
             runtime.include_primary = False

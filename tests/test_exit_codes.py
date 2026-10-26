@@ -124,6 +124,8 @@ class ExitCodeJobTests(TempHome):
             os.environ.pop(key, None)
         config = load_config()
         for name, runtime in config.runtimes.items():
+            if name == "opencode":  # no extra account folders for this runtime
+                continue
             runtime.primary = self.root / name / "primary"
             runtime.primary.mkdir(parents=True)
             runtime.include_primary = False

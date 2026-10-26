@@ -24,7 +24,7 @@ LOST = "lost"
 
 # Environment variables that identify or authenticate the *host* session.
 # A worker must never inherit them, or it may run as the host's account.
-HOST_ENV_PREFIXES = ("CLAUDE", "ANTHROPIC_", "CODEX_COMPANION_", "CODEX_THREAD", "CLI_SUBAGENTS_")
+HOST_ENV_PREFIXES = ("CLAUDE", "ANTHROPIC_", "OPENCODE_", "CODEX_COMPANION_", "CODEX_THREAD", "CLI_SUBAGENTS_")
 HOST_ENV_EXACT = {
     "CODEX_HOME",
     "OPENAI_API_KEY",
@@ -133,6 +133,8 @@ class AttemptResult:
     error_text: str = ""  # the error output the outcome was judged from (Retry-After hints and the like)
     before_start: bool = False  # ended by a runtime's preflight check; the worker never ran
     at_capacity: bool = False  # terminal provider overload; stays ERROR, never a quota cooldown
+    no_rotation: bool = False  # shared provider limits cannot be solved with another account
+    account_cooldown: bool = True  # False: the limit covers some models only (OpenCode's free tier)
 
 
 class Parser(Protocol):

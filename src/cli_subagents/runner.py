@@ -191,7 +191,10 @@ class Runner:
                 continue
             if last.outcome != USAGE_LIMIT:
                 return self.finish(last.outcome, last.message, last)
-            if self.pool or self.spec.runtime not in OPT_IN_FAILOVER or self.runtime_config.failover == "on-limit":
+            # A model pool's cooldown is scoped to its models; an account-wide one is skipped when
+            # the limit covers only some models (OpenCode's free tier), so paid models keep working.
+            if self.pool or (last.account_cooldown and (
+                    self.spec.runtime not in OPT_IN_FAILOVER or self.runtime_config.failover == "on-limit")):
                 # Unpooled opt-in runtimes keep their old behaviour; pool cooldowns always apply.
                 minutes = (self.pool.cooldown_minutes if self.pool else None) or self.runtime_config.cooldown_minutes
                 until = accounts.cooldown_end(
@@ -203,7 +206,7 @@ class Runner:
                     accounts.set_pool_cooldown(self.spec.runtime, lease.account.name, self.pool.name, until, last.message or USAGE_LIMIT)
                 else:
                     accounts.set_cooldown(self.spec.runtime, lease.account.name, until, last.message or USAGE_LIMIT)
-            if not failover:
+            if not failover or last.no_rotation:
                 return self.finish(USAGE_LIMIT, f"{lease.account.name}: {last.message}", last)
             excluded.add(lease.account.name)
             if last.session_id and hasattr(self.runtime, "transfer_session"):

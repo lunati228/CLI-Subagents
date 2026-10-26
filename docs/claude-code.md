@@ -71,13 +71,14 @@ In Claude Code, ask for delegation in plain words ("have a subagent review the a
 
 ### Subagents in the agent list
 
-The plugin adds three agent types, one per CLI:
+The plugin adds four agent types, one per CLI:
 
 | Agent type | Runs the task in | Color |
 |---|---|---|
 | `cli-subagents:cli-subagents-claude` | Claude Code (`claude -p`) on one of your Claude accounts | orange |
 | `cli-subagents:cli-subagents-codex` | Codex (`codex exec`) on one of your ChatGPT accounts | green |
 | `cli-subagents:cli-subagents-antigravity` | Antigravity (`agy`) on your Google account | blue |
+| `cli-subagents:cli-subagents-opencode` | OpenCode v2 (`opencode run`) with your OpenCode configuration | purple |
 
 Claude starts them with its Agent tool like any other subagent, so they show up in the agent list and in the desktop app's task list, and Claude gets the usual notice when one finishes. The task description reads `<model> · <access> · <task>`, for example `Opus 5.5 · edit · fix the login test`, so you can see which model works on what. Subagents start them the same way. A job started with `csa run` in a shell or with `subagent_start` doesn't appear in the agent list, so the skill and the rules template tell Claude to always use the relay agents in Claude Code.
 

@@ -16,7 +16,7 @@ from cli_subagents import __version__, tools
 
 SUPPORTED_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
 INSTRUCTIONS = (
-    "Start subagents in Claude Code, Codex or Antigravity. Each job runs in the background on one "
+    "Start subagents in Claude Code, Codex, Antigravity or installed OpenCode. Each job runs in the background on one "
     "of your own accounts, with the same MCP servers, plugins, skills and instructions as your main "
     "setup. In Claude Code, start them with the Agent tool and the cli-subagents-* agent types "
     "instead of these tools, so the user sees them; the cli-subagents skill explains how. Elsewhere, "

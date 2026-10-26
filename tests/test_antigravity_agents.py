@@ -14,7 +14,7 @@ from test_setup import SetupBase
 
 
 ROOT = Path(__file__).resolve().parent.parent
-RUNTIMES = ("claude", "codex", "antigravity")
+RUNTIMES = ("claude", "codex", "antigravity", "opencode")
 TEMPLATES = files("cli_subagents").joinpath("templates", "antigravity-plugin")
 
 
@@ -26,7 +26,7 @@ def definition(runtime):
 
 
 class AntigravityAgentDefinitionTests(unittest.TestCase):
-    def test_companion_plugin_contains_three_flash_agents_with_payload_write_tool(self):
+    def test_companion_plugin_contains_four_flash_agents_with_payload_write_tool(self):
         manifest = json.loads(TEMPLATES.joinpath("plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "cli-subagents-relays")
         self.assertEqual(set(manifest), {"name", "description"})
@@ -77,6 +77,10 @@ class AntigravityAgentDefinitionTests(unittest.TestCase):
             with self.subTest(runtime=runtime):
                 _, body = definition(runtime)
                 for text in required:
+                    if runtime == "opencode" and text == "`account=...`":
+                        # OpenCode has no extra accounts, so its relay doesn't offer the option.
+                        self.assertNotIn(text, body)
+                        continue
                     self.assertIn(text, " ".join(body.split()))
                 self.assertIn("`effort=", body)
 

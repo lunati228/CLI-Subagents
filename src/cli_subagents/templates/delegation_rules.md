@@ -32,13 +32,16 @@ Tell the user what waits and suggest the home model as the faster option.
 Switch for speed when the user asks. A subagent reports "a later step waits" to its parent.
 
 Start the chosen model as the `cli-subagents` skill describes: the matching relay agent
-(`cli-subagents:cli-subagents-codex`, `cli-subagents:cli-subagents-antigravity` or `cli-subagents:cli-subagents-claude`)
+(`cli-subagents:cli-subagents-codex`, `cli-subagents:cli-subagents-antigravity`, `cli-subagents:cli-subagents-claude`
+or `cli-subagents:cli-subagents-opencode` when OpenCode v2 is installed)
 through the Agent tool, in the background, at every depth.
 Never run `csa run`, `csa start` or `csa follow` in your own shell, and never call the start tool directly
 while these agents exist: the user can't see such jobs in the agent list, and you stay blocked waiting on them.
 Use the description `<model> · <access> · <task>`. Take the relay's `model=`, `effort=` and `access=` lines
 from the chosen entry (`read` for research and reviews, `edit` for changes), and start the worker task with its depth line.
 If the host has no relay agents, use the CLI Subagents start tool with the same options.
+OpenCode free models are for personal projects only. They share a daily IP allowance;
+on a free-limit result, use the home model or wait until UTC midnight. Extra accounts add no free quota.
 
 ### Limits and nesting
 

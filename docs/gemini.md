@@ -16,7 +16,8 @@ There is nothing else to configure. Jobs run on the account you signed in with i
 
 Run `csa setup --host antigravity` and start a new session. Setup installs the
 main plugin and a companion plugin with `cli-subagents-claude`,
-`cli-subagents-codex` and `cli-subagents-antigravity` native relay agents. The
+`cli-subagents-codex`, `cli-subagents-antigravity` and `cli-subagents-opencode`
+native relay agents. The
 main agent invokes them with `invoke_subagent`; each runs `csa run --follow`
 in a conversation you can open in the app or the CLI's `/agents` panel. Send
 later messages to the same relay to continue the worker conversation.

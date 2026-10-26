@@ -39,6 +39,7 @@ import json
 import os
 from pathlib import Path
 import re
+import tomllib
 from typing import Any
 
 from cli_subagents.fsutil import read_json, same_path
@@ -228,6 +229,76 @@ def collect_servers(primary: Path, cwd: str, environ: dict[str, str] | None = No
     return result
 
 
+def collect_native_servers(host: str, primary: Path, cwd: str, environ: dict[str, str] | None = None) -> Collected:
+    """Parent settings in the common shape used by the runtime translators.
+
+    Read only MCP configuration, never login files or provider credentials.
+    Claude's scope/approval rules remain in collect_servers.
+    """
+
+    if host == "claude":
+        return collect_servers(primary, cwd, environ)
+    source_env = dict(os.environ if environ is None else environ)
+    result = Collected()
+    candidates: dict[str, Any] = {}
+    if host == "codex":
+        from cli_subagents.runtimes.codex import config_files
+
+        for path in config_files(primary, cwd):
+            try:
+                data = tomllib.loads(path.read_text(encoding="utf-8")).get("mcp_servers") or {}
+                if isinstance(data, dict):
+                    for name, entry in data.items():
+                        if isinstance(entry, dict):
+                            # Config layers can override one field of a server.
+                            candidates[name] = {**candidates.get(name, {}), **entry}
+            except (OSError, UnicodeError, ValueError):
+                result.warnings.append(f"could not read parent MCP settings from {path.name}")
+    elif host == "antigravity":
+        root = primary.parent if primary.name == "antigravity-cli" else primary
+        candidates = _servers_of(read_json(root / "config" / "mcp_config.json", {}))
+    else:
+        return result
+    for name, original in candidates.items():
+        if not isinstance(original, dict) or original.get("enabled") is False or original.get("disabled") is True:
+            continue
+        server = dict(original)
+        if host == "codex":
+            missing = []
+            env = {}
+            for key in _string_list(server.get("env_vars")):
+                if key in source_env:
+                    env[key] = source_env[key]
+                else:
+                    missing.append(key)
+            env.update(_string_map(server.get("env")))
+            if env:
+                server["env"] = env
+            headers = _string_map(server.get("http_headers"))
+            for header, variable in _string_map(server.get("env_http_headers")).items():
+                if variable in source_env:
+                    headers[header] = source_env[variable]
+                else:
+                    missing.append(variable)
+            token = server.get("bearer_token_env_var")
+            if token:
+                if str(token) in source_env:
+                    headers["Authorization"] = "Bearer " + source_env[str(token)]
+                else:
+                    missing.append(str(token))
+            if missing:
+                result.warnings.append(f"MCP server '{name}' skipped: it needs unset variable(s) {', '.join(sorted(set(missing)))}")
+                continue
+            if headers:
+                server["headers"] = headers
+        elif server.get("serverUrl"):
+            server["url"] = server.pop("serverUrl")
+        if _is_self(str(name), server):
+            continue
+        result.servers[str(name)] = server
+    return result
+
+
 # Shared helpers -----------------------------------------------------------
 
 
@@ -405,3 +476,53 @@ def to_agy(servers: dict[str, dict[str, Any]]) -> tuple[dict[str, dict[str, Any]
             continue
         result[name] = entry
     return result, warnings
+
+
+# OpenCode -----------------------------------------------------------------
+
+
+@dataclass
+class OpenCodeServers:
+    servers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+
+
+def to_opencode(servers: dict[str, dict[str, Any]]) -> OpenCodeServers:
+    """Translate to v2's `mcp.servers`, keeping private values in the environment.
+
+    OpenCode expands `{env:NAME}` in its inline config. Disable Code Mode so parent
+    messaging and the other MCP tools remain directly callable by the worker.
+    """
+
+    out = OpenCodeServers()
+    for index, (name, server) in enumerate(servers.items()):
+        transport = _transport(server)
+        entry: dict[str, Any] = {"codemode": False}
+        values: dict[str, str] = {}
+
+        def reference(value: str) -> str:
+            variable = f"CSA_OPENCODE_MCP_{index}_{len(values)}"
+            values[variable] = value
+            return "{env:" + variable + "}"
+
+        if transport == "stdio":
+            entry.update(type="local", command=[str(server["command"]), *_string_list(server.get("args"))])
+            # Arguments can themselves contain tokens. Config substitution avoids
+            # writing them to a job config or placing them on csa's command line.
+            entry["command"] = [reference(value) for value in entry["command"]]
+            if server.get("env"):
+                entry["environment"] = {key: reference(value) for key, value in _string_map(server["env"]).items()}
+            if server.get("cwd"):
+                entry["cwd"] = str(server["cwd"])
+        elif transport in ("http", "sse") and server.get("url") and not server.get("headersHelper"):
+            entry.update(type="remote", url=reference(str(server["url"])))
+            if server.get("headers"):
+                entry["headers"] = {key: reference(value) for key, value in _string_map(server["headers"]).items()}
+        else:
+            reason = "headersHelper is unsupported" if server.get("headersHelper") else f"transport '{transport or 'unknown'}' is unsupported"
+            out.warnings.append(f"MCP server '{name}' not shared with OpenCode: {reason}")
+            continue
+        out.servers[name] = entry
+        out.env.update(values)
+    return out

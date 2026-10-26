@@ -82,7 +82,7 @@ class FollowWindowTests(TempHome):
 
     def test_claude_relays_use_window_with_validated_continuations(self):
         root = Path(__file__).resolve().parents[1]
-        for runtime in ("claude", "codex", "antigravity"):
+        for runtime in ("claude", "codex", "antigravity", "opencode"):
             text = (root / "agents" / f"cli-subagents-{runtime}.md").read_text(encoding="utf-8")
             self.assertIn("csa run --follow --window 60", text)
             self.assertIn("csa follow <JOB> --from <OFFSET> --window <WINDOW> # csa-token <TOKEN>", text)

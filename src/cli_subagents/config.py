@@ -14,7 +14,7 @@ from typing import Any
 
 from cli_subagents.fsutil import write_text
 
-RUNTIMES = ("claude", "codex", "antigravity")
+RUNTIMES = ("claude", "codex", "antigravity", "opencode")
 # Runtimes whose extra accounts are "use at your own risk" (Antigravity: Google's FAQ says
 # consumer plans don't support automated account rotation). Failover is on by default, as for
 # the others; with failover = "off", unpinned jobs run on the primary account only.
@@ -65,6 +65,8 @@ def default_primary(runtime: str) -> Path:
         return Path(configured).expanduser() if configured else Path.home() / ".codex"
     if runtime == "antigravity":
         return Path.home() / ".gemini" / "antigravity-cli"
+    if runtime == "opencode":
+        return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode"
     raise ValueError(f"unknown runtime: {runtime}")
 
 
@@ -138,6 +140,7 @@ class RuntimeConfig:
     web_search: str | None = None  # [codex] only; unset preserves Codex's default
     network_access: bool = True  # [codex] only: network inside the sandbox for edit jobs (local test sockets too)
     accounts: list[Account] = field(default_factory=list)
+    enabled: bool = True  # [opencode]: auto-discover unless explicitly disabled
 
     def primary_account(self) -> Account:
         return Account(
@@ -314,6 +317,11 @@ def _account_spend(runtime: str, account: str, item: dict[str, Any]) -> dict[str
 
 
 def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
+    enabled = data.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"[{name}] enabled must be true or false")
+    if name == "opencode" and data.get("accounts"):
+        raise ValueError("[opencode] uses your own OpenCode profile; extra accounts are not supported yet")
     accounts: list[Account] = []
     for item in data.get("accounts", []) or []:
         if not isinstance(item, dict) or not NAME_RE.match(str(item.get("name", ""))):
@@ -340,7 +348,7 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
         )
     opt_in = name in OPT_IN_FAILOVER
     # On by default everywhere; for Antigravity, "off" keeps unpinned jobs on the primary account.
-    failover = str(data.get("failover", "on-limit"))
+    failover = str(data.get("failover", "off" if name == "opencode" else "on-limit"))
     if failover not in FAILOVER_MODES:
         raise ValueError(f"[{name}] failover must be one of {FAILOVER_MODES}")
     connectors = str(data.get("connectors", "account"))
@@ -355,9 +363,11 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
     when_full = str(data.get("when_full", "refuse"))
     if when_full not in WHEN_FULL_MODES:
         raise ValueError(f"[{name}] when_full must be one of {WHEN_FULL_MODES}")
-    reviewer = str(data.get("reviewer", "agy"))
+    reviewer = str(data.get("reviewer", "off" if name == "opencode" else "agy"))
     if reviewer not in REVIEWERS:
         raise ValueError(f"[{name}] reviewer must be one of {REVIEWERS}")
+    if name == "opencode" and (reviewer != "off" or data.get("reviewer_model") or data.get("reviewer_account")):
+        raise ValueError("[opencode] supports fixed review rules only; reviewer models are not supported yet")
     web_search = data.get("web_search")
     if web_search is not None and (name != "codex" or web_search not in WEB_SEARCH_MODES):
         raise ValueError(f"[{name}] web_search must be under [codex] and one of {WEB_SEARCH_MODES}")
@@ -375,6 +385,7 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
             raise ValueError(f"[{name}] {key} must be an integer at least {minimum}")
     return RuntimeConfig(
         runtime=name,
+        enabled=enabled,
         primary=_path(data.get("primary"), default_primary(name)),
         binary=data.get("binary") or None,
         # These runtimes rotate through the primary account too, unless told otherwise.
@@ -459,13 +470,15 @@ def dump_config(config: Config) -> str:
         ]
         if runtime.binary:
             lines.append(f"binary = {_toml_value(runtime.binary)}")
+        if not runtime.enabled:
+            lines.append("enabled = false")
         if runtime.default_model:
             lines.append(f"default_model = {_toml_value(runtime.default_model)}")
         if name == "codex" and runtime.windows_sandbox != "unelevated":
             lines.append(f"windows_sandbox = {_toml_value(runtime.windows_sandbox)}")
         if name == "codex" and runtime.reasoning_summary != "detailed":
             lines.append(f"reasoning_summary = {_toml_value(runtime.reasoning_summary)}")
-        if name in ("codex", "antigravity") and not runtime.share_parent_mcp:
+        if name in ("codex", "antigravity", "opencode") and not runtime.share_parent_mcp:
             lines.append("share_parent_mcp = false")
         if name == "antigravity":
             if runtime.reviewer != "agy":

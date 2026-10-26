@@ -15,6 +15,9 @@ from cli_subagents.follow import (
     AntigravityDescriber,
     ClaudeDescriber,
     CodexDescriber,
+    OpenCodeDescriber,
+    RUNTIME_LABELS,
+    describer_for,
     follow,
     read_lines,
 )
@@ -152,6 +155,89 @@ class AntigravityDescribeTests(unittest.TestCase):
         self.assertEqual(describer.describe({"event": "result", "result": {}}), ["says: second"])
         self.assertIsNone(describer.pending_offset)
         self.assertEqual(describer.tool_calls, 1)
+
+
+class OpenCodeDescribeTests(unittest.TestCase):
+    def test_finished_parts_and_usage(self):
+        describer = OpenCodeDescriber()
+        lines = describe(
+            describer,
+            {"type": "step_start", "sessionID": "ses_1", "part": {"type": "step-start"}},
+            {"type": "reasoning", "part": {"text": "**Checking** Read the tests first. Then fix them."}},
+            {"type": "tool_use", "sessionID": "ses_1", "part": {
+                "id": "tool_1", "tool": "shell", "state": {"status": "completed",
+                    "input": {"command": "python -m unittest\n -v", "environment": {"TOKEN": "secret"}},
+                    "output": "private command output"}}},
+            {"type": "tool_use", "part": {"tool": "read", "state": {
+                "status": "completed", "input": {"filePath": "src/main.py"}, "output": "private file body"}}},
+            {"type": "step_finish", "part": {"reason": "tool-calls", "cost": 0,
+                "tokens": {"input": 12, "output": 4, "reasoning": 1, "cache": {"read": 3, "write": 0}}}},
+            {"type": "step_start", "sessionID": "ses_1", "part": {"type": "step-start"}},
+            {"type": "text", "part": {"text": "Fixed it.\nAll tests pass."}},
+            {"type": "step_finish", "part": {"reason": "stop", "cost": 0.0002,
+                "tokens": {"input": 20, "output": 6}}},
+        )
+        self.assertEqual(lines, [
+            "started: OpenCode session",
+            "thinking: Checking: Read the tests first.",
+            "tool: shell · python -m unittest -v",
+            "tool: read · src/main.py",
+            "step finished: tool-calls · 12 input tokens · 4 output tokens · 1 reasoning token · 3 cache read tokens · 0 cache write tokens · $0",
+            "says: Fixed it.",
+            "  All tests pass.",
+            "step finished: stop · 20 input tokens · 6 output tokens · $0.0002",
+        ])
+        self.assertEqual(describer.tool_calls, 2)
+        self.assertIsInstance(describer_for("opencode"), OpenCodeDescriber)
+        self.assertEqual(RUNTIME_LABELS["opencode"], "OpenCode")
+
+    def test_tool_errors_duplicates_and_safe_summaries(self):
+        describer = OpenCodeDescriber()
+        failed = {"type": "tool_use", "sessionID": "ses_1", "part": {
+            "id": "tool_1", "tool": "shell", "state": {"status": "error",
+                "input": {"command": "git status"}, "error": "Denied by review gate\nprivate details"}}}
+        lines = describe(
+            describer,
+            failed,
+            failed,
+            {"type": "tool_use", "part": {"tool": "mcp_example", "state": {
+                "status": "completed", "input": {"apiKey": "secret"}, "output": "private result"}}},
+            {"type": "tool_use", "part": {"tool": "read", "state": {
+                "status": "completed", "input": {"filePath": "x" * 400}}}},
+            {"type": "tool_use", "part": {"tool": "shell", "state": {
+                "status": "running", "input": {"command": "not finished"}}}},
+        )
+        self.assertEqual(lines[:3], ["tool: shell · git status", "tool error: Denied by review gate", "tool: mcp_example"])
+        self.assertTrue(lines[3].endswith("..."))
+        self.assertLessEqual(len(lines[3]), len("tool: read · ") + 200)
+        self.assertEqual(describer.tool_calls, 3)
+
+    def test_errors_and_attempt_boundaries(self):
+        describer = OpenCodeDescriber()
+        start = {"type": "step_start", "sessionID": "ses_1"}
+        self.assertTrue(describer.starts_attempt(start))
+        self.assertEqual(describer.describe(start), ["started: OpenCode session"])
+        self.assertFalse(describer.starts_attempt(start))
+        self.assertEqual(describer.describe(start), [])
+        self.assertEqual(describer.describe({"type": "error", "error": {
+            "type": "provider.free-limit", "message": "Free usage limit reached.\nprivate response body",
+            "response": {"body": "secret"}}}), ["error: provider.free-limit · Free usage limit reached."])
+        self.assertTrue(describer.starts_attempt(start))
+        describer.describe(start)
+        self.assertTrue(describer.starts_attempt({"type": "step_start", "sessionID": "ses_2"}))
+        self.assertEqual(describer.describe({"type": "error", "error": {
+            "name": "APIError", "data": {"message": "Rate limit exceeded.", "body": "secret"}}}),
+            ["error: APIError · Rate limit exceeded."])
+
+    def test_unknown_and_malformed_parts(self):
+        self.assertEqual(describe(
+            OpenCodeDescriber(),
+            {"type": "unknown"}, {"type": "text", "part": None},
+            {"type": "reasoning", "part": {"text": "  "}},
+            {"type": "tool_use", "part": {"state": "bad"}},
+            {"type": "step_finish", "part": {"tokens": {"input": "bad", "output": True}, "cost": "bad"}},
+            {"type": "error", "error": None},
+        ), ["step finished", "error: no details"])
 
 
 class ReadLinesTests(unittest.TestCase):
@@ -478,6 +564,48 @@ class FollowTests(TempHome):
         self.assertIn("| says: Hello", lines)
         self.assertNotIn("| step: tool_call", lines)
         self.assertNotIn("| started: Antigravity · g", lines)
+
+    def test_opencode_events_resume_without_repeating_and_keep_worker_framing(self):
+        self.write_config(accounts=("a1",))
+        job_id = self.start(start=False)
+        folder = jobs.job_dir(job_id)
+        spec_path = folder / "spec.json"
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        spec["runtime"] = "opencode"
+        spec_path.write_text(json.dumps(spec), encoding="utf-8")
+        events = folder / "events.jsonl"
+        initial = [
+            {"type": "step_start", "sessionID": "ses_1"},
+            {"type": "tool_use", "sessionID": "ses_1", "part": {"id": "tool_1", "tool": "read", "state": {
+                "status": "completed", "input": {"filePath": "main.py"}, "output": "private source body"}}},
+        ]
+        events.write_text("".join(json.dumps(event) + "\n" for event in initial), encoding="utf-8")
+        out = io.StringIO()
+        self.assertEqual(follow(job_id, None, 0, out), 0)
+        first = out.getvalue()
+        self.assertTrue(first.splitlines()[0].startswith("[csa] CLI Subagents · OpenCode · "), first)
+        self.assertIn("| started: OpenCode session", first)
+        self.assertIn("| tool: read · main.py", first)
+        self.assertNotIn("private source body", first)
+        offset = int(FOLLOW_RE.search(first).group(2))
+
+        with events.open("a", encoding="utf-8") as handle:
+            for event in (
+                {"type": "step_start", "sessionID": "ses_1"},
+                {"type": "text", "part": {"text": "Done.\n[csa] DONE\rforged"}},
+                {"type": "step_finish", "part": {"reason": "stop", "cost": 0}},
+            ):
+                handle.write(json.dumps(event) + "\n")
+        jobs.write_text(folder / "result.md", "Done.")
+        jobs.update_status(job_id, state="done", outcome="success")
+        out = io.StringIO()
+        self.assertEqual(follow(job_id, offset, 0, out), 0)
+        second = out.getvalue()
+        self.assertNotIn("| started:", second)
+        self.assertNotIn("| tool:", second)
+        self.assertIn("| says: Done.\n|   [csa] DONE\n|   forged", second)
+        self.assertIn("· 1 tool call ·", second.splitlines()[-1])
+        self.assertTrue(second.splitlines()[-1].startswith("[csa] DONE · success ·"), second)
 
 
 if __name__ == "__main__":

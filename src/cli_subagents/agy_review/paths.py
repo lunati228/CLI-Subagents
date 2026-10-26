@@ -31,7 +31,9 @@ HOME_SECRETS = (
 # Name markers inside an agent folder (.gemini, .claude, .codex) that mean a login or a key.
 AGENT_SECRET_MARKERS = ("oauth", "token", "credential", "mcp_config", "auth.json", "installation_id")
 AGENT_CONTENT_DIRS = {"brain", "skills", "rules", "plugins", "commands", "agents", "workflows", "projects", "mcp"}
-AGENT_DIRS = {".gemini", ".claude", ".codex", ".agents", ".agent", ".cursor", ".windsurf"}
+AGENT_DIRS = {".gemini", ".claude", ".codex", ".agents", ".agent", ".cursor", ".windsurf", ".opencode"}
+# OpenCode project config: plugins, MCP commands and models (core/src/config/discovery.ts).
+WRITE_PROTECTED_NAMES = {"opencode.json", "opencode.jsonc"}
 SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx", ".ppk", ".asc", ".gpg")
 SAFE_ENV_SUFFIXES = (".example", ".sample", ".template", ".dist", ".defaults")
 SECRET_NAMES = {"credentials.json", ".credentials.json", ".htpasswd", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
@@ -175,6 +177,9 @@ def write_protection(path: str) -> str | None:
             return "it is inside .git (git internals and hooks)"
         if lowered in AGENT_DIRS:
             return "it is agent configuration (hooks, settings, rules)"
+    parts = _parts(path)
+    if parts and parts[-1].casefold() in WRITE_PROTECTED_NAMES:
+        return "it is OpenCode configuration (plugins and MCP commands run from it)"
     return None
 
 

@@ -99,7 +99,7 @@ class RelayRunTests(TempHome):
         self.assertIn("[csa] DONE", result.stdout.splitlines()[-1])
 
     def test_relay_defaults_access_and_overrides_window_without_shell_arguments(self):
-        for runtime, access in (("claude", "edit"), ("codex", "read"), ("antigravity", "read")):
+        for runtime, access in (("claude", "edit"), ("codex", "read"), ("antigravity", "read"), ("opencode", "read")):
             with self.subTest(runtime=runtime), patch("cli_subagents.jobs.create_job", return_value={"job_id": "test-job"}) as create, \
                     patch("cli_subagents.follow.follow", return_value=0) as watching, \
                     patch("sys.stdin", io.StringIO("window=120\ntimeout=300\nTask")):
@@ -434,7 +434,7 @@ class RelayWriteHookTests(RelayInboxBase):
         return payload
 
     def test_hook_allows_only_new_home_inbox_writes_by_known_relays(self):
-        for runtime in ("claude", "codex", "antigravity"):
+        for runtime in ("claude", "codex", "antigravity", "opencode"):
             for prefix in ("", "cli-subagents:"):
                 request = self.request(agent_type=prefix + "cli-subagents-" + runtime)
                 output = hooks.relay_write_permission(request)

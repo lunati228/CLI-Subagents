@@ -144,6 +144,7 @@ PROTECTED_MARKERS = (
     ".git/hooks", ".git/config", ".git/info", "core.hookspath", "core.fsmonitor", "core.sshcommand", "core.pager",
     "core.editor", "git config", "hooks.json", "/.agents", ".agents/", "/.gemini", ".gemini/", "/.claude", ".claude/",
     "/.codex", ".codex/", ".husky", ".vscode", "init --template", "settings.json",
+    "/.opencode", ".opencode/", "opencode.json",
 )
 
 

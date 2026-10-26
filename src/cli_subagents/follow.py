@@ -38,7 +38,7 @@ POLL_SECONDS = 0.5
 DEFAULT_MAX_WAIT = 540.0  # keeps one Bash call under Claude Code's 10-minute ceiling
 DEFAULT_WINDOW = 60
 SUMMARY_CHARS = 200
-RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity"}
+RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
 RESULT_RULE = "===== RESULT ====="
 RESULT_END_RULE = "===== END RESULT ====="
 QUESTION_RULE = "===== QUESTION ====="
@@ -384,10 +384,100 @@ class AntigravityDescriber(Describer):
         return lines + [f"step: {step_type}" + (f" · {short(detail)}" if detail else "")]
 
 
+# OpenCode: `opencode run --format json` (finished parts, not text deltas)
+
+_OPENCODE_SUMMARY_KEYS = ("command", "filePath", "file_path", "path", "pattern", "query", "url", "description")
+
+
+class OpenCodeDescriber(Describer):
+    def __init__(self) -> None:
+        super().__init__()
+        self._started = False
+        self._session = ""
+        self._tools: set[tuple[str, str]] = set()
+
+    def starts_attempt(self, event: dict[str, Any]) -> bool:
+        # step_start occurs for every model step, not just once per CLI run.
+        session = str(event.get("sessionID") or "")
+        return event.get("type") == "step_start" and (
+            not self._started or bool(session and session != self._session)
+        )
+
+    def describe(self, event: dict[str, Any], offset: int = 0) -> list[str]:
+        kind = event.get("type")
+        if kind == "step_start":
+            started = self.starts_attempt(event)
+            self._started = True
+            self._session = str(event.get("sessionID") or self._session)
+            return ["started: OpenCode session"] if started else []
+        if kind == "error":
+            self._started = False  # a later step may be a new CLI attempt
+            error = event.get("error")
+            if isinstance(error, dict):
+                data = error.get("data")
+                message = error.get("message") or (data.get("message") if isinstance(data, dict) else None)
+                name = error.get("type") or error.get("name")
+                detail = first_line(message) or "no details"
+                return ["error: " + (f"{short(name, 80)} · " if name else "") + detail]
+            return ["error: " + (first_line(error) or "no details")]
+        part = event.get("part")
+        if not isinstance(part, dict):
+            return []
+        if kind in ("text", "reasoning") and str(part.get("text") or "").strip():
+            if kind == "reasoning":
+                return ["thinking: " + reasoning_line(str(part["text"]))]
+            return block("says: ", part["text"])
+        if kind == "tool_use":
+            state = part.get("state")
+            if not isinstance(state, dict) or state.get("status") not in ("completed", "error"):
+                return []
+            part_id = part.get("id") or part.get("callID")
+            if part_id:
+                key = (str(event.get("sessionID") or self._session), str(part_id))
+                if key in self._tools:
+                    return []
+                self._tools.add(key)
+            self.tool_calls += 1
+            name = short(part.get("tool") or "tool", 80)
+            data = state.get("input")
+            # Never dump input objects, environment variables or tool output bodies.
+            summary = next((data[key] for key in _OPENCODE_SUMMARY_KEYS
+                            if isinstance(data.get(key), str) and data[key].strip()), "") if isinstance(data, dict) else ""
+            lines = [f"tool: {name}" + (f" · {short(summary)}" if summary else "")]
+            if state.get("status") == "error":
+                error = state.get("error")
+                if isinstance(error, dict):
+                    error = error.get("message")
+                lines.append("tool error: " + (first_line(error) or "no details"))
+            return lines
+        if kind == "step_finish":
+            details = []
+            if part.get("reason"):
+                details.append(short(part["reason"], 80))
+            tokens = part.get("tokens")
+            if isinstance(tokens, dict):
+                for key in ("input", "output", "reasoning"):
+                    value = tokens.get(key)
+                    if type(value) is int and value >= 0:
+                        details.append(plural(value, f"{key} token"))
+                cache = tokens.get("cache")
+                if isinstance(cache, dict):
+                    for key in ("read", "write"):
+                        value = cache.get(key)
+                        if type(value) is int and value >= 0:
+                            details.append(plural(value, f"cache {key} token"))
+            cost = part.get("cost")
+            if type(cost) in (int, float) and cost >= 0:
+                details.append(f"${cost:g}")
+            return ["step finished" + (": " + " · ".join(details) if details else "")]
+        return []
+
+
 DESCRIBERS: dict[str, Callable[[], Describer]] = {
     "claude": ClaudeDescriber,
     "codex": CodexDescriber,
     "antigravity": AntigravityDescriber,
+    "opencode": OpenCodeDescriber,
 }
 
 

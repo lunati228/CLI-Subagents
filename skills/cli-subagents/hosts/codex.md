@@ -14,6 +14,7 @@ not register the agents; run setup too.
 | Claude Code | `cli-subagents-claude` |
 | Codex | `cli-subagents-codex` |
 | Antigravity / Gemini | `cli-subagents-antigravity` |
+| OpenCode v2 | `cli-subagents-opencode` |
 
 Use the native `spawn_agent` tool with that `agent_type` and a self-contained
 task. For the default v1 tool schema, a Codex worker example is:
@@ -28,7 +29,7 @@ task. For the default v1 tool schema, a Codex worker example is:
 
 Use the fields in the actual tool schema if the client exposes another version
 (v2 also requires `task_name` and uses `fork_turns="none"` for a fresh context).
-Do not put the worker's model in the spawn call's `model` field. All three
+Do not put the worker's model in the spawn call's `model` field. All four
 relays select `gpt-6-luna` at low reasoning themselves. Option lines in the
 message select the external worker: `model=`, `access=`, `account=`, `effort=`,
 `cwd=`, `timeout=` and `override=` (the colon form is also accepted). Use
@@ -89,4 +90,6 @@ Don't edit files inside `~/.cli-subagents/homes/codex/`; they're rebuilt from th
 
 ## Mixing CLIs
 
-Claude Code and Antigravity subagents started from here get a note listing `~/.codex/AGENTS.md`, the project's `AGENTS.md` and your skill folders. Claude Code also reads a project `AGENTS.md` by itself when the project has no `CLAUDE.md`.
+Claude Code, Antigravity and OpenCode subagents started from here get a note listing `~/.codex/AGENTS.md`, the project's `AGENTS.md` and your skill folders. Claude Code also reads a project `AGENTS.md` by itself when the project has no `CLAUDE.md`.
+
+OpenCode uses the user's own OpenCode profile. Omit `model` to keep its configured default; with none set, csa uses `opencode/deepseek-v4.1-flash-free`. An unavailable model fails the job instead of falling back. Free models are for personal projects only. OpenCode has no OS sandbox; see [OpenCode](../../../docs/opencode.md) before choosing it for edits.

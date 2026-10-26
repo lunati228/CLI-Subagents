@@ -34,6 +34,7 @@ PLUGIN = "cli-subagents"
 PLUGIN_ID = f"{PLUGIN}@{MARKETPLACE}"
 ANTIGRAVITY_RELAYS = "cli-subagents-relays"
 HOSTS = ("claude", "codex", "antigravity")
+WORKER_RUNTIMES = (*HOSTS, "opencode")
 LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity"}
 SHORT = {"claude": "claude", "codex": "codex", "antigravity": "agy"}
 RELOAD = {
@@ -189,7 +190,7 @@ def _install_codex_agents(primary: Path, report: Report) -> None:
     """Codex discovers personal TOML agents, but cannot register them from a plugin."""
 
     templates = files("cli_subagents").joinpath("templates", "codex-agents")
-    for runtime in HOSTS:
+    for runtime in WORKER_RUNTIMES:
         name = f"cli-subagents-{runtime}.toml"
         target = primary / "agents" / name
         try:
@@ -228,7 +229,7 @@ def _install_antigravity_agents(config: Config, report: Report) -> None:
     plugin = root / "config" / "plugins" / ANTIGRAVITY_RELAYS
     templates = files("cli_subagents").joinpath("templates", "antigravity-plugin")
     # Publish the manifest last so a new plugin never registers an incomplete set.
-    names = [f"agents/cli-subagents-{runtime}.md" for runtime in HOSTS] + ["plugin.json"]
+    names = [f"agents/cli-subagents-{runtime}.md" for runtime in WORKER_RUNTIMES] + ["plugin.json"]
     try:
         for folder in (root / "config", plugin.parent, plugin, plugin / "agents"):
             if is_link(folder):

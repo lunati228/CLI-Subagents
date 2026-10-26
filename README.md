@@ -7,7 +7,7 @@ Give your coding agent subagents that run in your other agent CLIs and on your o
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
 
-Your main session, in Claude Code, Codex or Antigravity, can start subagents. Each subagent is a real Claude Code, Codex or Antigravity session running in the background on one of your accounts. Every account uses the same MCP servers, skills, plugins and instructions you already set up, so nothing has to be configured twice. When an account runs out of quota, the work moves to the next one and carries on.
+Your main session, in Claude Code, Codex or Antigravity, can start subagents in Claude Code, Codex, Antigravity or OpenCode. Workers use your existing MCP servers and instructions. Accounts in the same CLI share its skills, plugins and settings too. When a pooled account runs out of quota, the work moves to the next one and carries on. OpenCode uses one profile; its free-model IP limit does not trigger account rotation.
 
 It installs as a plugin in Claude Code, Codex and Antigravity, and works as a plain MCP server in any other MCP client.
 
@@ -20,9 +20,10 @@ flowchart LR
     w2["Claude Code<br/>account 3"]
     w3["Codex<br/>account 1"]
     w4["Antigravity<br/>Gemini"]
+    w5["OpenCode v2<br/>your model or free DeepSeek"]
 
     host -- "start · wait · message" --> core
-    core --> w1 & w2 & w3 & w4
+    core --> w1 & w2 & w3 & w4 & w5
     shared -. "one shared pool" .-> w1 & w2 & w3
 ```
 
@@ -35,9 +36,9 @@ flowchart LR
 - Limits handled for you. Plan presets and extra caps are opt-in. By default, `max_jobs_per_account = 1` runs one worker per account and queues extra jobs. `usage_ceiling = 0.95` blocks new starts on accounts with known usage at or above 95%. Set a plan or extra caps to refuse starts that would go over them, with one line that says what to do instead.
 - Only the user can authorize more parallel jobs with `override=<their words>` (relay or MCP) or `--override "..."` (`csa run` / `csa start`). Never set override on your own judgment; use it only when the user asked for more jobs in this conversation, or confirmed after you warned them and told them how much of the 5-hour window is left. It bypasses csa's caps and queueing; real usage-limit cooldowns, model and effort restrictions, login, depth and access still apply. See [configuration](docs/configuration.md#a-user-authorized-override).
 - Optional delegation rules. Preview a template with model tiers with `csa rules`, then choose whether to install it. See [Delegation rules](docs/delegation.md).
-- Mixing CLIs. A Claude Code session can hand a task to Codex or Gemini (through Antigravity). The subagent gets your Claude MCP servers and is told where your instructions and skills live.
-- Safety checks. `read` jobs get read-only tools only, and `edit` jobs run in each CLI's own auto-review mode. Gemini workers, which have none on Windows, run behind a review gate of fixed rules plus a separate reviewer model, and `edit` jobs inside Antigravity's sandbox. Skipping permissions is an explicit choice per job.
-- No tokens touched. Every model call comes from the vendor's own CLI with your own login. Nothing reads, copies or forwards credentials.
+- Mixing CLIs. A Claude Code session can hand a task to Codex, Gemini (through Antigravity) or OpenCode. The subagent gets the parent's MCP servers and instruction-file paths. OpenCode v2 needs no csa setup: it becomes available when `opencode` is on PATH, unless `[opencode] enabled = false` turns it off. It keeps your OpenCode default model, or uses `opencode/deepseek-v4.1-flash-free` when none is set. Free models are for personal projects only; see [OpenCode](docs/opencode.md).
+- Safety checks. `read` jobs get read-only tools. Claude and Codex `edit` jobs use their own review modes. Gemini workers run behind csa's fixed rules plus a separate reviewer model, with Antigravity's sandbox for `edit` jobs. OpenCode `read` and `edit` jobs use csa's fixed rules and have no OS sandbox, so `edit` jobs can change files but can't run tests, builds or other commands that change anything. Skipping permissions is an explicit choice per job.
+- Credentials stay with the vendor CLI. Model calls use your own login or provider configuration, including OpenCode's anonymous free models. csa does not copy credentials between runtimes.
 - Nothing to install besides Python 3.11. Pure standard library, with its own small MCP server.
 
 ## Install
@@ -146,7 +147,8 @@ Never read or copy credential files, and never edit files inside `~/.cli-subagen
 | Claude Code (`claude -p`) | Works | [Claude Code](docs/claude-code.md) |
 | Codex (`codex exec`) | Works | [Codex](docs/codex.md) |
 | Antigravity (`agy`, Gemini) | Works; extra accounts at your own risk | [Gemini](docs/gemini.md) |
-| Cursor, Gemini CLI, Copilot, OpenCode, others | Researched | [CLI comparison](docs/research/cli-permissions-and-headless.md) |
+| OpenCode v2 (`opencode run`) | First version; fake-CLI tests, live verification pending | [OpenCode](docs/opencode.md) |
+| Cursor, Gemini CLI, Copilot, others | Researched | [CLI comparison](docs/research/cli-permissions-and-headless.md) |
 
 Tested live on Windows with Claude Code 2.1.299, Codex 0.162.1 and Antigravity 1.4.0; the test suite also runs on macOS and Linux in CI.
 
@@ -160,18 +162,20 @@ Your normal config folder (`~/.claude`, `~/.codex`) is the one pool. Each extra 
 - your settings, MCP servers and plugins are passed to the worker as launch flags (`--settings`, `--mcp-config`, `--plugin-dir`), minus anything that would pick a different login;
 - for Codex, your `config.toml` is written into the account folder, which keeps its own trust and notice tables.
 
+OpenCode workers keep your existing OpenCode profile and XDG directories. csa supplies the parent's MCP servers, instruction files, access rules and review plugin through generated config. OpenCode plugins remain OpenCode's own; csa does not translate plugins between CLIs.
+
 Nothing in your own folders is moved or rewritten. One limit: tools built into the Claude desktop app itself (its browser or terminal panes, for example) belong to the app, not to your config, so CLI workers can't have them. Everything in your config folders and plugins is shared. `csa doctor --live` starts a tiny job on each account and compares exactly what each one loaded.
 
 ## Using your accounts
 
-All of this runs through each vendor's official CLI with your own login: the same thing you'd get by opening a terminal and typing the task yourself. Anthropic documents running several accounts side by side with separate config folders, and OpenAI ships its own plugin that runs Codex from Claude Code. Google's Antigravity FAQ rules out wrapping `agy` on consumer plans and automating account rotation, so the Antigravity runtime uses your one signed-in account unless you add more yourself. Extra accounts are marked use at your own risk; once added, they're used the same way as for Claude and Codex, and `failover = "off"` turns switching off. The details and quotes are in [provider terms](docs/research/provider-terms.md); each vendor's terms apply to your accounts.
+All of this runs through each vendor's official CLI with your own login or OpenCode's anonymous free models: the same thing you'd get by opening a terminal and typing the task yourself. Anthropic documents running several accounts side by side with separate config folders, and OpenAI ships its own plugin that runs Codex from Claude Code. Google's Antigravity FAQ rules out wrapping `agy` on consumer plans and automating account rotation, so the Antigravity runtime uses your one signed-in account unless you add more yourself. Extra accounts are marked use at your own risk; once added, they're used the same way as for Claude and Codex, and `failover = "off"` turns switching off. The details and quotes are in [provider terms](docs/research/provider-terms.md); each vendor's terms apply to your accounts. OpenCode's free-model limits and unpaid-content terms are covered in [OpenCode](docs/opencode.md#free-model-limits-and-data-terms).
 
 ## Repository layout
 
 ```text
 src/cli_subagents/      Core: jobs, account pool, shared setup, messages, MCP server, csa CLI
-  runtimes/             Claude Code, Codex and Antigravity adapters
-  agy_review/           The review gate for Antigravity workers
+  runtimes/             Claude Code, Codex, Antigravity and OpenCode adapters
+  agy_review/           The review gate reused by Antigravity and OpenCode workers
 .claude-plugin/         Claude Code and Codex plugin manifest and marketplace
 agents/                 Relay agents that show jobs in Claude Code's agent list
 src/cli_subagents/templates/codex-agents/   Native Codex relay definitions installed by setup/update
@@ -189,7 +193,7 @@ docs/                   Guides, design and research
 |---|---|
 | [Hosts](docs/hosts.md) | Install and use from Claude Code, Codex, Antigravity and other MCP clients |
 | [Claude Code](docs/claude-code.md) | Accounts, what is shared, switching, troubleshooting |
-| [Codex](docs/codex.md) and [Gemini](docs/gemini.md) | The other subagent CLIs |
+| [Codex](docs/codex.md), [Gemini](docs/gemini.md) and [OpenCode](docs/opencode.md) | The other subagent CLIs |
 | [Configuration](docs/configuration.md) | `config.toml`, files, environment |
 | [Delegation rules](docs/delegation.md) | Optional model tiers, work folders and helper limits |
 | [Design](docs/design.md) | Architecture, decisions and what was verified |

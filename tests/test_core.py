@@ -34,6 +34,8 @@ class EnvironmentTests(unittest.TestCase):
             "CLAUDE_CONFIG_DIR": "host-account",
             "CLAUDE_CODE_GIT_BASH_PATH": "C:/git/bash.exe",
             "CODEX_COMPANION_SESSION_ID": "s",
+            "OPENCODE_API_KEY": "opencode-secret",
+            "OPENCODE_CONFIG_CONTENT": "host-config",
             "MCP_CONNECTION_NONBLOCKING": "1",
             "CLI_SUBAGENTS_DEPTH": "0",
             "CLI_SUBAGENTS_HOME": "keep",

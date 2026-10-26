@@ -1,20 +1,21 @@
 ---
 name: cli-subagents
-description: How to run subagents through CLI Subagents (the cli-subagents-* agent types in Claude Code; subagent_start, subagent_wait, subagent_result, subagent_message elsewhere). Use it like your built-in subagent tool whenever work can be delegated, run in parallel, reviewed independently, or moved to another of the user's accounts or another agent CLI (Claude Code, Codex, Antigravity). Skip it for trivial answers and tiny edits.
+description: How to run subagents through CLI Subagents (the cli-subagents-* agent types in Claude Code; subagent_start, subagent_wait, subagent_result, subagent_message elsewhere). Use it like your built-in subagent tool whenever work can be delegated, run in parallel, reviewed independently, or moved to another of the user's accounts or another agent CLI (Claude Code, Codex, Antigravity, OpenCode). Skip it for trivial answers and tiny edits.
 ---
 
 # CLI Subagents
 
-These tools are your subagent tool. Use them the way you would use a built-in "spawn a subagent" tool: hand over a self-contained task, keep working, collect the result, check it. Behind them, each subagent is a separate agent CLI (Claude Code, Codex or Antigravity) running on one of the user's own accounts with the same MCP servers, plugins, skills and instructions as the main setup. Choosing an account, and switching when one runs out of quota, happen on their own; you don't manage them.
+These tools are your subagent tool. Use them the way you would use a built-in "spawn a subagent" tool: hand over a self-contained task, keep working, collect the result, check it. Each subagent runs in Claude Code, Codex, Antigravity or OpenCode with the parent's MCP servers and instructions. Same-CLI accounts also share its plugins, skills and settings. Choosing a pooled account and switching at a quota limit happen on their own. OpenCode uses the user's one profile and does not rotate accounts after a free-model limit.
 
 ## In Claude Code: always start a relay agent
 
-In Claude Code, start every CLI Subagents job with your Agent tool and one of the three relay agent types. This holds at every depth: a subagent that hands work to Codex or Gemini starts a relay agent the same way.
+In Claude Code, start every CLI Subagents job with your Agent tool and one of the four relay agent types. This holds at every depth where delegation is allowed.
 
 | Runs in | `subagent_type` |
 |---|---|
 | Codex | `cli-subagents:cli-subagents-codex` |
 | Antigravity (Gemini) | `cli-subagents:cli-subagents-antigravity` |
+| OpenCode v2 | `cli-subagents:cli-subagents-opencode` |
 | Claude Code on another account | `cli-subagents:cli-subagents-claude` |
 
 Don't run `csa run`, `csa start` or `csa follow` in your own shell, and don't call `subagent_start`. A job started that way never appears in the user's agent list, and your turn is blocked while you wait on it. A relay agent appears with its own color, the user can open it and watch every step the worker takes (commands, edits, messages, reasoning), and you get the usual notice when it finishes.
@@ -33,13 +34,13 @@ Agent tool:
 ```
 
 - Description: `<model> · <access> · <task in a few words>`. The user reads it to see what runs where.
-- Prompt: option lines first, one per line (`model=...`, `effort=...`, `access=read|edit`, and only when needed `account=NAME`, `cwd=PATH`, `timeout=SECONDS`, `override=USER_WORDS` under the Limits rule below), then a blank line and the complete task written as below. `access` defaults to `edit` in the Claude relay and `read` in the Codex and Antigravity relays.
+- Prompt: option lines first, one per line (`model=...`, `effort=...`, `access=read|edit`, and only when needed `account=NAME`, `cwd=PATH`, `timeout=SECONDS`, `override=USER_WORDS` under the Limits rule below), then a blank line and the complete task written as below. `access` defaults to `edit` in the Claude relay and `read` in the Codex, Antigravity and OpenCode relays.
 - Start it in the background and keep working. Don't poll or wait in a shell; the notice arrives when it finishes.
 - Its final message is the worker's result, unchanged. If the worker asks something, the agent stops and tells you; answer with SendMessage to that agent and it passes the answer on. While the job runs, SendMessage "cancel" stops it and anything else goes to the worker as a follow-up. After the job has finished, SendMessage to the same relay continues the worker's conversation as a new job; the relay follows it and returns its result.
 
 The relay gets a fresh absolute path from `csa relay-path`, writes the complete prompt with its host's file tool, then runs `csa run --follow --window 60 --runtime <runtime> --relay-file <path>`. csa validates the inbox file, reads UTF-8, deletes it and parses the same leading option lines as `--relay -`. Keep the blank separator before the task. Payload never appears in shell syntax, so its length and quotes cannot break a shell command. Answers and follow-ups use fresh files with `csa message --relay-file` and remain message text, even when they begin with `key=value`. Files are limited to 16 MiB; invalid files or options return an authenticated FAILED result. Claude uses Write in the csa home inbox with a narrow plugin permission hook. Codex and Antigravity use `csa relay-path --workspace` in the caller's writable workspace. csa writes a `.gitignore` containing `*` there before returning a payload path. Codex uses native apply_patch to write plain text; its line-ending normalization and final newline are acceptable. Keep quotes and Windows paths literal. Do not widen host permissions or fall back to embedding payload in a shell command if writing fails.
 
-The MCP tools below work everywhere. In Codex, `csa setup --host codex` installs the same three relays as native agents (`cli-subagents-codex` and so on); start them with Codex's own subagent tool as [the Codex note](hosts/codex.md) shows, and use the MCP tools there only when those agents are missing. In Antigravity, `csa setup --host antigravity` installs them as a companion plugin of subagents; start them as [the Antigravity note](hosts/antigravity.md) shows. In Claude Code, too, use the MCP tools only when the relay agent types are missing.
+The MCP tools below work everywhere. In Codex, `csa setup --host codex` installs the same four relays as native agents (`cli-subagents-codex` and so on); start them with Codex's own subagent tool as [the Codex note](hosts/codex.md) shows, and use the MCP tools there only when those agents are missing. In Antigravity, `csa setup --host antigravity` installs them as a companion plugin of subagents; start them as [the Antigravity note](hosts/antigravity.md) shows. In Claude Code, too, use the MCP tools only when the relay agent types are missing.
 
 ## The loop with the MCP tools
 
@@ -53,11 +54,19 @@ The MCP tools below work everywhere. In Codex, `csa setup --host codex` installs
 
 The subagent can't see this conversation. State the goal, the files or folders involved, what it must not touch, decisions already made, how to verify the result, and what to report back. Point to files instead of pasting them.
 
-Optional arguments: `runtime` (`claude` by default, `codex`, `antigravity`) when a specific agent or a second opinion from another vendor helps; `model`; `effort`; `max_turns` (Claude workers only); `timeout_seconds` (default 1800); `resume_job` to continue an earlier job's conversation; `account` to pin one account; `add_dirs`.
+Optional arguments: `runtime` (`claude` by default, `codex`, `antigravity`, `opencode`) when a specific agent or a second opinion from another vendor helps; `model`; `effort`; `max_turns`; `timeout_seconds` (default 1800); `resume_job` to continue an earlier job's conversation; `account` to pin one account; `add_dirs`. Turn-limit support depends on the runtime.
 
 `access: "full"` skips the CLI's own permission checks. Use it only when the user asked for that.
 
 Codex and Antigravity workers have their own web search and page reading, which reach sites such as Reddit that block other tools, so they suit web research. Antigravity workers find YouTube videos and read their title and description, but can't watch them or read transcripts.
+
+## When to pick OpenCode
+
+Use `opencode` for personal projects when the user wants OpenCode or a free model and their vendor rules allow it. csa discovers OpenCode v2 (`@opencode/cli`) when `opencode` is on PATH. A missing binary adds no setup task; `[opencode] enabled = false` disables it. OpenCode is a worker only, not a supported host.
+
+Omit `model` to keep the user's OpenCode model. When none is configured, csa uses `opencode/deepseek-v4.1-flash-free`. An unavailable model fails the job; csa never lets OpenCode fall back to another model. `effort` becomes the model's variant (`low`, `high` or `max` on the default model); an effort the model lacks fails with a clear message. Free models are for personal projects only. The provider says DeepSeek does not train on your data, but Anomaly's unpaid-content terms still apply. Big Pickle, MiMo and Flint may use collected data and the Nemotron endpoints log it; csa never defaults to them and blocks them unless the user chose that model. Free limits are per IP per day and reset at UTC midnight. On `provider.free-limit`, stop without account rotation; wait for the reset or follow the user's fallback rules.
+
+OpenCode has no OS sandbox. `read` can read, list and search inside the project. `edit` adds file edits there plus plainly read-only commands; tests, builds and any command that changes something are denied, so run those yourself. Both levels deny web fetch and search, subagents and MCP servers other than `csa-parent`, and ignore the project's own OpenCode config; a reviewer model is left for later. `full` uses `--auto` without the gate and requires the user's explicit request. See [OpenCode](../../docs/opencode.md), including the Fence recommendation for macOS/Linux and the native Windows sandbox limit.
 
 ## Limits
 
@@ -74,9 +83,9 @@ Put the user's own words in `override`, for example the relay line `override=use
 | outcome | What to do |
 |---|---|
 | `success` | Check the work |
-| `usage_limit` | The selected account hit a limit. Unpinned jobs try other accounts when failover is enabled. Check the message for reset times. |
+| `usage_limit` | The selected account hit a limit. Unpinned jobs try other accounts when failover is enabled. OpenCode free limits never rotate accounts; check the UTC reset time. |
 | `no_account` | All accounts are busy or cooling down; wait or tell the user |
-| `auth` | For an extra account, ask the user to run `csa accounts login <name>`; add `--runtime codex` or `--runtime antigravity` for non-Claude accounts. For a primary login, use the vendor CLI (`claude auth login`, `codex login` or `agy`). |
+| `auth` | For an extra account, ask the user to run `csa accounts login <name>`; add `--runtime codex` or `--runtime antigravity` for non-Claude accounts. For a primary login, use the vendor CLI (`claude auth login`, `codex login`, `agy` or `opencode auth login`). OpenCode has no extra account folders in this version. |
 | `timeout`, `max_turns` | Narrow the task or raise the limit |
 | `error`, `lost` | Read `message` and `warnings`; retry once at most. `model at capacity after N retries` means csa already waited and retried, and the model stayed overloaded. Fall back as your delegation rules say; do not manage another retry timer. |
 
@@ -90,6 +99,6 @@ Read the note for the CLI you are running in once: [Claude Code](hosts/claude-co
 
 ## What subagents get
 
-Subagents in the same CLI as you load the same setup you have. Subagents in another CLI get a short note listing your instruction files and skill folders to read. Claude and Codex workers get `message_parent` (progress notes), `ask_parent` (a question; it waits for your answer) and `check_parent_messages` (follow-ups you send). Antigravity workers get them only with an effective account cap of exactly 1 and a managed worker folder; the primary file-login fallback has no parent channel. See [Gemini messages](../../docs/gemini.md#messages). Subagents can't start subagents of their own. Tools built into the Claude desktop app itself (its browser or terminal panes, for example) aren't available to them; everything in your config folders and plugins is.
+Subagents in the same CLI as you load the same setup you have. Subagents in another CLI get a short note listing your instruction files and skill folders to read. Claude, Codex and OpenCode workers get `message_parent` (progress notes), `ask_parent` (a question; it waits for your answer) and `check_parent_messages` (follow-ups you send). OpenCode also receives instruction-file paths in its config and exposes the parent tools individually with `codemode: false`. Antigravity workers get them only with an effective account cap of exactly 1 and a managed worker folder; the primary file-login fallback has no parent channel. See [Gemini messages](../../docs/gemini.md#messages). Subagents can't start subagents of their own. Tools built into the Claude desktop app itself (its browser or terminal panes, for example) aren't available to them. Plugins from another CLI are not translated into OpenCode plugins.
 
 Never put secrets or credentials in a prompt.

@@ -164,6 +164,10 @@ def cmd_accounts(args: argparse.Namespace) -> int:
         print(f"{args.runtime} account '{args.name}': " + ("cooldown cleared" if cleared else "had no cooldown"))
         return 0
 
+    if args.runtime == "opencode":
+        print("OpenCode uses your existing profile; manage login with opencode auth login. Extra csa accounts are not supported yet.")
+        return 2
+
     if not args.name or not NAME_RE.match(args.name) or args.name == "primary":
         print("Give the account a short name: letters, digits, dot, dash or underscore ('primary' is reserved).")
         return 2
@@ -280,6 +284,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if args.runtime == "codex" and os.name == "nt":
         from cli_subagents.runtimes.codex import windows_sandbox_summary
         print(windows_sandbox_summary(runtime_config))
+    if args.runtime == "opencode":
+        print("OpenCode has no OS sandbox. Read and edit workers use csa's fixed review rules; shell writes are not OS-confined.")
     print(f"\nEffective limits ({args.runtime}): when_full={runtime_config.when_full}, usage_ceiling={runtime_config.usage_ceiling}"
           + (f", runtime max_jobs={runtime_config.max_jobs}" if runtime_config.max_jobs else "")
           + (f", global max_jobs={config.max_jobs}" if config.max_jobs else ""))

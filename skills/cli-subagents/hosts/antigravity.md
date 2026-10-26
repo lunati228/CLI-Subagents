@@ -9,6 +9,7 @@ main MCP/skill plugin and a companion `cli-subagents-relays` plugin in
 - `cli-subagents-claude`: Claude Code workers.
 - `cli-subagents-codex`: OpenAI Codex workers.
 - `cli-subagents-antigravity`: Antigravity/Gemini workers.
+- `cli-subagents-opencode`: OpenCode v2 workers.
 
 Prefer native `invoke_subagent` with the matching custom agent over
 `subagent_start`. Use the current workspace so the relay can find `csa`; put an
@@ -74,4 +75,6 @@ Antigravity workers run on the signed-in account. Extra Google accounts are at t
 
 ## Mixing CLIs
 
-From Antigravity you can still start Claude Code and Codex subagents on the user's accounts (`runtime: "claude"` or `"codex"`). They get a note listing your GEMINI.md, AGENTS.md, rules and skill folders and read them first.
+From Antigravity you can still start Claude Code, Codex and OpenCode subagents (`runtime: "claude"`, `"codex"` or `"opencode"`). They get a note listing your GEMINI.md, AGENTS.md, rules and skill folders and read them first.
+
+OpenCode becomes available when its v2 binary is on PATH, unless `[opencode] enabled = false` disables it. Omit `model` to keep the user's OpenCode default. Free models are for personal projects only, and OpenCode has no OS sandbox. See [OpenCode](../../../docs/opencode.md).

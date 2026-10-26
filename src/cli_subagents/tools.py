@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import time
 from typing import Any
 
 from cli_subagents import accounts, jobs, limits, messages, plans, quota, spend, usage_view
 from cli_subagents.config import load_config
 from cli_subagents.hosts import detect_host
-from cli_subagents.runtimes import AVAILABLE as RUNTIMES, get_runtime
+from cli_subagents.runtimes import AVAILABLE as RUNTIMES, get_runtime, offered_runtimes
 from cli_subagents.runtimes.base import ACCESS_LEVELS
 
 MAX_WAIT_SECONDS = 600
@@ -166,7 +167,15 @@ WORKER_DEFINITIONS = [
 
 
 def definitions(worker_job: str | None = None) -> list[dict[str, Any]]:
-    return WORKER_DEFINITIONS if worker_job else DEFINITIONS
+    if worker_job:
+        return WORKER_DEFINITIONS
+    result = copy.deepcopy(DEFINITIONS)
+    offered = list(offered_runtimes())
+    for definition in result:
+        runtime = definition["inputSchema"]["properties"].get("runtime")
+        if runtime:
+            runtime["enum"] = offered
+    return result
 
 
 def startup() -> None:
@@ -362,7 +371,7 @@ def _call(name: str, arguments: dict[str, Any], progress=None, client: str | Non
         return {"jobs": jobs.list_jobs(int(arguments.get("limit") or 20))}
     if name == "subagent_accounts":
         selected = arguments.get("runtime")
-        reports = {"runtimes": [account_report(runtime) for runtime in RUNTIMES if not selected or runtime == selected]}
+        reports = {"runtimes": [account_report(runtime) for runtime in offered_runtimes() if not selected or runtime == selected]}
         if room := room_note():
             reports["room"] = room
         return reports

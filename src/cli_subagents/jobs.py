@@ -92,6 +92,8 @@ def _create_job(
     limits.validate_override(override)
     config = load_config()
     runtime_config = config.runtime(runtime)
+    if runtime == "opencode" and not get_runtime(runtime).find_binary(runtime_config):
+        raise ValueError("OpenCode is disabled or not installed; install OpenCode v2 (@opencode/cli) to use this worker")
     depth = int(os.environ.get("CLI_SUBAGENTS_DEPTH", "0") or 0)
     if depth >= config.max_depth:
         raise ValueError(

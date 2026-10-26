@@ -663,7 +663,15 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["launch"] and "--" in argv:
         index = argv.index("--")
         argv, extra = argv[:index], argv[index + 1 :]
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args, unknown = parser.parse_known_args(argv)
+    # Python 3.11's argparse fills `message`'s optional text before later options, so in
+    # `csa message JOB --follow -` the trailing text comes back unparsed. Take it back here.
+    if (args.command == "message" and args.text is None and len(unknown) == 1
+            and (unknown[0] == "-" or not unknown[0].startswith("-"))):
+        args.text = unknown.pop()
+    if unknown:
+        parser.error("unrecognized arguments: " + " ".join(unknown))
     if getattr(args, "csa_home", None):
         os.environ["CLI_SUBAGENTS_HOME"] = args.csa_home
     if args.command == "hook":

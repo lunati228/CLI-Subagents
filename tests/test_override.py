@@ -319,7 +319,7 @@ class OverrideTests(TempHome):
             with self.subTest(path=path.name):
                 text = path.read_text(encoding="utf-8")
                 self.assertIn("`override=...`", text)
-                self.assertIn("--relay -", text)
-                self.assertIn("csa reads the complete value literally from stdin", text)
+                self.assertIn("--relay-file", text)
+                self.assertIn("csa reads the complete value literally from the file", text)
                 self.assertIn("Never set override on your own judgment", text)
                 self.assertIn("how much of the 5-hour window is left", text)

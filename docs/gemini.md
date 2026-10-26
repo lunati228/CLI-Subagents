@@ -21,6 +21,17 @@ main agent invokes them with `invoke_subagent`; each runs `csa run --follow`
 in a conversation you can open in the app or the CLI's `/agents` panel. Send
 later messages to the same relay to continue the worker conversation.
 
+Each relay runs `csa relay-path --workspace`, creates the returned file with
+`write_to_file` (`Overwrite=false`), then passes its path to `csa run --relay-file`.
+Answers and follow-ups use fresh files with `csa message --relay-file`. The UTF-8
+payload stays out of shell commands. The managed `.csa-relay-inbox/` is inside
+the caller's workspace so the file tool uses inherited workspace permissions.
+csa writes a `.gitignore` containing `*` there before issuing any payload path,
+so leftovers stay out of Git; cleanup keeps that file.
+csa validates and deletes each file, limits it to 16 MiB and cleans up stale
+payloads after 24 hours on the next allocation. See the
+[transport research](research/relay-length-limit.md).
+
 The relay uses Antigravity's `flash` tier; prompt `model` and `effort` options
 select the external worker. Native definitions cannot pin an exact model ID,
 so check the resolved relay model and effort in the app. See

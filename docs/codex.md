@@ -13,6 +13,8 @@ If Codex exits with `Selected model is at capacity`, csa retries on the same acc
 
 With no extra Codex accounts configured, workers run on your normal Codex login (`~/.codex`, or `CODEX_HOME`).
 
+When Codex is the host, `csa setup --host codex` installs three native relay agents. They allocate a path with `csa relay-path --workspace`, then use the native apply_patch tool to write the complete prompt as plain text in the caller's `.csa-relay-inbox/`. `csa run --relay-file <path>` consumes and deletes that file before parsing options. Answers and follow-ups use the same file handoff with `csa message`. Quotes and Windows paths stay literal; apply_patch may normalize line endings or add a final newline, which is acceptable for prompts. Before issuing a path, csa writes an inbox `.gitignore` containing `*` so leftover payloads stay out of Git. Only the short path reaches the shell. File writes use the parent's existing workspace permissions; a read-only host must allow the inbox write or the relay reports the error. See [host setup](hosts.md#codex) and the [transport research](research/relay-length-limit.md).
+
 ## Extra accounts
 
 ```bash

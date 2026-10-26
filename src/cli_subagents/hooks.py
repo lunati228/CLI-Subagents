@@ -9,6 +9,8 @@
   result nobody collected yet.
 * `inbox` (PostToolUse inside a Claude worker): hands the worker follow-ups the
   main session sent, as additional context next to the tool result.
+* `relay-write` (PreToolUse on Write): allows only a known relay's new payload
+  file in the csa home inbox; every other request receives no decision.
 
 Notification hooks must never break the session that runs them: every failure
 ends quietly with exit code 0. The read-only shell guard has a separate entry
@@ -235,6 +237,39 @@ def inbox_context(job_id: str) -> dict[str, Any] | None:
 # Entry point -------------------------------------------------------------------
 
 
+def relay_write_permission(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Allow only a native relay's new, size-capped Write in the home inbox.
+
+    No decision for other tools, agents, paths or malformed payloads: the host's
+    normal permission rules still apply. agent_type is documented common input.
+    """
+
+    from cli_subagents.relay_input import MAX_BYTES, validate_path
+
+    names = {f"cli-subagents-{runtime}" for runtime in ("claude", "codex", "antigravity")}
+    names |= {f"cli-subagents:{name}" for name in tuple(names)}
+    agent_type = payload.get("agent_type")
+    if (payload.get("hook_event_name") != "PreToolUse" or payload.get("tool_name") != "Write"
+            or not isinstance(agent_type, str) or agent_type not in names):
+        return None
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    path, content = tool_input.get("file_path"), tool_input.get("content")
+    if not isinstance(path, str) or not isinstance(content, str):
+        return None
+    try:
+        if len(content.encode("utf-8")) > MAX_BYTES:
+            return None
+        validate_path(path, new=True, home_only=True)
+    except (ValueError, OSError):
+        return None
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "allow",
+        "permissionDecisionReason": "New CLI Subagents relay payload in the csa inbox",
+    }}
+
+
 def main(action: str, job_id: str | None = None) -> int:
     try:
         if action == "await":
@@ -244,6 +279,8 @@ def main(action: str, job_id: str | None = None) -> int:
             return code
         if action == "pending":
             output = pending_context(read_input())
+        elif action == "relay-write":
+            output = relay_write_permission(read_input())
         elif action == "inbox":
             try:
                 sys.stdin.read()  # the hook payload isn't needed; drain it so the host's write never blocks

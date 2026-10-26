@@ -1,5 +1,9 @@
 # Relay quoting reproduction and stdin transport
 
+Historical transport for 0.2.14. Version 0.2.15 moves native relays to
+[inbox files](relay-length-limit.md), retaining these stdin paths for
+compatibility and the shell reproductions below as regression tests.
+
 Checked on 2026-10-23 with Git Bash 5.3.15 and Windows PowerShell 5.1.26100.9711. All commands used a `csa` capture stub that recorded argv and stdin, or the repository's fake Codex. No real worker CLI ran.
 
 The 2026-10-18 report did not include its command or shell, so its exact invocation remains unknown. The current instructions reproduce the failure class: they ask the relay model to extract option values and shell-quote them. An apostrophe in task stdin is safe; an apostrophe in a naively quoted option fails before csa runs.

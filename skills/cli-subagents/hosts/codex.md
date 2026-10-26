@@ -38,7 +38,7 @@ Keep the returned native agent ID. Send follow-ups, answers and cancellation to
 that same relay with native `send_input`, including after it finishes. With v2,
 use `followup_task` to resume an idle relay; `send_message` alone does not start
 an idle agent's next turn. The relay retains the csa job and event offset and
-runs `csa message JOB --follow --from OFFSET -`. A finished job continues its
+runs `csa message JOB --follow --from OFFSET --relay-file PATH`. A finished job continues its
 worker conversation, and the relay validates any new job ID. Send `cancel` or
 `stop` to cancel its worker before closing the native agent. Keep the native
 thread open while follow-ups are needed.
@@ -51,9 +51,16 @@ native agent notification delivers completion to the parent. Use `/subagents`
 in the CLI to inspect threads; the app also exposes subagent threads, though
 its exact live-output presentation has not been checked locally.
 
-Custom agents inherit the parent's permissions and MCP configuration. Codex
-can disable selected features but has no enforced shell-only tool list for a
-role. Keep shell execution enabled in the parent. If custom agent selection is
+Custom agents inherit the parent's permissions and MCP configuration. The relay
+uses native apply_patch only to create a plain-text payload at the absolute
+path returned by `csa relay-path --workspace`, inside the caller's writable
+`.csa-relay-inbox/`. `csa run/message --relay-file PATH` consumes and deletes
+it. Keep quotes and Windows paths literal; apply_patch may normalize line
+endings or add a final newline. csa writes an inbox `.gitignore` containing `*`
+before issuing a path, keeping leftovers out of Git. Codex can disable selected
+features but has no enforced per-role tool
+allowlist. Keep shell execution and inbox file creation enabled in the parent.
+If custom agent selection is
 absent, native agents are disabled, or the relay model is unavailable, use the
 MCP tools below. Do not claim a native thread was started for an MCP-only job.
 

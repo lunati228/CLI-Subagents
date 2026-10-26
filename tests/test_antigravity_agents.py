@@ -26,7 +26,7 @@ def definition(runtime):
 
 
 class AntigravityAgentDefinitionTests(unittest.TestCase):
-    def test_companion_plugin_contains_three_shell_only_flash_agents(self):
+    def test_companion_plugin_contains_three_flash_agents_with_payload_write_tool(self):
         manifest = json.loads(TEMPLATES.joinpath("plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "cli-subagents-relays")
         self.assertEqual(set(manifest), {"name", "description"})
@@ -37,7 +37,7 @@ class AntigravityAgentDefinitionTests(unittest.TestCase):
                 metadata, body = definition(runtime)
                 self.assertEqual(metadata["name"], f"cli-subagents-{runtime}")
                 self.assertEqual(metadata["model"], "flash")
-                self.assertEqual(metadata["tools"], "[run_command, command_status]")
+                self.assertEqual(metadata["tools"], "[run_command, command_status, write_to_file]")
                 self.assertEqual(metadata["mainAgent"], "false")
                 self.assertEqual(metadata["subagent"], "true")
                 self.assertEqual(metadata["commandExecutionPolicy"], "sandbox")
@@ -64,13 +64,13 @@ class AntigravityAgentDefinitionTests(unittest.TestCase):
         required = (
             "`model=...`", "`access=...`", "`account=...`", "`cwd=...`", "`timeout=...`", "`window=...`", "`override=...`",
             "Never set override on your own judgment", "how much of the 5-hour window is left",
-            "csa message <JOB> --follow --from <OFFSET> --window <WINDOW> -", "csa cancel <JOB>",
+            "csa message <JOB> --follow --from <OFFSET> --window <WINDOW> --relay-file", "csa cancel <JOB>",
             "A finished job continues the same worker conversation", "resetting OFFSET if JOB changed",
             "`run_command`", "`command_status`", "until that same command exits",
             "A running shell handle is not a csa status", "If output was truncated",
             "Never deduplicate repeated worker lines", "Never restart the initial task",
-            "PowerShell", "PYTHONIOENCODING", "prefix EVERY payload line", "Never escape or double any quotes",
-            "--relay -", "WHOLE prompt unchanged", "append `_NEXT`",
+            "PowerShell", "csa relay-path --workspace", "write_to_file", "Overwrite=false",
+            "--relay-file", "WHOLE prompt unchanged", "fresh path",
             "Do not add commentary or a summary", "WINDOW and OFFSET across native follow-ups",
         )
         for runtime in RUNTIMES:

@@ -1,5 +1,11 @@
 # Native relay agents in Codex
 
+Updated transport in 0.2.15 (2026-10-26): native relays now use apply_patch
+to write plain-text payloads into a workspace inbox, then call `csa run/message
+--relay-file PATH`. See [relay length limits](relay-length-limit.md)
+for permissions and text fidelity; the stdin discussion below records the
+earlier implementation.
+
 Researched 2026-10-19. All URLs below were accessed on that date. Checked the
 installed Codex CLI 0.162.1 and the source at tag `rust-v0.162.1`, commit
 `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`. No Codex app or paid worker runs were

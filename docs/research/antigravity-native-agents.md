@@ -1,5 +1,10 @@
 # Native relay agents in Antigravity
 
+Updated transport in 0.2.15 (2026-10-26): native relays now allow
+`write_to_file` for new payloads in a workspace inbox and pass those files to
+`csa run/message --relay-file PATH`. See [relay length limits](relay-length-limit.md)
+for permissions; the stdin discussion below records the earlier implementation.
+
 Researched 2026-10-19. All URLs below were accessed on that date. The task
 expected CLI 1.4.0; the installed `agy --version` returned 1.4.2. No worker job
 or Antigravity app session was run.

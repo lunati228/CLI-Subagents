@@ -23,8 +23,10 @@ class RelayShellTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.capture = Path(self.temp.name) / "capture.py"
+        # Like csa, drop the byte order mark some PowerShell pipes prepend.
         self.capture.write_text(
-            "import json, sys\nprint(json.dumps({'argv': sys.argv[1:], 'stdin': sys.stdin.read()}, ensure_ascii=True))\n",
+            "import json, sys\n"
+            "print(json.dumps({'argv': sys.argv[1:], 'stdin': sys.stdin.read().removeprefix('\\ufeff')}, ensure_ascii=True))\n",
             encoding="utf-8",
         )
 
@@ -126,16 +128,66 @@ class RelayShellTests(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines()[0], "SHELL_RAN_AFTER_TERMINATOR")
         self.assertEqual(json.loads(result.stdout.splitlines()[1])["stdin"], "first\n")
 
-    def test_all_nine_relays_use_the_fixed_command_and_safe_transports(self):
+    def test_all_nine_relays_use_file_tools_and_short_commands(self):
         for runtime in ("claude", "codex", "antigravity"):
             for path in (ROOT / "agents" / f"cli-subagents-{runtime}.md",
                          ROOT / "src/cli_subagents/templates/codex-agents" / f"cli-subagents-{runtime}.toml",
                          ROOT / "src/cli_subagents/templates/antigravity-plugin/agents" / f"cli-subagents-{runtime}.md"):
                 with self.subTest(path=path):
                     text = path.read_text(encoding="utf-8")
-                    command = COMMAND.replace("--runtime codex", f"--runtime {runtime}")
-                    self.assertIn(command + " <<'" + DELIMITER + "'", text)
-                    self.assertIn("($csaPayload -replace '(?m)^[|]', '') | " + command, text)
-                    self.assertIn("append `_NEXT`", text)
+                    self.assertIn(f"csa run --follow --window 60 --runtime {runtime} --relay-file '<INBOX_PATH>'", text)
+                    self.assertIn("csa message <JOB> --reply-to <ID> --relay-file '<INBOX_PATH>'", text)
+                    self.assertIn("csa message <JOB> --follow --from <OFFSET> --window <WINDOW> --relay-file '<INBOX_PATH>'", text)
+                    self.assertIn("csa relay-path", text)
+                    self.assertIn("Never interpolate payload into shell syntax", text)
+                    self.assertNotIn("<<'", text)
+                    self.assertNotIn("$csaPayload", text)
+                    if path.suffix == ".toml":
+                        self.assertIn("native apply_patch tool directly", text)
+                        self.assertIn("plain text", text)
+                        self.assertNotIn("--relay-json", text)
+                    elif "antigravity-plugin" in str(path):
+                        self.assertIn("write_to_file", text)
+                    else:
+                        self.assertIn("tools: Bash, Write", text)
                     self.assertNotIn("Turn each one into the flag", text)
                     self.assertNotIn("Shell-quote each option", text)
+
+    def test_large_file_handoff_keeps_shell_commands_short_for_all_message_forms(self):
+        payload = PAYLOAD * 180 + "no final newline"
+        self.assertGreater(len(payload), 10_000)
+        path = Path(self.temp.name) / "O'Brien café ’quoted’.txt"
+        path.write_bytes(payload.encode("utf-8"))
+        self.capture.write_text(
+            "import json, pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "text = pathlib.Path(args[args.index('--relay-file') + 1]).read_bytes().decode('utf-8')\n"
+            "print(json.dumps({'argv': args, 'payload': text}, ensure_ascii=True))\n", encoding="utf-8")
+        for shell in ("bash", "powershell"):
+            quote = shlex.quote(path.as_posix()) if shell == "bash" else "'" + str(path).replace("'", "''").replace("’", "’’") + "'"
+            for command in ("run --follow --window 60 --runtime codex", "message saved-job --reply-to deadbeef",
+                            "message saved-job --follow --from 123 --window 60"):
+                with self.subTest(shell=shell, command=command):
+                    source = f"csa {command} --relay-file {quote}"
+                    self.assertLess(len(source), 1000)
+                    result = self.shell(shell, source)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    record = json.loads(result.stdout)
+                    self.assertEqual(record["payload"], payload)
+                    self.assertEqual(record["argv"][-2:], ["--relay-file", str(path) if shell == "powershell" else path.as_posix()])
+
+    def test_write_hook_filter_and_command_fail_open_with_an_older_csa(self):
+        manifest = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+        group = manifest["hooks"]["PreToolUse"][0]
+        self.assertEqual(group["matcher"], "Write")
+        handler = group["hooks"][0]
+        self.assertEqual(handler["if"], "Write(**/relay-inbox/**)")
+        # An installed pre-0.2.15 csa rejects the unknown relay-write action
+        # with argparse's exit code 2. Never invoke that real csa in this test.
+        self.capture.write_text("import sys\nsys.stderr.write('unknown relay-write choice\\n')\nsys.exit(2)\n", encoding="utf-8")
+        for shell in ("bash", "powershell"):
+            with self.subTest(shell=shell):
+                result = self.shell(shell, handler["command"])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("unknown relay-write choice", result.stderr)

@@ -56,12 +56,12 @@ class CodexAgentDefinitionTests(unittest.TestCase):
         required = (
             "`model=...`", "`access=...`", "`account=...`", "`effort=...`", "`cwd=...`", "`timeout=...`", "`override=...`",
             "Never set override on your own judgment", "how much of the 5-hour window is left",
-            "csa message <JOB> --follow --from <OFFSET> --window <WINDOW> -", "--window 60", "csa cancel <JOB>",
+            "csa message <JOB> --follow --from <OFFSET> --window <WINDOW> --relay-file", "--window 60", "csa cancel <JOB>",
             "A finished job continues the same worker conversation", "resetting OFFSET if JOB changed",
             "`session_id`", "`write_stdin`", "Retain every output chunk in order",
             '"process still running" notice is not a csa status', "If output was truncated, stop",
-            "PowerShell", "PYTHONIOENCODING", "prefix EVERY payload line", "Never escape or double any quotes",
-            "--relay -", "WHOLE prompt unchanged", "append `_NEXT`",
+            "PowerShell", "csa relay-path --workspace", "native apply_patch tool directly (never through a shell)",
+            "--relay-file", "plain text", "Do not JSON-encode", "WHOLE prompt unchanged", "fresh path",
         )
         for runtime in RUNTIMES:
             with self.subTest(runtime=runtime):

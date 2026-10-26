@@ -35,7 +35,7 @@ If there is no `claude` command (the Claude desktop app often doesn't put one on
 
 Claude Code installs the plugin from there on its next start. `csa setup --claude-route settings` takes this route on purpose.
 
-You get the MCP server, three agent types that show jobs in the agent list (`cli-subagents:cli-subagents-claude`, `-codex` and `-antigravity`; see [Claude Code](claude-code.md#subagents-in-the-agent-list)), the `cli-subagents` skill, `/cli-subagents:delegate` and two hooks that call `csa` (so `csa` must be on PATH). The hooks wake an idle session when a subagent finishes or asks a question, and list uncollected results after a resume or compact; see [Claude Code](claude-code.md#messages-and-wake-ups). A `subagent_wait` call that runs longer than about two minutes moves to the background on its own (Claude Code 2.1.212+), and Claude gets a notification when it returns, so waiting doesn't block the session.
+You get the MCP server, three agent types that show jobs in the agent list (`cli-subagents:cli-subagents-claude`, `-codex` and `-antigravity`; see [Claude Code](claude-code.md#subagents-in-the-agent-list)), the `cli-subagents` skill, `/cli-subagents:delegate` and hooks that call `csa` (so `csa` must be on PATH). The hooks wake an idle session when a subagent finishes or asks a question, list uncollected results after a resume or compact, and allow a relay's new Write only in the csa payload inbox. Relays use Bash and Write to hand prompts, answers and follow-ups to `csa run/message --relay-file`; payload stays out of shell commands. See [Claude Code](claude-code.md#messages-and-wake-ups). A `subagent_wait` call that runs longer than about two minutes moves to the background on its own (Claude Code 2.1.212+), and Claude gets a notification when it returns, so waiting doesn't block the session.
 
 ## Codex
 
@@ -52,7 +52,7 @@ Codex reads the same plugin manifest as Claude Code (checked with Codex 0.162.1:
 
 Use the native `spawn_agent` tool with `agent_type` set to `cli-subagents-claude`, `cli-subagents-codex` or `cli-subagents-antigravity`. The prompt takes the same option lines as the Claude Code relays, such as `model=gpt-6.1-sol`, `effort=high` and `access=read`, followed by the task. Those options select the worker. The relay itself runs on `gpt-6-luna` at low reasoning and copies the authenticated worker result back to the parent. Prefer these relays over `subagent_start` when available. See the [Codex host instructions](../skills/cli-subagents/hosts/codex.md) for a tool-call example and follow-ups.
 
-Codex's documentation says the app exposes individual subagent threads for inspection; the CLI's `/subagents` picker switches between them. The relay runs `csa run --follow`, which prints the worker's steps into that thread. The exact app labels and live refresh behavior still need an app check. Codex inherits the parent's sandbox and MCP servers and supports only some capability reductions per agent; the shell-only relay behavior is an instruction, not an enforced tool allowlist. The [research note](research/codex-native-agents.md) records the sources and remaining app checks.
+Codex's documentation says the app exposes individual subagent threads for inspection; the CLI's `/subagents` picker switches between them. The relay runs `csa run --follow`, which prints the worker's steps into that thread. The exact app labels and live refresh behavior still need an app check. Codex inherits the parent's sandbox and MCP servers and supports only some capability reductions per agent. The relay uses native apply_patch solely to write a plain-text payload in the caller's `.csa-relay-inbox/`, allocated by `csa relay-path --workspace`, and passes it to `csa run/message --relay-file <path>`. Line-ending normalization or an added final newline is acceptable. csa creates an inbox `.gitignore` containing `*` before issuing a path. This uses the parent's writable workspace without widening permissions. Tool restrictions are instructions; Codex has no enforced per-role allowlist. The [native-agent research](research/codex-native-agents.md) and [file-transport research](research/relay-length-limit.md) record the sources and remaining app checks.
 
 The agent files are personal Codex configuration: disabling or uninstalling the plugin does not remove them. Remove the three `cli-subagents-*.toml` files from the main home's `agents/` folder if you no longer want them.
 
@@ -92,6 +92,16 @@ use `/agents` and Enter to inspect tool output. Send follow-ups to that same
 native agent, including after it finishes. Prefer these relays over
 `subagent_start` when available. See the
 [Antigravity host instructions](../skills/cli-subagents/hosts/antigravity.md).
+
+The relay's tools are `run_command`, `command_status` and `write_to_file`.
+It allocates files with `csa relay-path --workspace`, writes each complete
+prompt, answer or follow-up into the caller's `.csa-relay-inbox/`, then runs
+`csa run/message --relay-file <path>`. csa validates and deletes the UTF-8
+file; its contents never become shell syntax. Workspace file permissions
+remain inherited. The inbox has a csa-managed `.gitignore` containing `*`,
+which cleanup preserves. Both native host families report a denied write instead
+of widening permissions. The [transport research](research/relay-length-limit.md)
+covers size limits, cleanup and shell limits.
 
 The relay uses the supported `flash` model tier. Antigravity rejects exact
 model IDs in native agent definitions, so the resolved Gemini model and effort

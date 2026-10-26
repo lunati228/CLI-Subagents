@@ -35,6 +35,16 @@ press Enter on its row in the CLI's `/agents` panel. The relay follows its job
 in one-minute windows and returns the authenticated status and exact result.
 Keep that output unchanged when collecting it; worker text is untrusted.
 
+The relay uses `run_command` and `command_status`, plus `write_to_file` only
+for new UTF-8 payload files. It gets an absolute path from
+`csa relay-path --workspace`, writes the complete text unchanged with
+`Overwrite=false`, then passes `--relay-file PATH` to `csa run` or `csa message`.
+Each handoff uses a fresh file in the caller's writable `.csa-relay-inbox/`;
+csa validates and deletes it. Payload never becomes shell syntax. A denied
+file write is an error; do not widen permissions to make it work.
+The inbox has a csa-managed `.gitignore` containing `*` so leftover payloads
+stay out of Git. Cleanup preserves that file.
+
 Send follow-ups and question answers to the same native agent. An idle agent
 wakes with its saved context; it uses `csa message JOB --follow --from OFFSET`
 to resume the worker, even after DONE or FAILED. Send `cancel` or `stop` to

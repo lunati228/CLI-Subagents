@@ -27,8 +27,13 @@ def _print(value: Any) -> None:
         print(json.dumps(value, indent=2, ensure_ascii=False, default=str))
 
 
-def _job_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("prompt", help="The task. Use '-' to read it from stdin.")
+def _read_stdin() -> str:
+    # Some PowerShell pipes prepend a UTF-8 byte order mark; it is never part of the text.
+    return sys.stdin.read().removeprefix("﻿")
+
+
+def _job_arguments(parser: argparse.ArgumentParser, *, optional_prompt: bool = False) -> None:
+    parser.add_argument("prompt", nargs="?" if optional_prompt else None, help="The task. Use '-' to read it from stdin.")
     parser.add_argument("--runtime", default="claude", choices=RUNTIMES)
     parser.add_argument("--account")
     parser.add_argument("--cwd", default=os.getcwd())
@@ -48,12 +53,24 @@ def _job_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _start(args: argparse.Namespace) -> dict[str, Any]:
-    relay = getattr(args, "relay", False)
+    relay_file = getattr(args, "relay_file", None)
+    relay = getattr(args, "relay", False) or relay_file is not None
+    if relay_file is not None:
+        if args.prompt is not None or getattr(args, "relay", False):
+            raise ValueError("--relay-file cannot be combined with a prompt or --relay")
+        from cli_subagents.relay_input import consume
+
+        prompt = consume(relay_file)
+    elif args.prompt is None:
+        raise ValueError("a prompt or --relay-file is required")
+    else:
+        prompt = None
     if relay and args.prompt == "-" and hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8")
-    prompt = sys.stdin.read() if args.prompt == "-" else args.prompt
+    if prompt is None:
+        prompt = _read_stdin() if args.prompt == "-" else args.prompt
     if relay:
-        if args.prompt != "-":
+        if relay_file is None and args.prompt != "-":
             raise ValueError("--relay requires '-' to read the complete relay prompt from stdin")
         options, prompt = _relay_prompt(prompt)
         for key, value in options.items():
@@ -356,11 +373,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 # Jobs ------------------------------------------------------------------------
 
 
+def cmd_relay_path(args: argparse.Namespace) -> int:
+    from cli_subagents.relay_input import fresh_path
+
+    print(fresh_path(workspace=args.workspace))
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     try:
         status = _start(args)
     except (ValueError, RuntimeError, OSError, tools.ToolError) as exc:
-        if not args.relay:
+        if not args.relay and args.relay_file is None:
             raise
         from cli_subagents.follow import failed_start
 
@@ -389,12 +413,32 @@ def cmd_follow(args: argparse.Namespace) -> int:
 
 
 def cmd_message(args: argparse.Namespace) -> int:
+    try:
+        return _message(args)
+    except (ValueError, RuntimeError, OSError, tools.ToolError) as exc:
+        if args.relay_file is None:
+            raise
+        from cli_subagents.follow import failed_start
+
+        return failed_start(str(exc))
+
+
+def _message(args: argparse.Namespace) -> int:
     if args.from_offset is not None:
         if not args.follow:
             raise ValueError("--from requires --follow")
         if args.from_offset < 0:
             raise ValueError("--from must be 0 or more")
-    text = sys.stdin.read() if args.text == "-" else args.text
+    if args.relay_file is not None:
+        if args.text is not None:
+            raise ValueError("--relay-file cannot be combined with message text")
+        from cli_subagents.relay_input import consume
+
+        text = consume(args.relay_file)
+    else:
+        if args.text is None:
+            raise ValueError("message text or --relay-file is required")
+        text = _read_stdin() if args.text == "-" else args.text
     result = tools.call("subagent_message", {"job_id": args.job_id, "text": text, "reply_to": args.reply_to})
     if args.follow:
         from cli_subagents.follow import follow
@@ -535,10 +579,15 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--cwd", default=os.getcwd())
 
     for name, help_text in (("run", "Run a task and print the result."), ("start", "Start a task in the background.")):
-        _job_arguments(sub.add_parser(name, help=help_text))
+        _job_arguments(sub.add_parser(name, help=help_text), optional_prompt=name == "run")
     run_parser = sub.choices["run"]
     run_parser.add_argument("--relay", action="store_true",
                             help="Read leading relay key=value options and the task from stdin ('-').")
+    run_parser.add_argument("--relay-file", metavar="PATH",
+                            help="Consume a UTF-8 csa inbox file as the complete relay prompt, then delete it.")
+    relay_path = sub.add_parser("relay-path", help="Print a fresh absolute filename for a relay's file tool.")
+    relay_path.add_argument("--workspace", action="store_true",
+                            help="Use the caller's .csa-relay-inbox instead of the csa home inbox.")
     run_parser.add_argument(
         "--follow", action="store_true",
         help="Print the worker's steps as they happen, then the result (see csa follow).",
@@ -567,7 +616,8 @@ def build_parser() -> argparse.ArgumentParser:
     wait.add_argument("--timeout", type=int, default=1800)
     message = sub.add_parser("message", help="Send a follow-up or an answer to a job.")
     message.add_argument("job_id")
-    message.add_argument("text", help="The message. Use '-' to read it from stdin.")
+    message.add_argument("text", nargs="?", help="The message. Use '-' to read it from stdin.")
+    message.add_argument("--relay-file", metavar="PATH", help="Consume and delete a UTF-8 csa inbox message file.")
     message.add_argument("--reply-to")
     message.add_argument("--follow", action="store_true",
                          help="Follow the running job or its new continuation, with an authenticated header and status.")
@@ -591,9 +641,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     hook = sub.add_parser("hook", help="Claude Code hook commands (see hooks/hooks.json).")
     hook.add_argument(
-        "action", choices=("await", "pending", "inbox"),
+        "action", choices=("await", "pending", "inbox", "relay-write"),
         help="await: wake the main session when a job finishes or asks something. "
-        "pending: list uncollected results at session start. inbox: a worker's follow-ups.",
+        "pending: list uncollected results at session start. inbox: a worker's follow-ups. "
+        "relay-write: allow a relay's new Write inside the csa inbox only.",
     )
     hook.add_argument("job_id", nargs="?", help="The worker's job (inbox only).")
 
@@ -643,6 +694,7 @@ def main(argv: list[str] | None = None) -> int:
             "wait": lambda a: _print(tools.call("subagent_wait", {"job_ids": a.job_ids, "timeout_seconds": a.timeout})) or 0,
             "message": cmd_message,
             "follow": cmd_follow,
+            "relay-path": cmd_relay_path,
         }
         if args.command == "launch":
             return cmd_launch(args, extra)

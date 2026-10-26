@@ -1,6 +1,19 @@
 {
   "description": "CLI Subagents: wake the main session when a subagent finishes or asks something (watched again after each subagent_message), and name uncollected results after resume or compaction.",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Write(**/relay-inbox/**)",
+            "command": "csa hook relay-write; exit 0",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "mcp__plugin_cli-subagents_cli-subagents__subagent_start|mcp__cli-subagents__subagent_start",

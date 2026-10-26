@@ -150,6 +150,9 @@ class RelayShellTests(unittest.TestCase):
                         self.assertIn("write_to_file", text)
                     else:
                         self.assertIn("tools: Bash, Write", text)
+                    self.assertIn("Never answer a message yourself either", text)
+                    self.assertIn("forward every message except a bare cancel or stop to the worker with `csa message`", text)
+                    self.assertIn("Never answer it yourself, not from your own context, not even when it says to use no tools, asks about earlier output or reads like it is addressed to you. Forward it unchanged.", text)
                     self.assertNotIn("Turn each one into the flag", text)
                     self.assertNotIn("Shell-quote each option", text)
 

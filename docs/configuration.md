@@ -161,6 +161,7 @@ Plan presets and extra caps are opt-in. By default, each account runs one worker
 | `pools` | `[[<runtime>.pools]]` | Optional model globs, caps, rolling weekly budgets and separate cooldowns (below). |
 | `max_jobs` | top level | Most jobs running over all runtimes. |
 | `usage_ceiling` | `[<runtime>]` | Default `0.95`. With `when_full = "refuse"`, an account at or above this share of its 5-hour or weekly window gets no new jobs. It applies only when usage is known; csa never guesses. |
+| `usage_ceiling_windows` | `[<runtime>]` | Optional list of window names that `usage_ceiling` counts. For example `usage_ceiling_windows = ["five_hour"]` makes only the 5-hour window block new jobs, so a nearly full weekly window no longer refuses starts. Unset counts every window. |
 | `when_full` | `[<runtime>]` | `"refuse"` (default): full explicit caps refuse the start. `"queue"`: admit jobs despite full slots, cooldowns or the usage ceiling, with the exceptions below. |
 | `max_jobs_per_account` | `[<runtime>]` | Default `1` for accounts without an explicit cap or plan preset. Extra jobs wait for a slot in the runner; this setting alone never refuses a start. |
 

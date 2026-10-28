@@ -99,11 +99,16 @@ def count_active(now: float | None = None) -> Counts:
     return counts
 
 
-def utilization(record: dict[str, Any] | None, now: float) -> float | None:
-    """Highest share used across the windows still open. None when no usage was recorded."""
+def utilization(record: dict[str, Any] | None, now: float, windows: tuple[str, ...] | None = None) -> float | None:
+    """Highest share used across the windows still open. None when no usage was recorded.
+
+    With `windows`, only those window names count (the keys of the record's "windows" dict).
+    """
 
     values = []
-    for window in ((record or {}).get("windows") or {}).values():
+    for key, window in ((record or {}).get("windows") or {}).items():
+        if windows is not None and key not in windows:
+            continue
         if not isinstance(window, dict) or not isinstance(window.get("utilization"), (int, float)):
             continue
         resets = window.get("resets_at")
@@ -187,7 +192,7 @@ def room(config: Config, runtime_name: str, counts: Counts, *, pinned: str | Non
                 continue
             if result.pool_total_hit:
                 continue
-        used = utilization(usage.get(account.name), now)
+        used = utilization(usage.get(account.name), now, windows=runtime.usage_ceiling_windows)
         if not override and used is not None and used >= runtime.usage_ceiling:
             result.ceiling_hit = max(result.ceiling_hit or 0.0, used)
             continue

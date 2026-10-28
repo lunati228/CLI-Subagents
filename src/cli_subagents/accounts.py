@@ -139,13 +139,14 @@ def clear_cooldown(runtime: str, account: str) -> bool:
     return True
 
 
-def max_utilization(record: dict[str, Any] | None) -> float | None:
+def max_utilization(record: dict[str, Any] | None, windows: tuple[str, ...] | None = None) -> float | None:
     if not record:
         return None
     values = [
         float(window["utilization"])
-        for window in (record.get("windows") or {}).values()
-        if isinstance(window, dict) and isinstance(window.get("utilization"), (int, float))
+        for key, window in (record.get("windows") or {}).items()
+        if (windows is None or key in windows)
+        and isinstance(window, dict) and isinstance(window.get("utilization"), (int, float))
     ]
     return max(values) if values else None
 
@@ -350,7 +351,7 @@ def ranked_accounts(
 
     def key(account: Account) -> tuple[bool, bool, bool, float, float]:
         record = usage.get(account.name) or {}
-        utilization = max_utilization(record)
+        utilization = max_utilization(record, windows=runtime.usage_ceiling_windows)
         nearly_full = utilization is not None and utilization >= runtime.usage_ceiling
         return (
             account.fallback,  # fallback accounts only after every regular one

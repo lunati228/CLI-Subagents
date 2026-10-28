@@ -134,6 +134,7 @@ class RuntimeConfig:
     primary_models: list[str] | None = None
     max_jobs: int | None = None  # runtime-wide cap on running jobs
     usage_ceiling: float = 0.95  # accounts at or above this share of a usage window get no new jobs
+    usage_ceiling_windows: tuple[str, ...] | None = None  # windows the ceiling counts; None counts every window
     when_full: str = "refuse"
     max_jobs_by_room: list[list[float | int]] = field(default_factory=list)
     pools: list[QuotaPool] = field(default_factory=list)
@@ -377,6 +378,12 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
     ceiling = float(data.get("usage_ceiling", 0.95))
     if not 0 < ceiling <= 1:
         raise ValueError(f"[{name}] usage_ceiling must be above 0 and at most 1")
+    ceiling_windows = data.get("usage_ceiling_windows")
+    if ceiling_windows is not None:
+        if (not isinstance(ceiling_windows, list) or not ceiling_windows
+                or any(not isinstance(item, str) or not item.strip() for item in ceiling_windows)):
+            raise ValueError(f"[{name}] usage_ceiling_windows must be a non-empty list of window names")
+        ceiling_windows = tuple(item.strip() for item in ceiling_windows)
     capacity_retries = data.get("capacity_retries", 3)
     capacity_retry_seconds = data.get("capacity_retry_seconds", 30)
     for key, value, minimum in (("capacity_retries", capacity_retries, 0),
@@ -411,6 +418,7 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
         primary_models=_opt_models(data.get("primary_models")),
         max_jobs=_opt_int(data.get("max_jobs")),
         usage_ceiling=ceiling,
+        usage_ceiling_windows=ceiling_windows,
         when_full=when_full,
         max_jobs_by_room=_room_steps(name, data.get("max_jobs_by_room")),
         pools=_quota_pools(name, data.get("pools", [])),
@@ -498,6 +506,8 @@ def dump_config(config: Config) -> str:
             lines.append(f"primary_models = {json.dumps(runtime.primary_models)}")
         if runtime.usage_ceiling != 0.95:
             lines.append(f"usage_ceiling = {runtime.usage_ceiling}")
+        if runtime.usage_ceiling_windows:
+            lines.append(f"usage_ceiling_windows = {json.dumps(list(runtime.usage_ceiling_windows))}")
         if runtime.when_full != "refuse":
             lines.append(f"when_full = {_toml_value(runtime.when_full)}")
         if runtime.max_jobs_by_room:

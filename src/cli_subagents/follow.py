@@ -7,6 +7,9 @@ terminal controls are rendered as visible escapes. Results and questions have
 fixed opening and closing delimiters. The last line is the authoritative
 DONE, FAILED, STILL RUNNING or QUESTION marker, after all worker text and
 continuation commands. The header, capacity retry notices and end marker start with ``[csa]``.
+Immediately before the end marker, ``[csa] title: <Runtime>: <step>`` supplies
+display text for the next shell call's description. It has no job/token fields
+and never controls the relay. The complete title line is at most 70 characters.
 
 The header and end marker carry the job ID and a fresh random token for this
 follow invocation. Printed commands carry the same token in a shell comment
@@ -26,6 +29,7 @@ import re
 import secrets
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
@@ -38,6 +42,8 @@ POLL_SECONDS = 0.5
 DEFAULT_MAX_WAIT = 540.0  # keeps one Bash call under Claude Code's 10-minute ceiling
 DEFAULT_WINDOW = 60
 SUMMARY_CHARS = 200
+TITLE_CHARS = 70
+TITLE_PREFIX = "[csa] title: "
 RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
 RESULT_RULE = "===== RESULT ====="
 RESULT_END_RULE = "===== END RESULT ====="
@@ -89,6 +95,52 @@ def reasoning_line(text: str) -> str:
     return short(prefix + (": " if prefix and sentence else "") + sentence)
 
 
+# Strip terminal sequences before removing controls, so their payloads do not
+# become visible title text. This covers CSI, OSC and other string escapes.
+_TITLE_ESCAPES = re.compile(
+    r"(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c|$)"
+    r"|(?:\x1b[P^_X]|\x90|\x98|\x9e|\x9f).*?(?:\x1b\\|\x9c|$)"
+    r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b[ -/]*[@-Z\\-_]",
+    re.DOTALL,
+)
+
+
+def title_text(value: str) -> str:
+    """Display-only text, with no framing, token or shell-comment syntax."""
+
+    value = _TITLE_ESCAPES.sub("", value)
+    value = "".join(" " if ch.isspace() else ch for ch in value
+                    if ch.isspace() or not unicodedata.category(ch).startswith("C"))
+    value = re.sub(r"\[csa\]", "", value, flags=re.IGNORECASE).replace("[", "").replace("]", "")
+    value = re.sub(r"\b(?:csa-)?token\b\s*[:=]?\s*\S*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"[0-9a-f]{32,}", "", value, flags=re.IGNORECASE)
+    return " ".join(value.split("#", 1)[0].split())
+
+
+class ProgressTitle:
+    """Prefer the latest reasoning summary, then tool/command, then text."""
+
+    def __init__(self) -> None:
+        self.steps: dict[int, str] = {}
+
+    def remember(self, lines: list[str]) -> None:
+        for line in lines:
+            for priority, prefixes in enumerate((("thinking: ",),
+                                                  ("tool: ", "$ ", "edited: ", "search: ", "step: "),
+                                                  ("says: ",))):
+                prefix = next((p for p in prefixes if line.startswith(p)), None)
+                if prefix is not None:
+                    text = title_text(line[len(prefix):])
+                    if text:
+                        self.steps[priority] = text
+                    break
+
+    def render(self, runtime: str) -> str:
+        label = RUNTIME_LABELS.get(runtime, "Worker")
+        step = self.steps[min(self.steps)] if self.steps else "working"
+        return short(f"{label}: {step}", TITLE_CHARS - len(TITLE_PREFIX))
+
+
 def plural(count: int, word: str) -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
@@ -123,6 +175,11 @@ class Describer:
         return []
 
     def flush(self) -> list[str]:
+        return []
+
+    def progress_lines(self) -> list[str]:
+        """Buffered progress for a title, without consuming resumable output."""
+
         return []
 
     def drop_pending(self) -> None:
@@ -323,6 +380,9 @@ class AntigravityDescriber(Describer):
 
     def starts_attempt(self, event: dict[str, Any]) -> bool:
         return event.get("event") == "init"
+
+    def progress_lines(self) -> list[str]:
+        return block("thinking: " if self._kind == "thinking" else "says: ", self._text) if self._text.strip() else []
 
     def flush(self) -> list[str]:
         text, kind = self._text, self._kind
@@ -581,6 +641,7 @@ class Follower:
         self.out = out
         self.token = secrets.token_hex(16)  # never stored in worker-readable job files
         self.describer = describer_for(self.spec.runtime)
+        self.title = ProgressTitle()
         self.inits = 0  # attempt-start events seen so far
         self.reported = 0  # attempts whose account line was printed (or needs none)
         self.announced: str | None = None  # account named in the header
@@ -610,6 +671,10 @@ class Follower:
     def command(self, text: str) -> str:
         # A shell comment preserves the existing CLI arguments.
         return f"{text} # csa-token {self.token}"
+
+    def emit_title(self) -> None:
+        self.title.remember(self.describer.progress_lines())
+        self.emit(TITLE_PREFIX + self.title.render(self.spec.runtime))
 
     # Steps
 
@@ -666,7 +731,9 @@ class Follower:
             if self.describer.starts_attempt(event):
                 self.inits += 1
                 lines += self.attempt_lines(self.inits)
-            return lines + self.describer.describe(event, offset)
+            output = self.describer.describe(event, offset)
+            self.title.remember(output)
+            return lines + output
         except Exception:  # one odd event never stops the follow
             return []
 
@@ -792,7 +859,9 @@ class Follower:
 
     def finish(self) -> int:
         self.read_events(final=True)
-        lines = self.describer.flush() + self.attempt_lines()
+        lines = self.describer.flush()
+        self.title.remember(lines)
+        lines += self.attempt_lines()
         if lines:
             self.emit_worker(*lines)
         self.review_lines()
@@ -805,6 +874,7 @@ class Follower:
         self.emit(RESULT_RULE)
         self.emit_worker(text)
         self.emit(RESULT_END_RULE)
+        self.emit_title()
         if outcome == SUCCESS:
             account = status.get("account") or self.announced or "-"
             self.control(
@@ -818,6 +888,7 @@ class Follower:
 
     def still_running(self) -> int:
         self.emit("Keep watching with:", self.command(self.follow_command()))
+        self.emit_title()
         self.control(f"STILL RUNNING after {duration(self.elapsed())}")
         return 0
 
@@ -832,6 +903,7 @@ class Follower:
             self.emit(RESULT_RULE)
             self.emit_worker("Cannot relay a worker question with an invalid id.", str(record.get("text") or ""))
             self.emit(RESULT_END_RULE)
+            self.emit_title()
             self.control("FAILED · invalid worker question id")
             return 1
         self.emit(QUESTION_RULE)
@@ -844,6 +916,7 @@ class Follower:
             "Then keep watching with:",
             self.command(self.follow_command()),
         )
+        self.emit_title()
         self.control(f"QUESTION from the worker (id {question_id})")
         return 0
 

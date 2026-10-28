@@ -29,7 +29,8 @@ class RelayFramingTests(TempHome):
         self.assertEqual(header.group(1), job_id)
         self.assertTrue(lines[-1].startswith(f"[csa] {status}"), lines[-1])
         self.assertTrue(lines[-1].endswith(header.group(0)), lines[-1])
-        self.assertEqual([line for line in lines if line.startswith("[csa]")], [lines[0], lines[-1]])
+        self.assertTrue(lines[-2].startswith("[csa] title: "), lines[-2])
+        self.assertEqual([line for line in lines if line.startswith("[csa]")], [lines[0], lines[-2], lines[-1]])
         for line in lines:
             if line.startswith("csa "):
                 self.assertRegex(line, rf"^csa (follow|message) {job_id} ")
@@ -60,7 +61,7 @@ class RelayFramingTests(TempHome):
                 self.assertEqual(actual, code)
                 self.assertEqual(self.assert_frame(job_id, lines, marker), token)
                 start, end = lines.index("===== RESULT ====="), lines.index("===== END RESULT =====")
-                self.assertEqual(end, len(lines) - 2)
+                self.assertEqual(end, len(lines) - 3)
                 self.assertEqual(lines[start + 1:end], ["| " + line for line in result.split("\n")])
                 self.assertEqual("\n".join(line[2:] for line in lines[start + 1:end]), result)
                 self.assertFalse(any(line.startswith("csa ") for line in lines))

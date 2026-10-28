@@ -17,13 +17,14 @@ import platform
 import secrets
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 
 from . import reviewer, rules, store
 from .context import ContextError, load_context
 
 MAX_INPUT = 512 * 1024
 MAX_REASON = 600
+DEFAULT_BUDGET = 80  # seconds for the whole reviewer chain; agy gives the hook 90 (install.HOOK_TIMEOUT)
 GATE_LABEL = "CLI Subagents review"
 
 
@@ -52,8 +53,13 @@ def parse_payload(raw: bytes) -> dict[str, Any]:
     return payload
 
 
-def evaluate(payload: dict[str, Any], context: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """(answer for agy, log record) for one tool call."""
+def evaluate(
+    payload: dict[str, Any], context: dict[str, Any], decide: Callable[..., rules.Verdict] | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(answer for agy, log record) for one tool call.
+
+    `decide` replaces `rules.decide` for callers that add rules of their own (the OpenCode gate).
+    """
 
     call = payload["toolCall"]
     name = call["name"]
@@ -62,7 +68,7 @@ def evaluate(payload: dict[str, Any], context: dict[str, Any]) -> tuple[dict[str
         "id": secrets.token_hex(4), "time": time.time(), "tool": name, "summary": rules.summarize(call),
         "step": payload.get("stepIdx"),
     }
-    verdict = rules.decide(call, payload, context)
+    verdict = (decide or rules.decide)(call, payload, context)
     if verdict.action == "approve":
         record.update(decision="approve", source="rule", reason=verdict.reason, quiet=verdict.quiet)
         return _answer("auto_approve", f"{GATE_LABEL}: {verdict.reason}"), record
@@ -71,15 +77,19 @@ def evaluate(payload: dict[str, Any], context: dict[str, Any]) -> tuple[dict[str
         return _deny(verdict.reason), record
 
     record["why"] = verdict.why
-    config = dict(context.get("reviewer") or {})
-    if str(config.get("kind") or "off") == "off":
+    chain = context.get("reviewers")
+    if chain is None:  # a context that wasn't validated (tests, older callers)
+        single = dict(context.get("reviewer") or {})
+        chain = [single] if str(single.get("kind") or "off") != "off" else []
+    if not chain:
         record.update(decision="deny", source="rule", reason=f"no reviewer is configured, and {verdict.why}")
         return _deny(record["reason"]), record
     cache_path = Path(context["cache"]) if context.get("cache") else None
     key = store.action_key(name, args)
     cached = store.cache_get(cache_path, key) if cache_path else None
     if cached:
-        record.update(decision=cached["decision"], source="cache", reason=cached.get("reason", ""), risk=cached.get("risk"))
+        record.update(decision=cached["decision"], source="cache", reason=cached.get("reason", ""), risk=cached.get("risk"),
+                      reviewer=cached.get("reviewer"), model=cached.get("model"))
     else:
         started = time.monotonic()
         request = {
@@ -87,17 +97,25 @@ def evaluate(payload: dict[str, Any], context: dict[str, Any]) -> tuple[dict[str
             "workspaces": context.get("workspaces"), "sandboxed": bool(context.get("sandbox")) and not rules._bypass(args)
             if name in rules.COMMAND_TOOLS else None, "why": verdict.why,
         }
+        if name in rules.COMMAND_TOOLS and context.get("review_network"):
+            request["network_if_approved"] = context["review_network"]
+        deadline = context.get("_deadline") or started + float(context.get("review_budget") or DEFAULT_BUDGET)
         try:
-            answer = reviewer.review(config, request)
-        except reviewer.ReviewError as exc:
-            record.update(decision="deny", source="error", reason=str(exc), seconds=round(time.monotonic() - started, 1))
-            return _deny(f"the reviewer could not decide ({exc})"), record
+            answer, used, failures = reviewer.review_chain(chain, request, deadline)
+        except reviewer.ChainError as exc:
+            record.update(decision="deny", source="error", reason=str(exc)[:600], failed=exc.failures,
+                          seconds=round(time.monotonic() - started, 1))
+            what = "no reviewer could decide" if len(chain) > 1 else "the reviewer could not decide"
+            return _deny(f"{what} ({exc})"), record
         decision = "approve" if answer["decision"] == "allow" else "deny"
         record.update(decision=decision, source="reviewer", reason=answer["reason"], risk=answer["risk"],
-                      seconds=round(time.monotonic() - started, 1), reviewer=config.get("kind"), model=config.get("model"))
+                      seconds=round(time.monotonic() - started, 1), reviewer=reviewer.label(used), model=used.get("model"))
+        if failures:
+            record["failed"] = failures
         if cache_path:
             try:
-                store.cache_put(cache_path, key, {"decision": decision, "reason": answer["reason"], "risk": answer["risk"]})
+                store.cache_put(cache_path, key, {"decision": decision, "reason": answer["reason"], "risk": answer["risk"],
+                                                  "reviewer": record["reviewer"], "model": record["model"]})
             except (OSError, TimeoutError):
                 pass
     if record["decision"] == "approve":

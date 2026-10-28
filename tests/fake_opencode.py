@@ -54,6 +54,21 @@ def main():
     if scenario in errors:
         emit("error", session, error=errors[scenario])
         return 1
+    if scenario == "sandbox_command":
+        import subprocess
+        config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
+        source = (Path(config["plugins"][-1]) / "server.js").read_text(encoding="utf-8")
+        settings = json.loads(source.split("const settings = ", 1)[1].split(";\n", 1)[0])
+        invocation = {"command": "python -m unittest", "cwd": os.getcwd(), "env": dict(os.environ), "timeout": 10000}
+        checked = subprocess.run([settings["python"], settings["sandboxScript"], settings["context"]],
+                                 input=json.dumps(invocation), capture_output=True, text=True)
+        if checked.returncode:
+            sys.stderr.write(checked.stderr)
+            return 1
+        prepared = json.loads(checked.stdout)
+        done = subprocess.run([prepared["shell"], "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", prepared["command"]])
+        if done.returncode:
+            return done.returncode
     if scenario == "denied_command":
         # Exercise the exact Python entrypoint that the generated JS hook calls.
         import subprocess

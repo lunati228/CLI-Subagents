@@ -21,7 +21,14 @@ RUNTIMES = ("claude", "codex", "antigravity", "opencode")
 OPT_IN_FAILOVER = ("antigravity",)
 FAILOVER_MODES = ("off", "on-limit")
 WHEN_FULL_MODES = ("refuse", "queue")
-REVIEWERS = ("agy", "claude", "off")
+# The review gate (Antigravity and OpenCode read/edit jobs): who judges what its fixed rules
+# can't settle. A chain of reviewers, tried in order until one gives a verdict.
+GATED_RUNTIMES = ("antigravity", "opencode")
+REVIEWERS = ("agy", "claude", "codex", "off")  # values of the one-entry `reviewer` key
+# Provider names in [[review.reviewers]] -> the gate's reviewer kinds. OpenCode is not a
+# reviewer: its free models' data terms, and the worker would judge itself.
+REVIEW_PROVIDERS = {"claude": "claude", "antigravity": "agy", "agy": "agy", "codex": "codex"}
+LEGACY_DEFAULT_KIND = {"antigravity": "agy", "opencode": "claude"}  # `reviewer_model` alone meant this kind
 WEB_SEARCH_MODES = ("disabled", "cached", "indexed", "live")
 WINDOWS_SANDBOX_MODES = ("unelevated", "elevated", "off")
 REASONING_SUMMARY_MODES = ("detailed", "concise", "auto", "none", "off")
@@ -106,6 +113,25 @@ class QuotaPool:
 
 
 @dataclass
+class ReviewerEntry:
+    """One reviewer in the review gate's chain."""
+
+    kind: str  # "claude", "agy" or "codex"
+    model: str | None = None  # None: the provider's reviewer default
+    account: str | None = None  # an account of that provider; None: the primary (agy in an Antigravity job: the job's own)
+    timeout: int | None = None  # seconds for this reviewer; None: an even share of the gate's time
+
+    @property
+    def provider(self) -> str:
+        return "antigravity" if self.kind == "agy" else self.kind
+
+
+# Claude Haiku first, then Gemini 3.8 Flash (low) through Antigravity. Entries whose CLI
+# isn't installed or set up are skipped quietly (`csa doctor` lists them).
+DEFAULT_REVIEWERS = (ReviewerEntry("claude", "haiku"), ReviewerEntry("agy", "gemini-3.8-flash-low"))
+
+
+@dataclass
 class RuntimeConfig:
     runtime: str
     primary: Path
@@ -122,10 +148,14 @@ class RuntimeConfig:
     windows_sandbox: str = "unelevated"  # [codex] only
     reasoning_summary: str = "detailed"  # [codex] only; off leaves the CLI default alone
     share_parent_mcp: bool = True  # [codex] and [antigravity]: give workers started from Claude Code its MCP servers
-    # [antigravity] only: the review gate for read and edit jobs (see docs/gemini.md#safety)
-    reviewer: str = "agy"  # "agy", "claude" or "off" (fixed rules only; the rest is denied)
+    # [antigravity] and [opencode]: the review gate for read and edit jobs (docs/configuration.md#review-gate).
+    # `reviewers` ([[name.reviewers]]) wins; else the one-entry form `reviewer` ("agy", "claude", "codex"
+    # or "off") with `reviewer_model` and `reviewer_account`; else the shared [review] list; else the defaults.
+    reviewers: list[ReviewerEntry] | None = None
+    reviewer: str = ""
     reviewer_model: str | None = None
-    reviewer_account: str | None = None  # Claude account for reviewer = "claude"
+    reviewer_account: str | None = None
+    shared_reviewers: list[ReviewerEntry] | None = None  # [review] reviewers, filled in by load_config
     sandbox: bool = True  # run edit jobs with agy --sandbox
     # Limits. `plan` and the primary_* keys describe the primary account.
     plan: str | None = None
@@ -142,6 +172,20 @@ class RuntimeConfig:
     network_access: bool = True  # [codex] only: network inside the sandbox for edit jobs (local test sockets too)
     accounts: list[Account] = field(default_factory=list)
     enabled: bool = True  # [opencode]: auto-discover unless explicitly disabled
+
+    def review_chain(self) -> tuple[list[ReviewerEntry], bool]:
+        """(reviewers in order, True when they are the built-in defaults). An empty list means off."""
+
+        if self.reviewers is not None:
+            return list(self.reviewers), False
+        if self.reviewer == "off":
+            return [], False
+        if self.reviewer or self.reviewer_model or self.reviewer_account:
+            kind = self.reviewer or LEGACY_DEFAULT_KIND.get(self.runtime, "claude")
+            return [ReviewerEntry(kind, self.reviewer_model, self.reviewer_account)], False
+        if self.shared_reviewers is not None:
+            return list(self.shared_reviewers), False
+        return list(DEFAULT_REVIEWERS), True
 
     def primary_account(self) -> Account:
         return Account(
@@ -182,11 +226,21 @@ class RuntimeConfig:
 
 
 @dataclass
+class SandboxSettings:
+    """`[sandbox]`: csa's OS sandbox for commands (Microsoft MXC on Windows; see docs/sandbox.md)."""
+
+    enabled: bool | None = None  # None: on where this system supports it
+    path: Path | None = None  # wxc-exec.exe to use instead of csa's own install
+
+
+@dataclass
 class Config:
     runtimes: dict[str, RuntimeConfig]
     job_retention_days: int = 7
     max_depth: int = 1
     max_jobs: int | None = None  # cap on running jobs across all runtimes
+    sandbox: SandboxSettings = field(default_factory=SandboxSettings)
+    reviewers: list[ReviewerEntry] | None = None  # [review] reviewers: the shared review chain
 
     def runtime(self, name: str) -> RuntimeConfig:
         if name not in self.runtimes:
@@ -317,6 +371,28 @@ def _account_spend(runtime: str, account: str, item: dict[str, Any]) -> dict[str
     return {"spend_cap_usd": cap, "spend_period": period, "spend_since": since, "spend_caps": caps}
 
 
+def _reviewer_entries(section: str, value: Any) -> list[ReviewerEntry]:
+    """[[<section>.reviewers]] tables: provider (claude, antigravity or codex), optional model, account, timeout."""
+
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError(f"[{section}] reviewers must be a list of tables ([[{section}.reviewers]])")
+    entries = []
+    for index, item in enumerate(value, 1):
+        unknown = set(item) - {"provider", "model", "account", "timeout"}
+        if unknown:
+            raise ValueError(f"[{section}] reviewer {index}: unknown keys {sorted(unknown)}")
+        provider = str(item.get("provider") or "").strip().lower()
+        if provider not in REVIEW_PROVIDERS:
+            raise ValueError(f"[{section}] reviewer {index}: provider must be claude, antigravity or codex"
+                             + (" (OpenCode can't be a reviewer)" if provider == "opencode" else ""))
+        timeout = item.get("timeout")
+        if timeout is not None and (type(timeout) is not int or timeout < 10):
+            raise ValueError(f"[{section}] reviewer {index}: timeout must be a whole number of seconds, at least 10")
+        entries.append(ReviewerEntry(REVIEW_PROVIDERS[provider], _opt_text(item.get("model")),
+                                     _opt_text(item.get("account")), timeout))
+    return entries
+
+
 def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
     enabled = data.get("enabled", True)
     if not isinstance(enabled, bool):
@@ -364,11 +440,16 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
     when_full = str(data.get("when_full", "refuse"))
     if when_full not in WHEN_FULL_MODES:
         raise ValueError(f"[{name}] when_full must be one of {WHEN_FULL_MODES}")
-    reviewer = str(data.get("reviewer", "off" if name == "opencode" else "agy"))
-    if reviewer not in REVIEWERS:
+    reviewer = str(data.get("reviewer") or "")
+    if reviewer and reviewer not in REVIEWERS:
         raise ValueError(f"[{name}] reviewer must be one of {REVIEWERS}")
-    if name == "opencode" and (reviewer != "off" or data.get("reviewer_model") or data.get("reviewer_account")):
-        raise ValueError("[opencode] supports fixed review rules only; reviewer models are not supported yet")
+    reviewers = None
+    if "reviewers" in data:
+        if name not in GATED_RUNTIMES:
+            raise ValueError(f"[{name}] has no review gate; reviewers belong under [review], [antigravity] or [opencode]")
+        if any(key in data for key in ("reviewer", "reviewer_model", "reviewer_account")):
+            raise ValueError(f"[{name}] sets both reviewers and reviewer/reviewer_model/reviewer_account; keep one")
+        reviewers = _reviewer_entries(name, data["reviewers"])
     web_search = data.get("web_search")
     if web_search is not None and (name != "codex" or web_search not in WEB_SEARCH_MODES):
         raise ValueError(f"[{name}] web_search must be under [codex] and one of {WEB_SEARCH_MODES}")
@@ -408,6 +489,7 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
         windows_sandbox=windows_sandbox,
         reasoning_summary=reasoning_summary,
         share_parent_mcp=bool(data.get("share_parent_mcp", True)),
+        reviewers=reviewers,
         reviewer=reviewer,
         reviewer_model=str(data.get("reviewer_model") or "").strip() or None,
         reviewer_account=str(data.get("reviewer_account") or "").strip() or None,
@@ -428,6 +510,23 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
     )
 
 
+def _sandbox_from(data: Any) -> SandboxSettings:
+    if data is None:
+        return SandboxSettings()
+    if not isinstance(data, dict):
+        raise ValueError("[sandbox] must be a table")
+    unknown = sorted(set(data) - {"enabled", "path"})
+    if unknown:
+        raise ValueError(f"[sandbox] has unknown keys: {', '.join(unknown)} (known: enabled, path)")
+    enabled = data.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError("[sandbox] enabled must be true or false")
+    path = data.get("path")
+    if path is not None and (not isinstance(path, str) or not path.strip()):
+        raise ValueError("[sandbox] path must be the full path of wxc-exec.exe")
+    return SandboxSettings(enabled=enabled, path=_path(path, Path()) if path else None)
+
+
 def load_config(path: Path | None = None) -> Config:
     path = path or config_path()
     data: dict[str, Any] = {}
@@ -435,11 +534,19 @@ def load_config(path: Path | None = None) -> Config:
         with path.open("rb") as handle:
             data = tomllib.load(handle)
     runtimes = {name: _runtime_from(name, data.get(name, {}) or {}) for name in RUNTIMES}
+    review = data.get("review", {}) or {}
+    if not isinstance(review, dict) or set(review) - {"reviewers"}:
+        raise ValueError("[review] takes only reviewers ([[review.reviewers]])")
+    shared = _reviewer_entries("review", review["reviewers"]) if "reviewers" in review else None
+    for name in GATED_RUNTIMES:
+        runtimes[name].shared_reviewers = shared
     return Config(
         runtimes=runtimes,
         job_retention_days=max(1, int(data.get("job_retention_days", 7))),
         max_depth=max(0, int(data.get("max_depth", 1))),
         max_jobs=_opt_int(data.get("max_jobs")),
+        sandbox=_sandbox_from(data.get("sandbox")),
+        reviewers=shared,
     )
 
 
@@ -449,6 +556,16 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     return json.dumps(str(value))
+
+
+def _reviewer_lines(section: str, entries: list[ReviewerEntry]) -> list[str]:
+    lines: list[str] = []
+    for entry in entries:
+        lines += ["", f"[[{section}.reviewers]]", f"provider = {_toml_value(entry.provider)}"]
+        for key, value in (("model", entry.model), ("account", entry.account), ("timeout", entry.timeout)):
+            if value is not None:
+                lines.append(f"{key} = {_toml_value(value)}")
+    return lines
 
 
 def dump_config(config: Config) -> str:
@@ -461,6 +578,15 @@ def dump_config(config: Config) -> str:
     ]
     if config.max_jobs:
         lines.append(f"max_jobs = {config.max_jobs}")
+    if config.sandbox.enabled is not None or config.sandbox.path:
+        lines += ["", "[sandbox]"]
+        if config.sandbox.enabled is not None:
+            lines.append(f"enabled = {_toml_value(config.sandbox.enabled)}")
+        if config.sandbox.path:
+            lines.append(f"path = {_toml_value(str(config.sandbox.path))}")
+    if config.reviewers is not None:
+        lines += ["", "[review]"] + (["reviewers = []"] if not config.reviewers else [])
+        lines += _reviewer_lines("review", config.reviewers)
     for name in RUNTIMES:
         runtime = config.runtimes[name]
         lines += [
@@ -488,12 +614,15 @@ def dump_config(config: Config) -> str:
             lines.append(f"reasoning_summary = {_toml_value(runtime.reasoning_summary)}")
         if name in ("codex", "antigravity", "opencode") and not runtime.share_parent_mcp:
             lines.append("share_parent_mcp = false")
+        if name in GATED_RUNTIMES:
+            if runtime.reviewers == []:
+                lines.append("reviewers = []")
+            elif runtime.reviewers is None:
+                for key, value in (("reviewer", runtime.reviewer), ("reviewer_model", runtime.reviewer_model),
+                                   ("reviewer_account", runtime.reviewer_account)):
+                    if value:
+                        lines.append(f"{key} = {_toml_value(value)}")
         if name == "antigravity":
-            if runtime.reviewer != "agy":
-                lines.append(f"reviewer = {_toml_value(runtime.reviewer)}")
-            for key, value in (("reviewer_model", runtime.reviewer_model), ("reviewer_account", runtime.reviewer_account)):
-                if value:
-                    lines.append(f"{key} = {_toml_value(value)}")
             if not runtime.sandbox:
                 lines.append("sandbox = false")
         for key, value in (
@@ -516,6 +645,7 @@ def dump_config(config: Config) -> str:
             lines.append(f"web_search = {_toml_value(runtime.web_search)}")
         if name == "codex" and not runtime.network_access:
             lines.append("network_access = false")
+        lines += _reviewer_lines(name, runtime.reviewers or [])
         for pool in runtime.pools:
             lines += ["", f"[[{name}.pools]]", f"name = {_toml_value(pool.name)}", f"models = {json.dumps(pool.models)}"]
             for key in ("per_account", "total", "weekly_jobs", "cooldown_minutes"):

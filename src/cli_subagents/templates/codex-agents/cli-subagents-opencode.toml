@@ -1,7 +1,7 @@
 # Installed by csa setup/update into CODEX_HOME/agents; plugins cannot register agents.
 # Managed by csa: csa update replaces this file, so edits here are lost.
 name = "cli-subagents-opencode"
-description = "Relay one task to OpenCode v2 (`opencode run`) through csa, with an inspectable native agent thread. Prefer this relay over subagent_start for that runtime. Free models are for personal projects only; OpenCode has no OS sandbox. Begin the prompt with optional model=NAME, access=MODE, effort=LEVEL, cwd=PATH, timeout=SECONDS, override=USER_WORDS lines, followed by the complete task. The model and effort options select the external worker. Relay uses GPT-6 Luna at low reasoning."
+description = "Relay one task to OpenCode v2 (`opencode run`) through csa, with an inspectable native agent thread. Prefer this relay over subagent_start for that runtime. Free models are for personal projects only. On supported Windows, OpenCode edit workers' shell commands run in csa's MXC sandbox; the review gate applies fixed rules, then the reviewer chain. Begin the prompt with optional model=NAME, access=MODE, effort=LEVEL, cwd=PATH, timeout=SECONDS, override=USER_WORDS lines, followed by the complete task. The model and effort options select the external worker. Relay uses GPT-6 Luna at low reasoning."
 model = "gpt-6-luna"
 model_reasoning_effort = "low"
 developer_instructions = '''

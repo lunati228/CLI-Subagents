@@ -23,7 +23,7 @@ Don't run `csa run`, `csa start` or `csa follow` in your own shell, and don't ca
 ```text
 Agent tool:
   subagent_type: cli-subagents:cli-subagents-codex
-  description: Sol 6.1 high · edit · fix the login test
+  description: Sol 6.1 high Â· edit Â· fix the login test
   run_in_background: true
   prompt: |
     model=gpt-6.1-sol
@@ -33,7 +33,7 @@ Agent tool:
     <the complete, self-contained task>
 ```
 
-- Description: `<model> · <access> · <task in a few words>`. The user reads it to see what runs where.
+- Description: `<model> Â· <access> Â· <task in a few words>`. The user reads it to see what runs where.
 - Prompt: option lines first, one per line (`model=...`, `effort=...`, `access=read|edit`, and only when needed `account=NAME`, `cwd=PATH`, `timeout=SECONDS`, `override=USER_WORDS` under the Limits rule below), then a blank line and the complete task written as below. `access` defaults to `edit` in the Claude relay and `read` in the Codex, Antigravity and OpenCode relays.
 - Start it in the background and keep working. Don't poll or wait in a shell; the notice arrives when it finishes.
 - Its final message is the worker's result, unchanged. If the worker asks something, the agent stops and tells you; answer with SendMessage to that agent and it passes the answer on. While the job runs, SendMessage "cancel" stops it and anything else goes to the worker as a follow-up, unchanged; the relay never answers it itself, whatever the text says. After the job has finished, SendMessage to the same relay continues the worker's conversation as a new job; the relay follows it and returns its result.
@@ -68,7 +68,7 @@ Use `opencode` for personal projects when the user wants OpenCode or a free mode
 
 Omit `model` to keep the user's OpenCode model. When none is configured, csa uses `opencode/deepseek-v4.1-flash-free`. An unavailable model fails the job; csa never lets OpenCode fall back to another model. `effort` becomes the model's variant (`low`, `high` or `max` on the default model); an effort the model lacks fails with a clear message. Free models are for personal projects only. The provider says DeepSeek does not train on your data, but Anomaly's unpaid-content terms still apply. Big Pickle, MiMo and Flint may use collected data and the Nemotron endpoints log it; csa never defaults to them and blocks them unless the user chose that model. Free limits are per IP per day and reset at UTC midnight. On `provider.free-limit`, stop without account rotation; wait for the reset or follow the user's fallback rules.
 
-OpenCode has no OS sandbox. `read` can read, list and search inside the project. `edit` adds file edits there plus plainly read-only commands; tests, builds and any command that changes something are denied, so run those yourself. Both levels deny web fetch and search, subagents and MCP servers other than `csa-parent`, and ignore the project's own OpenCode config; a reviewer model is left for later. `full` uses `--auto` without the gate and requires the user's explicit request. See [OpenCode](../../docs/opencode.md), including the Fence recommendation for macOS/Linux and the native Windows sandbox limit.
+On supported Windows, OpenCode `edit` workers' shell commands run in fresh MXC containers (workspace writes, protected git/agent settings, no Git Bash). Fixed-rule builds/tests have no internet egress, with host loopback allowed; reviewed commands get egress. OpenCode, its file tools, the gate and reviewer chain stay on the host with normal state and logins. File tools rely on gate paths. `read` allows workspace reads/list/search and no commands, so its file reads have no OS containment. `edit` adds workspace edits and ordinary read-only commands. The default reviewers are Claude Haiku then Gemini Flash through agy; configure `[review]` or `[[opencode.reviewers]]`. Reviewers off or unable to decide means denial. Both levels deny Code Mode `execute`, subagents and MCP servers other than `csa-parent`, send web fetch/search to review and ignore project OpenCode config. `full` uses `--auto` without gate or sandbox and requires the user's explicit request. See [OpenCode](../../docs/opencode.md) and [Sandbox](../../docs/sandbox.md), including Fence for macOS/Linux.
 
 ## Limits
 

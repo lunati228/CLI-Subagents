@@ -253,6 +253,7 @@ def _login(runtime_config, runtime, account: Account) -> int:
 def cmd_setup(args: argparse.Namespace) -> int:
     code, report = setup.run_setup(
         load_config(), args.host or ["auto"], args.account, dry_run=args.dry_run, claude_route=args.claude_route,
+        sandbox=not args.no_sandbox,
     )
     print()
     print(setup.format_report(report))
@@ -260,7 +261,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 def cmd_update(args: argparse.Namespace) -> int:
-    code, report = setup.run_update(load_config(), args.host or ["auto"], dry_run=args.dry_run, package=not args.no_package)
+    code, report = setup.run_update(load_config(), args.host or ["auto"], dry_run=args.dry_run, package=not args.no_package,
+                                    sandbox=not args.no_sandbox)
     print()
     print(setup.format_report(report, "update"))
     return code
@@ -284,8 +286,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if args.runtime == "codex" and os.name == "nt":
         from cli_subagents.runtimes.codex import windows_sandbox_summary
         print(windows_sandbox_summary(runtime_config))
+    from cli_subagents.sandbox import install as sandbox_install
+
+    sandbox = sandbox_install.status(config.sandbox)
     if args.runtime == "opencode":
-        print("OpenCode has no OS sandbox. Read and edit workers use csa's fixed review rules; shell writes are not OS-confined.")
+        print(sandbox_install.opencode_line(sandbox))
+    print("\n" + "\n".join(sandbox_install.describe(sandbox)))
+    if sandbox["problems"]:
+        problems += 1
+    if args.runtime in ("antigravity", "opencode"):
+        from cli_subagents.runtimes.reviewers import describe_chain
+
+        own = (lambda: (runtime.find_binary(runtime_config) or [], None)) if args.runtime == "antigravity" else None
+        print("Review gate " + "\n".join(describe_chain(runtime_config, own_agy=own)))
     print(f"\nEffective limits ({args.runtime}): when_full={runtime_config.when_full}, usage_ceiling={runtime_config.usage_ceiling}"
           + (f", runtime max_jobs={runtime_config.max_jobs}" if runtime_config.max_jobs else "")
           + (f", global max_jobs={config.max_jobs}" if config.max_jobs else ""))
@@ -563,6 +576,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup_parser.add_argument("--dry-run", action="store_true", help="Print the plan; change nothing (read-only checks still run).")
     setup_parser.add_argument(
+        "--no-sandbox", action="store_true",
+        help="Don't install or check csa's MXC sandbox for workers (Windows; about 540 MB to download once).",
+    )
+    setup_parser.add_argument(
         "--claude-route", choices=("auto", "cli", "settings"), default="auto",
         help="auto: `claude plugin ...`, or settings.json when the claude command is missing or fails. "
         "settings: only declare the plugin in settings.json (Claude Code installs it on its next start).",
@@ -577,6 +594,8 @@ def build_parser() -> argparse.ArgumentParser:
                                help="Host to update; repeat for several (default auto: every host that has the plugin).")
     update_parser.add_argument("--no-package", action="store_true", help="Only update the plugins, not the csa package.")
     update_parser.add_argument("--dry-run", action="store_true", help="Print the plan; change nothing (read-only checks still run).")
+    update_parser.add_argument("--no-sandbox", action="store_true",
+                               help="Don't install, update or check csa's MXC sandbox for workers.")
 
     doctor = sub.add_parser("doctor", help="Check binaries, logins and shared setup.")
     doctor.add_argument("--runtime", default="claude", choices=RUNTIMES)

@@ -92,4 +92,4 @@ Don't edit files inside `~/.cli-subagents/homes/codex/`; they're rebuilt from th
 
 Claude Code, Antigravity and OpenCode subagents started from here get a note listing `~/.codex/AGENTS.md`, the project's `AGENTS.md` and your skill folders. Claude Code also reads a project `AGENTS.md` by itself when the project has no `CLAUDE.md`.
 
-OpenCode uses the user's own OpenCode profile. Omit `model` to keep its configured default; with none set, csa uses `opencode/deepseek-v4.1-flash-free`. An unavailable model fails the job instead of falling back. Free models are for personal projects only. OpenCode has no OS sandbox; see [OpenCode](../../../docs/opencode.md) before choosing it for edits.
+OpenCode uses the user's own OpenCode profile. Omit `model` to keep its configured default; with none set, csa uses `opencode/deepseek-v4.1-flash-free`. An unavailable model fails the job instead of falling back. Free models are for personal projects only. On supported Windows, OpenCode `edit` workers' shell commands run in csa's MXC sandbox; the review gate applies fixed rules, then the reviewer chain. See [OpenCode](../../../docs/opencode.md) before choosing it for edits.

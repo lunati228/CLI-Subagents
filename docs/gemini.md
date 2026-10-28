@@ -122,7 +122,7 @@ The gate is a `PreToolUse` hook in the worker's folder. `agy` calls it before ev
 1. Fixed rules decide the clear cases at once, with no model call.
    - Approved: reads inside the project (`add_dirs` included), ordinary workspace edits in edit jobs, reading the instruction files and skill folders of the session that started the job (so a worker started from Claude Code can read your `CLAUDE.md`), the `csa-parent` tools and plainly read-only commands such as `git status` or `ls`. In edit jobs, sandboxed commands pass unless the rules flag something risky. Edits to instruction files, `settings.json`, `hooks.json`, CI workflows and editor or container configuration go to review unless a deny rule applies.
    - Denied: logins, keys and tokens (`~/.ssh`, `.env`, `*.pem`, credential stores, agent login files), CLI Subagents' own state, edits to `.git` and to agent configuration (`.agents`, `.gemini`, `.claude`, `.codex`), force pushes, publishing and deploying, deletes outside the project, credential tools, and encoded or downloaded code. In read jobs: every edit.
-2. A reviewer judges the rest: a separate model call with no tools that sees the action, a few facts about the job and a written policy, never your task or the conversation. It answers with one JSON object. Anything else, an error or a timeout counts as a denial, and so does any action it rates high or critical risk.
+2. A chain of reviewers judges the rest. Each is a separate model call with no tools that sees the action, a few facts about the job and a written policy, never your task or the conversation, and answers with one JSON object. By default Claude Haiku goes first and Gemini 3.8 Flash (low) through `agy` second. The next reviewer is asked only when one gives no verdict (a limit, a missing login or CLI, an error, a timeout or an answer that isn't the JSON). A denial is final, and so is an approval rated high or critical risk, which counts as a denial. If no reviewer gives a verdict, the action is denied.
 
 A denial goes back to the worker with its reason, and the worker carries on another way. The same action is reviewed once per job; the answer is reused.
 
@@ -148,7 +148,7 @@ The sandbox doesn't protect `.git` or agent settings inside the project. In edit
 
 ### Cost
 
-Reads, ordinary workspace edits, read-only commands and sandboxed commands that pass the fixed rules cost nothing extra. Instruction, settings, CI, hook and editor configuration edits that go to review cost a reviewer call. Each reviewed action costs one `agy --mode plan` call on the same account with the cheapest Gemini model: about 12,000 input tokens (mostly `agy`'s own system prompt) and under 100 output tokens, and about 10 seconds, more when Google's service is slow. With `reviewer = "claude"` it's one Claude Haiku call on the Claude account you name instead. The reviewer normally runs from a bare folder without your MCP servers and user hooks (an extra account's plugins still load there). If an extra account cannot be linked into that folder, csa warns and runs the reviewer from the worker's folder. The gate denies the reviewer every tool in either folder.
+Reads, ordinary workspace edits, read-only commands and sandboxed commands that pass the fixed rules cost nothing extra. Instruction, settings, CI, hook and editor configuration edits that go to review cost a reviewer call. With the default chain, each reviewed action costs one Claude Haiku call on your primary Claude account. Only when Claude gives no verdict does it also cost an `agy --mode plan` call on the job's own account with the cheapest Gemini model: about 12,000 input tokens (mostly `agy`'s own system prompt), under 100 output tokens and about 10 seconds, more when Google's service is slow. The `agy` reviewer normally runs from a bare folder without your MCP servers and user hooks (an extra account's plugins still load there). If an extra account cannot be linked into that folder, csa warns and runs the reviewer from the worker's folder. The gate denies the reviewer every tool in either folder.
 
 ### Watching it
 
@@ -156,7 +156,19 @@ Reads, ordinary workspace edits, read-only commands and sandboxed commands that 
 
 ### Settings
 
-Under `[antigravity]` in `config.toml`: `reviewer` (`"agy"`, `"claude"` or `"off"`), `reviewer_model`, `reviewer_account` (the Claude account for `"claude"`), and `sandbox` (`false` sends every non-read-only command to the reviewer). See [configuration](configuration.md).
+The reviewer chain is shared with the OpenCode gate under `[review]`, or set for this gate alone with `[[antigravity.reviewers]]`. Each entry takes `provider` (`claude`, `antigravity` or `codex`), `model`, `account` and `timeout`. Claude Haiku first with Gemini Flash as the fallback, which is also the default:
+
+```toml
+[[review.reviewers]]
+provider = "claude"
+model = "haiku"
+
+[[review.reviewers]]
+provider = "antigravity"
+model = "gemini-3.8-flash-low"
+```
+
+The older `reviewer` (`"agy"`, `"claude"`, `"codex"` or `"off"`), `reviewer_model` and `reviewer_account` keys under `[antigravity]` still work as a one-entry chain. `sandbox = false` sends every non-read-only command to the reviewers. See [Review gate](configuration.md#review-gate) for the details, including how Codex runs as a reviewer.
 
 ### Limits
 

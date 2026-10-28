@@ -1,7 +1,7 @@
 ---
 # Installed by csa setup/update: Antigravity native relay.
 name: cli-subagents-opencode
-description: "Relay one task to OpenCode v2 (`opencode run`) through csa in an inspectable native thread. Prefer this relay over subagent_start for this runtime. Free models are for personal projects only; OpenCode has no OS sandbox. Begin with optional model=NAME, access=MODE, effort=LEVEL, cwd=PATH, timeout=SECONDS, window=SECONDS (default 60), override=USER_WORDS lines, then the complete task. Options select the external worker; the relay uses the Flash tier."
+description: "Relay one task to OpenCode v2 (`opencode run`) through csa in an inspectable native thread. Prefer this relay over subagent_start for this runtime. Free models are for personal projects only. On supported Windows, OpenCode edit workers' shell commands run in csa's MXC sandbox; the review gate applies fixed rules, then the reviewer chain. Begin with optional model=NAME, access=MODE, effort=LEVEL, cwd=PATH, timeout=SECONDS, window=SECONDS (default 60), override=USER_WORDS lines, then the complete task. Options select the external worker; the relay uses the Flash tier."
 tools: [run_command, command_status, write_to_file]
 mainAgent: false
 subagent: true

@@ -1,12 +1,15 @@
 """Two-way messages between the main session and a running subagent.
 
-Each job folder holds two append-only logs:
+Each job's `channel` folder holds two append-only logs:
 
     outbox.jsonl   worker -> main session: progress notes and questions
     inbox.jsonl    main session -> worker: follow-ups and answers
 
 plus small JSON files that remember which entries each side has already seen,
-so every message is delivered once.
+so every message is delivered once. The channel is the only part of the job
+folder a sandboxed worker can write (its csa-parent tools run inside the
+sandbox); the job's status, spec and review files stay out of its reach.
+Jobs created before the channel folder existed keep their files in the job folder.
 """
 
 from __future__ import annotations
@@ -17,10 +20,22 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cli_subagents.fsutil import file_lock, read_json, write_json
+from cli_subagents.fsutil import file_lock, make_private_dir, read_json, write_json
 from cli_subagents.jobs import job_dir
 
 MAX_TEXT = 20_000
+CHANNEL = "channel"
+LEGACY_FILES = ("inbox.jsonl", "outbox.jsonl")
+
+
+def channel_dir(job_id: str) -> Path:
+    """Where a job's message files live (created on first write)."""
+
+    folder = job_dir(job_id)
+    channel = folder / CHANNEL
+    if not channel.is_dir() and any((folder / name).exists() for name in LEGACY_FILES):
+        return folder
+    return channel
 
 
 def _append(path: Path, record: dict[str, Any]) -> dict[str, Any]:
@@ -45,7 +60,7 @@ def _read(path: Path) -> list[dict[str, Any]]:
 
 
 def _take_unseen(job_id: str, log: str, seen_file: str) -> list[dict[str, Any]]:
-    folder = job_dir(job_id)
+    folder = channel_dir(job_id)
     seen_path = folder / seen_file
     with file_lock(seen_path.with_suffix(".lock")):
         seen = set(read_json(seen_path, []) or [])
@@ -56,7 +71,7 @@ def _take_unseen(job_id: str, log: str, seen_file: str) -> list[dict[str, Any]]:
 
 
 def _mark_seen(job_id: str, seen_file: str, ids: set[str]) -> None:
-    seen_path = job_dir(job_id) / seen_file
+    seen_path = channel_dir(job_id) / seen_file
     with file_lock(seen_path.with_suffix(".lock")):
         seen = set(read_json(seen_path, []) or [])
         if not ids <= seen:
@@ -74,7 +89,7 @@ def _record(kind: str, text: str, **extra: Any) -> dict[str, Any]:
 
 
 def post_from_worker(job_id: str, text: str, kind: str = "message") -> dict[str, Any]:
-    return _append(job_dir(job_id) / "outbox.jsonl", _record(kind, text))
+    return _append(channel_dir(job_id) / "outbox.jsonl", _record(kind, text))
 
 
 def take_for_worker(job_id: str) -> list[dict[str, Any]]:
@@ -106,7 +121,9 @@ def queue_for_worker(job_id: str, text: str, reply_to: str | None = None) -> dic
     with file_lock(folder / "inbox.lock"):
         if (folder / "inbox-closed.json").exists():
             return None
-        with (folder / "inbox.jsonl").open("a", encoding="utf-8") as handle:
+        inbox = channel_dir(job_id) / "inbox.jsonl"
+        make_private_dir(inbox.parent)
+        with inbox.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     return record
 
@@ -114,8 +131,7 @@ def queue_for_worker(job_id: str, text: str, reply_to: str | None = None) -> dic
 def take_for_hook(job_id: str) -> list[dict[str, Any]]:
     """Inbox entries the worker's PostToolUse hook hasn't shown yet (doesn't mark them read)."""
 
-    folder = job_dir(job_id)
-    read = set(read_json(folder / "inbox-read.json", []) or [])
+    read = set(read_json(channel_dir(job_id) / "inbox-read.json", []) or [])
     return [item for item in _take_unseen(job_id, "inbox.jsonl", "inbox-hooked.json") if item.get("id") not in read]
 
 
@@ -125,7 +141,7 @@ def wait_for_reply(job_id: str, question_id: str, timeout: float) -> dict[str, A
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        for record in _read(job_dir(job_id) / "inbox.jsonl"):
+        for record in _read(channel_dir(job_id) / "inbox.jsonl"):
             if record.get("reply_to") == question_id:
                 _mark_seen(job_id, "inbox-read.json", {record["id"]})
                 return record
@@ -137,7 +153,7 @@ def wait_for_reply(job_id: str, question_id: str, timeout: float) -> dict[str, A
 
 
 def post_to_worker(job_id: str, text: str, reply_to: str | None = None) -> dict[str, Any]:
-    return _append(job_dir(job_id) / "inbox.jsonl", _record("answer" if reply_to else "follow_up", text, reply_to=reply_to))
+    return _append(channel_dir(job_id) / "inbox.jsonl", _record("answer" if reply_to else "follow_up", text, reply_to=reply_to))
 
 
 def take_for_host(job_id: str) -> list[dict[str, Any]]:
@@ -147,7 +163,7 @@ def take_for_host(job_id: str) -> list[dict[str, Any]]:
 
 
 def has_new_for_host(job_id: str) -> bool:
-    folder = job_dir(job_id)
+    folder = channel_dir(job_id)
     seen = set(read_json(folder / "outbox-delivered.json", []) or [])
     return any(record.get("id") not in seen for record in _read(folder / "outbox.jsonl"))
 
@@ -155,7 +171,7 @@ def has_new_for_host(job_id: str) -> bool:
 def outbox(job_id: str) -> list[dict[str, Any]]:
     """Every worker message, oldest first."""
 
-    return _read(job_dir(job_id) / "outbox.jsonl")
+    return _read(channel_dir(job_id) / "outbox.jsonl")
 
 
 def answers(job_id: str) -> dict[str, str]:
@@ -163,7 +179,7 @@ def answers(job_id: str) -> dict[str, str]:
 
     return {
         str(record["reply_to"]): str(record.get("text") or "")
-        for record in _read(job_dir(job_id) / "inbox.jsonl")
+        for record in _read(channel_dir(job_id) / "inbox.jsonl")
         if record.get("reply_to")
     }
 
@@ -171,7 +187,7 @@ def answers(job_id: str) -> dict[str, str]:
 def followed(job_id: str) -> set[str]:
     """Outbox entries a `csa follow` already printed (its own cursor, beside the host's)."""
 
-    return set(read_json(job_dir(job_id) / "outbox-followed.json", []) or [])
+    return set(read_json(channel_dir(job_id) / "outbox-followed.json", []) or [])
 
 
 def mark_followed(job_id: str, ids: set[str]) -> None:
@@ -183,6 +199,6 @@ def mark_followed(job_id: str, ids: set[str]) -> None:
 
 
 def open_questions(job_id: str) -> list[dict[str, Any]]:
-    folder = job_dir(job_id)
+    folder = channel_dir(job_id)
     answered = {record.get("reply_to") for record in _read(folder / "inbox.jsonl")}
     return [record for record in _read(folder / "outbox.jsonl") if record.get("kind") == "question" and record["id"] not in answered]

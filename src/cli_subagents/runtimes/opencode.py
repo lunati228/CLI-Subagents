@@ -1,13 +1,17 @@
 """OpenCode v2 workers: private server, JSON events and native user settings.
 
 The primary uses OpenCode's normal XDG directories and configured providers.
-There is no OS sandbox. Read/edit jobs additionally load a generated plugin
-that applies csa's existing fixed review rules and fails closed.
+Read/edit jobs load a generated plugin that applies csa's fixed review rules,
+then the reviewer chain, and fails closed. On supported Windows, individual
+shell commands run in csa's MXC sandbox. OpenCode, its file tools and reviewers
+stay on the host with normal configuration, sessions and logins.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,12 +24,13 @@ from typing import Any
 
 from cli_subagents import mcp_translate, opencode_review
 from cli_subagents.agy_review import write_context
-from cli_subagents.config import Account, RuntimeConfig, home, jobs_dir
+from cli_subagents.config import Account, RuntimeConfig, home, jobs_dir, state_dir
 from cli_subagents.fsutil import make_private_dir, no_window_kwargs, python_executable, write_text
 from cli_subagents.runtimes.base import (
     AUTH, ERROR, PARENT_SERVER, SUCCESS, USAGE_LIMIT, WORKER_TOOLS_NOTE,
     AttemptResult, JobSpec, Launch, clean_environment, parent_server,
 )
+from cli_subagents.runtimes.reviewers import OPENCODE_REVIEW_BUDGET, build_chain
 
 DEFAULT_MODEL = "opencode/deepseek-v4.1-flash-free"
 # Every run starts on this unavailable model. Only csa's plugin switches the
@@ -50,9 +55,19 @@ WORKER_NOTE = (
     "of what you did, the result, and anything left open."
 )
 GATE_NOTE = (
-    " CLI Subagents' fixed review rules approve or deny your tool calls. If denied, don't repeat "
-    "the action; find another way or say what you couldn't do. OpenCode has no OS sandbox."
+    " CLI Subagents' review gate approves or denies your tool calls: fixed rules first, then reviewer "
+    "models for commands and other actions the rules can't settle. If denied, don't repeat "
+    "the action; find another way or say what you couldn't do."
 )
+SANDBOX_GATE_NOTE = (
+    " Your shell commands run in csa's OS sandbox; OpenCode's own file tools use the review gate. "
+    "Fixed-rule builds and tests have no internet access (host loopback is allowed); reviewed "
+    "commands may use egress. Files outside the workspaces and credential stores are not writable."
+)
+# The plugin's backstop for one gate check. The whole reviewer chain for one tool
+# call (a patch touching several reviewed files makes one chain per file) shares
+# OPENCODE_REVIEW_BUDGET (240 s); each reviewer gets an even share of what is left.
+REVIEW_HOOK_SECONDS = 300
 # v2.1.4 prints "opencode v2.1.4"; without the optional "v", \b would skip to "1.4".
 VERSION_RE = re.compile(r"\bv?(\d+)\.\d+(?:\.\d+)?")
 LIMIT_RE = re.compile(r"rate.?limit|usage limit|quota|too many requests|\b429\b", re.IGNORECASE)
@@ -238,6 +253,8 @@ class OpenCodeParser:
 
 class OpenCodeRuntime:
     name = "opencode"
+    # The runner enables the integration; the worker itself remains on the host.
+    sandbox_integration = "opencode"
 
     def __init__(self) -> None:
         self._checked: tuple[tuple[str, ...], str | None] | None = None
@@ -332,23 +349,48 @@ class OpenCodeRuntime:
             rules += [rule(action, "deny") for action in ("edit", "shell", "subagent")]
         return rules
 
-    def _plugin(self, spec: JobSpec, model: str | None, variant: str | None) -> Path:
+    def _plugin(self, config: RuntimeConfig, spec: JobSpec, model: str | None, variant: str | None,
+                warnings: list[str]) -> Path:
         job = jobs_dir() / spec.job_id
         folder = job / "opencode-plugin"
         make_private_dir(folder)
         context: Path | None = None
+        reviewers: list[dict[str, Any]] = []
         if spec.access in ("read", "edit"):
+            # The reviewer chain for what the fixed rules can't settle (default: Claude Haiku, then
+            # Gemini 3.8 Flash through agy on its own account's bare reviewer folder).
+            reviewers = build_chain(config, job, warnings)
             parent = spec.parent or {}
+            # The gate and reviewers are on the host, outside every command grant.
+            records = job
+            command_sandbox = None
+            host_paths: list[str] = []
+            if spec.sandbox:
+                from cli_subagents.sandbox import add_shims, policy
+                env = add_shims(dict(os.environ), job)
+                grants = policy.command_policy([spec.cwd, *spec.add_dirs], env)
+                grants.readonly.append(str(job / "sandbox-bin"))
+                host_paths = policy.host_paths((spec.sandbox_backend or {}).get("command") or [])
+                grants = replace(grants, pinned=policy._unique([*grants.pinned, *host_paths]))
+                command_sandbox = {"backend": spec.sandbox_backend or {"name": "mxc", "command": []},
+                                   "policy": grants.to_dict()}
             context = write_context(job / "review-context.json", {
-                "version": 1, "job": spec.job_id, "access": spec.access, "sandbox": False,
+                "version": 1, "job": spec.job_id, "access": spec.access, "sandbox": bool(spec.sandbox),
+                **({"sandbox_kind": (spec.sandbox_backend or {}).get("name", "mxc"), "sandbox_network": False, "sandbox_mode": "command",
+                    "command_sandbox": command_sandbox, "review_network": "egress"} if spec.sandbox else {}),
                 "workspaces": [spec.cwd, *spec.add_dirs],
                 "read_paths": [*(parent.get("instructions") or []), *(parent.get("skills") or [])],
                 # opencode_review refuses edits to csa's own package (with an editable
                 # install it is the gate's source) but still lets jobs read it.
-                "protected_paths": [str(home())],
+                "protected_paths": [str(home()), *host_paths],
+                "secret_paths": [
+                    str(Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "opencode" / "auth.json"),
+                    str(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode" / "service.json"),
+                ],
                 "agent_home": "", "user_home": str(Path.home()),
-                "trusted_mcp_servers": [PARENT_SERVER], "reviewer": {"kind": "off"},
-                "log": str(job / "review.jsonl"), "cache": str(job / "review-cache.json"),
+                "trusted_mcp_servers": [PARENT_SERVER], "reviewers": reviewers,
+                "review_budget": OPENCODE_REVIEW_BUDGET,
+                "log": str(records / "review.jsonl"), "cache": str(records / "review-cache.json"),
             })
         source = opencode_review.plugin_source(python_executable(), Path(opencode_review.__file__).with_name("__main__.py"),
                                                context, steps=spec.max_turns, model=model, variant=variant,
@@ -356,7 +398,9 @@ class OpenCodeRuntime:
                                                permissions=self._permissions(spec),
                                                # A project or user plugin can't take this id and displace csa's.
                                                plugin_id="cli-subagents.worker." + secrets.token_hex(12),
-                                               guarded=spec.access in ("read", "edit"))
+                                               guarded=spec.access in ("read", "edit"),
+                                               review_seconds=REVIEW_HOOK_SECONDS if reviewers else 10,
+                                               sandbox=bool(spec.sandbox))
         write_text(folder / "package.json", '{"name":"cli-subagents-worker","type":"module","main":"server.js"}\n')
         write_text(folder / "server.js", source)
         return folder
@@ -441,9 +485,10 @@ class OpenCodeRuntime:
             generated["instructions"] = instructions
         if skills:
             generated["skills"] = list(dict.fromkeys(skills))
-        plugin = self._plugin(spec, model, variant)
+        plugin = self._plugin(config, spec, model, variant, warnings)
         generated["plugins"] = [*(generated.get("plugins") or []), str(plugin)]
-        # The gate denies every MCP server but csa-parent, so guarded jobs don't start them.
+        # Guarded jobs don't get the parent's other MCP servers: the gate denies their tools.
+        # Servers from the user's global OpenCode config still start, and are denied the same way.
         servers = {} if guarded else self._parent_servers(config, spec, warnings)
         servers[PARENT_SERVER] = parent_server(spec.job_id)
         translated = mcp_translate.to_opencode(servers)
@@ -466,9 +511,9 @@ class OpenCodeRuntime:
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps(generated, ensure_ascii=False)
         env["CLI_SUBAGENTS_DEPTH"] = str(spec.depth)
         env["CLI_SUBAGENTS_JOB_ID"] = spec.job_id
-        note = WORKER_NOTE + WORKER_TOOLS_NOTE + (GATE_NOTE if spec.access in ("read", "edit") else "") + "]\n\n"
-        # Parent instruction files and skills arrive through config `instructions`
-        # and `skills`; a "read these first" note would point at paths outside the scope.
+        gate_note = (SANDBOX_GATE_NOTE if spec.sandbox else GATE_NOTE) if spec.access in ("read", "edit") else ""
+        note = WORKER_NOTE + WORKER_TOOLS_NOTE + gate_note + "]\n\n"
+        # OpenCode keeps its normal state and logins. Only shell invocations are wrapped.
         return Launch(argv=argv, env=env, stdin=note + prompt, session_id=spec.resume_session, warnings=warnings)
 
     @staticmethod

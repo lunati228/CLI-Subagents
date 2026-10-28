@@ -48,22 +48,56 @@ csa runs `opencode run --format json --standalone`, sends the task on stdin and 
 | Access | Protection |
 |---|---|
 | `read` | Reads files, lists folders and searches (glob, grep) inside the project and any extra directories, except where a search could reach secrets files (see below). No edits, shell commands or subagents. |
-| `edit` | Adds file edits inside the project and plainly read-only shell commands such as `git status` or `git diff`. Commands that change anything, including `npm test` and builds, are denied until OpenCode workers get a reviewer model or an OS sandbox. |
+| `edit` | Adds file edits inside the project and plainly read-only shell commands such as `git status` or `git diff`. Ordinary builds and tests inside the sandbox can pass the fixed rules. Other commands go to the [reviewer](#reviewer). |
 | `full` | Passes `--auto` and omits csa's review gate. Use it only when the user explicitly requests full access. |
 
-In `read` and `edit` jobs the gate also denies web fetch and web search, Code Mode `execute`, subagents and every MCP server except csa's own `csa-parent` channel. csa doesn't start the parent's other MCP servers for these jobs. It also turns off OpenCode's project config (`opencode.json` and `.opencode/` in the project and its parent folders), formatters and language servers, because those run project code outside the gate. Writes to `opencode.json`, `opencode.jsonc` and `.opencode/` are always denied, and so are edits to csa's own package. Your global OpenCode config still applies. Turning off project config also stops OpenCode from finding `AGENTS.md` and project skills, so csa lists them itself: every `AGENTS.md` from the working folder up to the repository root (or up to your home folder when the project is inside it), and the `.claude/skills` and `.agents/skills` folders in the working folder and its parents.
+In `read` and `edit` jobs the gate always denies Code Mode `execute`, subagents, every MCP server except csa's own `csa-parent` channel, and any tool it has no rule for. Web fetch and web search go to the reviewer. csa doesn't start the parent session's other MCP servers for these jobs. It also turns off OpenCode's project config (`opencode.json` and `.opencode/` in the project and its parent folders), formatters and language servers, because those run project code outside the gate. Writes to `opencode.json`, `opencode.jsonc` and `.opencode/` are always denied, and so are edits to csa's own package. Your global OpenCode config still applies. Turning off project config also stops OpenCode from finding `AGENTS.md` and project skills, so csa lists them itself: every `AGENTS.md` from the working folder up to the repository root (or up to your home folder when the project is inside it), and the `.claude/skills` and `.agents/skills` folders in the working folder and its parents.
 
 A grep over a folder is refused when any file it would search could hold secrets, such as `.env`, `*.pem` or `credentials.json` (`.git` and `node_modules` are skipped, and searches over more than 5,000 files are refused). OpenCode's grep reads hidden files and doesn't check each matching file, so csa checks first. Narrow the search with an `include` glob such as `*.py`, or search one file.
 
-OpenCode has no OS sandbox. Its permissions and csa's review gate run inside the worker process. The gate uses the same fixed rules as csa's Antigravity gate through a per-job `tool.execute.before` plugin. Actions the fixed rules cannot settle are denied. A separate reviewer model is not wired up for OpenCode in this version.
+On supported Windows, OpenCode `edit` workers' shell commands run in csa's [MXC sandbox](sandbox.md). The review gate applies fixed rules, then the reviewer chain, through a per-job `tool.execute.before` plugin. Its permissions and csa's gate run inside the worker process.
 
-The gate fails closed. OpenCode only logs a plugin that fails to load and keeps going, so csa's plugin registers the gate before it moves the session off the placeholder model. A job whose plugin didn't load or didn't finish setup ends with "the plugin did not load" and never reaches a model. A gate check that errors denies that tool call.
+The gate fails closed. OpenCode only logs a plugin that fails to load and keeps going, so csa's plugin registers the gate before it moves the session off the placeholder model. A job whose plugin didn't load or didn't finish setup ends with "the plugin did not load" and never reaches a model. A gate check that errors or runs past its time limit denies that tool call.
+
+## Reviewer
+
+Each reviewer is one model call with no tools. It gets the action, a few facts about the job (access level, platform, workspace folders, whether commands run in an OS sandbox, and why the fixed rules sent the action on) and the written policy shared with the Antigravity gate. It never sees your task or the conversation, and it must answer with a single JSON object.
+
+The reviewers form a chain, shared with the Antigravity gate. By default Claude Haiku goes first, then Gemini 3.8 Flash (low) through `agy` on your primary Antigravity account. csa asks the next reviewer only when one gives no verdict: a usage limit, a missing login, CLI or account, an error, a timeout or an answer that isn't the JSON. A denial is final, and so is an approval rated high or critical risk, which counts as a denial. When no reviewer gives a verdict, the call is denied, and the reason goes back to the worker. The whole chain for one tool call gets 240 seconds, split evenly, and each reviewer gets at most 75. Each distinct action is reviewed once per job and later repeats reuse the answer. `review.jsonl` in the job folder records every decision and which reviewer made it.
+
+If a default reviewer's CLI isn't installed or set up, it is left out quietly; `csa doctor --runtime opencode` lists it as skipped. The defaults written out, as you'd put them in `~/.cli-subagents/config.toml`:
+
+```toml
+[[review.reviewers]]          # both gates; [[opencode.reviewers]] for this gate alone
+provider = "claude"           # "claude", "antigravity" or "codex"
+model = "haiku"
+
+[[review.reviewers]]
+provider = "antigravity"
+model = "gemini-3.8-flash-low"
+```
+
+`reviewers = []` under `[opencode]` turns the reviewers off: only the fixed rules decide, including the rule for ordinary builds and tests in sandboxed `edit` jobs. Everything the rules would send to a reviewer is denied. The older `reviewer`, `reviewer_model` and `reviewer_account` keys still work as a one-entry chain. See [Review gate](configuration.md#review-gate) for all keys and for what each provider runs, including Codex.
+
+OpenCode can't be a reviewer. Its terms let it use unpaid-account content, reviewer calls would eat into the same per-IP daily free limit as the worker, and the worker's own model would be judging its actions. Claude goes first because a `claude -p` call without tools can't act at all, needs no prepared folder, and uses the CLI that most csa setups already run as their host. The `agy` reviewer needs Antigravity installed and logged in with a keyring login, and runs from csa's bare reviewer folder, whose gate denies it every tool.
+
+The reviewer judges a command by its text. It sees `npm test` or `python -m pytest`, not the test files the worker may have just written, so an approved test run can execute whatever code the worker put in the project. Without an OS sandbox nothing confines that code; see [Sandbox](#sandbox).
+
+The reviewer sees each reviewed command, file path and web request, plus the workspace paths. OpenCode jobs are for personal projects only. Check that your vendor rules allow sending that to each provider in your chain: Anthropic and Google by default, OpenAI with Codex. Each reviewed action usually costs one short Haiku call from your Claude plan, plus a Gemini call when Claude gives no verdict. Reads, workspace edits and read-only commands cost nothing extra.
+
+### When commands run in a sandbox
+
+When csa contains shell commands, the review context says `"sandbox": true`, `"sandbox_mode": "command"` and `"sandbox_network": false`. In `edit` jobs, ordinary build and test commands then pass without a reviewer call: `npm test`, `npm run build` and `pnpm`, `yarn` or `bun` scripts named test, build, lint, check, typecheck or compile (with suffixes such as `test:unit`), `pytest`, `python -m pytest` or `unittest`, `cargo build`, `test` or `check`, `go build`, `test` or `vet`, `make` with build or test targets, `mvn` compile, test, package and verify goals, `tsc`, `eslint` and similar tools. The command must be a single program run in the workspace, without chaining, pipes, redirection, variables or wildcards. Every operand must stay inside the workspace and clear of secrets files, option values must be plain words (paths go in separate arguments), and options that run other programs or load code or config (`-exec`, `--config`, `-p`, `--require`, `-f` and the like) disqualify it. So does a program file with the same name in the working folder. `gradle` and `dotnet` always go to the reviewer, because a sandboxed run can hand its work to a build daemon or compiler server that an earlier unsandboxed run left running.
+
+Everything else follows the same rules as without a sandbox: `git push`, package installs, `npx`, secret reads and writes outside the workspace stay with the fixed rules and the reviewer. The reviewer is told that commands run sandboxed. Without the flag, build and test commands go to the reviewer as well.
+
+Auto-approved commands use loopback-only networking. The OS blocks internet and LAN egress even when project test code tries to send data. Explicit transfers and package installs need review; approved reviewed commands get egress. Every command keeps the same workspace write limits. The gate, cache, log and reviewer calls stay outside the command container.
 
 ## Sandbox
 
-On macOS and Linux, install [Fence](https://github.com/fencesandbox/fence) and its OpenCode plugin, [`@fencesandbox/opencode-fence`](https://www.npmjs.com/package/@fencesandbox/opencode-fence), following Fence's own install and configuration docs. Fence is Apache-2.0 licensed and adds OS restrictions for shell commands, including write restrictions and a network allowlist. csa does not install or configure it for you.
+On native Windows, csa wraps each shell invocation through `shell.create.before`, including direct shell routes. OpenCode, file tools and reviewers stay outside with normal state and provider logins. File tools rely on the gate's path checks. Read jobs cannot run commands and get no OS containment for file reads. Commands run with PowerShell, since Git Bash cannot start in MXC. Each command's descendants end with that command, its timeout or the death of its parent shell. `full` jobs omit the gate and sandbox; `[sandbox] enabled = false` turns command containment off. See [Sandbox](sandbox.md) for the layers, limits and configuration.
 
-On native Windows, no OpenCode sandbox is available in this integration yet. csa's review gate is the protection for `read` and `edit` jobs. Fence requires Linux or macOS; on Windows that means running inside WSL. A native Windows sandbox remains future work.
+On macOS and Linux, csa has no sandbox yet. Install [Fence](https://github.com/fencesandbox/fence) and its OpenCode plugin, [`@fencesandbox/opencode-fence`](https://www.npmjs.com/package/@fencesandbox/opencode-fence), following Fence's own install and configuration docs. Fence is Apache-2.0 licensed and adds OS restrictions for shell commands, including write restrictions and a network allowlist. csa does not install or configure it for you. Fence requires Linux or macOS; on Windows that means running inside WSL.
 
 ## Free-model limits and data terms
 
@@ -90,4 +124,4 @@ The free DeepSeek offer is temporary, with no published end date. Its daily cap 
 
 csa passes the parent's instruction files and skill folders through generated `OPENCODE_CONFIG_CONTENT`, and the parent's MCP servers too for `full` jobs. The `csa-parent` server has `codemode: false`, so `message_parent`, `ask_parent` and `check_parent_messages` stay visible as individual tools. This does not translate the parent's plugins into OpenCode plugins.
 
-This version uses one primary OpenCode profile, supports session follow-ups and retries clear model-capacity failures with csa's usual retry schedule. It does not support OpenCode v1, separate keyed account folders, a reviewer model or OpenCode as a host. Before relying on an installed OpenCode version, check a small personal-project job, a denied tool call, parent messaging and a follow-up session.
+This version uses one primary OpenCode profile, supports session follow-ups and retries clear model-capacity failures with csa's usual retry schedule. It does not support OpenCode v1, separate keyed account folders or OpenCode as a host. Before relying on an installed OpenCode version, check a small personal-project job, a denied tool call, parent messaging and a follow-up session.

@@ -3,8 +3,9 @@
 Headless agy can't ask anyone for permission, so actions that need a yes are
 refused and the run often ends with an empty answer. This package is a
 PreToolUse hook that answers instead: fixed rules approve the routine actions and
-deny the forbidden ones, and a tool-less model call (agy or Claude) judges the
-rest against a written policy. It fails closed.
+deny the forbidden ones, and a chain of tool-less model calls (Claude, agy or
+Codex, the next only when one gives no verdict) judges the rest against a
+written policy. It fails closed.
 
 The package has no dependencies outside the standard library and no imports from
 the rest of CLI Subagents, so it can be published on its own later.

@@ -36,4 +36,4 @@ Never edit files inside `~/.cli-subagents/homes/`; those account folders are lin
 
 A Codex, Antigravity or OpenCode subagent started from here gets a note listing `~/.claude/CLAUDE.md`, the project's `CLAUDE.md` and `.claude/rules`, and your skill folders, and reads them first. Mention anything else it needs in the task.
 
-OpenCode uses the user's OpenCode profile and is available when csa finds the v2 binary. Omit `model` to keep its configured default. Free models are for personal projects only, and OpenCode has no OS sandbox. See [OpenCode](../../../docs/opencode.md) for access levels and data terms.
+OpenCode uses the user's OpenCode profile and is available when csa finds the v2 binary. Omit `model` to keep its configured default. Free models are for personal projects only. On supported Windows, OpenCode `edit` workers' shell commands run in csa's MXC sandbox; the review gate applies fixed rules, then the reviewer chain. See [OpenCode](../../../docs/opencode.md) for access levels and data terms.

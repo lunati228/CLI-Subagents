@@ -7,14 +7,19 @@ environment. Keys:
     version              1
     access               "read" or "edit"
     sandbox              true when agy runs with --sandbox
+    review_network       optional network class a reviewed command gets if approved
+    secret_paths         extra login/service credential paths (including custom XDG locations)
     workspaces           folders the job works in (reads and edits allowed)
     read_paths           extra files and folders it may read (instruction files, skills)
     protected_paths      folders it may never touch (beyond the built-in list)
     agent_home           the HOME agy runs with
     user_home            the user's real home folder
     trusted_mcp_servers  MCP servers whose tools need no review
-    reviewer             {"kind": "agy"|"claude"|"off", "command": [...], "model": ..., "env": {...},
-                          "unset_env": [...], "timeout": 75, "work_dir": ...}
+    reviewers            the review chain, tried in order: [{"kind": "agy"|"claude"|"codex", "command": [...],
+                          "args": [...], "model": ..., "account": ..., "env": {...}, "unset_env": [...],
+                          "timeout": 75, "work_dir": ...}, ...]; empty = no reviewer
+    reviewer             the older one-reviewer form ({"kind": "off"} or one entry), used without `reviewers`
+    review_budget        seconds the whole chain may take for one check (default 80, inside agy's 90 s hook limit)
     log, cache           files for the decision log and the decision cache
 """
 
@@ -27,6 +32,7 @@ from typing import Any
 VERSION = 1
 MAX_BYTES = 256 * 1024
 ACCESS = ("read", "edit")
+KINDS = ("agy", "claude", "codex")
 
 
 class ContextError(Exception):
@@ -48,15 +54,28 @@ def validate(data: Any) -> dict[str, Any]:
         raise ContextError("access must be read or edit")
     if not _strings(data.get("workspaces"), "workspaces"):
         raise ContextError("workspaces is empty")
-    for key in ("read_paths", "protected_paths", "trusted_mcp_servers"):
+    for key in ("read_paths", "protected_paths", "secret_paths", "trusted_mcp_servers"):
         _strings(data.get(key), key)
     reviewer = data.get("reviewer") or {"kind": "off"}
-    if not isinstance(reviewer, dict) or reviewer.get("kind") not in ("agy", "claude", "off"):
-        raise ContextError("reviewer.kind must be agy, claude or off")
-    _strings(reviewer.get("command"), "reviewer.command")
-    if not isinstance(reviewer.get("env") or {}, dict):
-        raise ContextError("reviewer.env must be an object")
-    return {**data, "reviewer": reviewer}
+    if "reviewers" in data:
+        chain = data["reviewers"]
+        if not isinstance(chain, list):
+            raise ContextError("reviewers must be a list")
+    else:  # the one-reviewer form
+        chain = [reviewer] if isinstance(reviewer, dict) and reviewer.get("kind") != "off" else []
+    for item in [reviewer, *chain]:
+        if not isinstance(item, dict) or item.get("kind") not in (*KINDS, "off"):
+            raise ContextError("reviewer.kind must be agy, claude, codex or off")
+        _strings(item.get("command"), "reviewer.command")
+        _strings(item.get("args"), "reviewer.args")
+        if not isinstance(item.get("env") or {}, dict):
+            raise ContextError("reviewer.env must be an object")
+    if any(item.get("kind") == "off" for item in chain):
+        raise ContextError("reviewers can't contain kind off; use an empty list")
+    budget = data.get("review_budget")
+    if budget is not None and (not isinstance(budget, (int, float)) or isinstance(budget, bool) or budget <= 0):
+        raise ContextError("review_budget must be a positive number of seconds")
+    return {**data, "reviewer": reviewer, "reviewers": chain}
 
 
 def load_context(path: Path) -> dict[str, Any]:

@@ -1,7 +1,14 @@
-"""OpenCode v2's tool hook backed by the existing review gate's fixed rules.
+"""OpenCode v2's tool hook backed by the review gate shared with Antigravity.
 
-No reviewer model is started here. Actions the fixed rules cannot approve are
-denied, including arbitrary shell writes and untrusted MCP calls.
+Each tool call is translated into the gate's tool vocabulary and judged by the
+same fixed rules. What they can't settle goes to the job's reviewer chain
+(agy_review.reviewer: tool-less model calls, strict JSON back, the next reviewer
+only when one gives no verdict). With no reviewer configured, or when every
+reviewer fails, times out or answers anything but valid JSON, the call is denied.
+
+When csa contains shell commands in an OS sandbox (`"sandbox": true` in the context),
+ordinary build and test commands inside the workspace pass without a reviewer
+call (see build.py). Everything else follows the same rules either way.
 """
 
 from __future__ import annotations
@@ -11,11 +18,13 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Any
+import time
+from typing import Any, Callable
 
-from cli_subagents.agy_review import hook, paths
+from cli_subagents.agy_review import hook, paths, rules
 from cli_subagents.agy_review.context import load_context
 from cli_subagents.agy_review import store
+from cli_subagents.opencode_review import build
 
 
 def _call(name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -26,9 +35,18 @@ class Denied(Exception):
     """A tool call the OpenCode translation itself refuses, with the reason shown to the model."""
 
 
+# Tools that stay denied even with a reviewer: Code Mode runs code that calls
+# other tools, and subagents start sessions of their own.
+DENIED_TOOLS = {
+    "execute": "Code Mode `execute` runs code the gate can't see",
+    "subagent": "csa workers can't start subagents",
+    "task": "csa workers can't start subagents",
+}
+
 # csa's own package. With an editable install this is the gate's source, so
 # edits there are refused; reading it stays allowed.
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
+IMPORT_ROOT = PACKAGE_DIR.parent  # a sibling stdlib-name module could shadow imports in the host helper
 # OpenCode's grep runs `rg --hidden` over a folder and returns matching lines
 # without checking read permission per file (v2.1.4 core/src/ripgrep.ts,
 # tool/plugin/grep.ts). Folder searches are walked first and refused when a
@@ -65,6 +83,9 @@ def _check_folder_grep(folder: Path, include: str | None, context: dict[str, Any
                              "check for secrets. Narrow it with `path` or an `include` glob such as \"*.py\".")
             full = os.path.join(root, name)
             reason = paths.secret_reason(full, homes, trusted=str(folder))
+            if reason is None and any(paths.inside(paths.resolve(full), paths.resolve(str(secret)))
+                                      for secret in context.get("secret_paths") or []):
+                reason = "an agent login or service credential"
             if reason:
                 relative = os.path.relpath(full, folder)
                 raise Denied(f"CLI Subagents review: this search would also read {relative} ({reason}). Narrow it with "
@@ -120,9 +141,11 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
         raise ValueError("tool input must be an object")
     base = str((context.get("workspaces") or [os.getcwd()])[0])
     path = args.get("path") or args.get("filePath")
+    if name in DENIED_TOOLS:
+        raise Denied(f"CLI Subagents review: denied, {DENIED_TOOLS[name]}.")
     if name in ("shell", "bash"):
         if context.get("access") == "read":
-            return [_call("opencode_read_job_shell_denied", args)]
+            raise Denied("CLI Subagents review: denied, read-only jobs can't run shell commands.")
         return [_call("run_command", {"CommandLine": args.get("command"), "Cwd": args.get("workdir") or args.get("cwd") or base})]
     if name == "read":
         if not isinstance(path, str) or not path.strip():
@@ -148,23 +171,65 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
             _check_folder_grep(target, include if isinstance(include, str) and include.strip() else None, context)
             return [_call("find_by_name", {**args, "SearchDirectory": str(target)})]
         return [_call("grep_search", {**args, "SearchPath": str(target)})]
-    if name in ("edit", "write"):
-        return [_call("write_to_file", {"TargetFile": str(path or "")})]
+    if name in ("edit", "write", "multiedit"):
+        if not isinstance(path, str) or not path.strip():
+            raise Denied("CLI Subagents review: denied, this edit names no file.")
+        return [_call("write_to_file", {"TargetFile": path})]
     if name in ("patch", "apply_patch"):
         targets = patch_targets(str(args.get("patchText") or args.get("patch") or ""))
         if targets is None:
-            return [_call("opencode_patch_with_unusual_line_breaks", {})]
-        return [_call("write_to_file", {"TargetFile": value}) for value in targets] or [_call("opencode_unparsed_patch", args)]
+            raise Denied("CLI Subagents review: denied, this patch has unusual line breaks, so the files it changes "
+                         "can't be read reliably. Use plain \\n or \\r\\n line breaks.")
+        if not targets:
+            raise Denied("CLI Subagents review: denied, this patch names no file to change.")
+        return [_call("write_to_file", {"TargetFile": value}) for value in targets]
     if name in ("todo", "todoread", "todowrite", "skill", "question"):
         return [_call("manage_task" if name != "question" else "ask_question", args)]
     # v2 sanitizes the server namespace, then joins it to the tool with '_'.
     prefix = "csa-parent_"
     if name.startswith(prefix) and name[len(prefix):] in ("message_parent", "ask_parent", "check_parent_messages"):
         return [_call("call_mcp_tool", {"ServerName": "csa-parent", "ToolName": name[len(prefix):], "Arguments": args})]
-    return [_call("opencode_" + name, args)]
+    # Web access goes to the reviewer, as in the Antigravity gate.
+    if name == "webfetch":
+        return [_call("read_url_content", {"Url": args.get("url"), "Format": args.get("format")})]
+    if name == "websearch":
+        return [_call("opencode_websearch", args)]
+    # Anything else (MCP tools from the user's global config, tools a later OpenCode adds)
+    # is denied: the shared rules would only check it for secret paths before the reviewer.
+    raise Denied(f"CLI Subagents review: denied, the gate has no rule for the tool {name or '(unnamed)'}.")
 
 
-def run(raw: bytes, context_path: Path) -> dict[str, Any]:
+def decide(tool_call: dict[str, Any], payload: dict[str, Any], context: dict[str, Any]) -> rules.Verdict:
+    """The shared fixed rules, plus ordinary build and test commands when the job runs sandboxed.
+
+    The shared rules never see the sandbox flag: their sandbox branch is written for
+    agy's sandbox (no network, BypassSandbox to leave it) and passes any command the
+    rules don't flag. The reviewer still learns that commands run in a sandbox,
+    because hook.evaluate builds its request from the full context.
+    """
+
+    rule_context = {**context, "sandbox": False}
+    verdict = rules.decide(tool_call, payload, rule_context)
+    if (verdict.action != "review" or tool_call.get("name") != "run_command" or context.get("sandbox") is not True
+            or context.get("access") != "edit"):
+        return verdict
+    args = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
+    scope = rules.Scope(rule_context, payload)
+    cwd, cwd_secret = scope.check(str(args.get("Cwd") or scope.base))
+    if cwd_secret or not scope.writable(cwd):
+        return verdict
+
+    def path_ok(value: str) -> bool:
+        resolved, secret = scope.check(value, base=cwd)
+        return secret is None and scope.writable(resolved)
+
+    if build.build_or_test(str(args.get("CommandLine") or ""), cwd=cwd, path_ok=path_ok,
+                           sandbox_network=context.get("sandbox_network") is not False):
+        return rules.approve("an ordinary build or test command inside the workspace, run in an OS sandbox")
+    return verdict
+
+
+def run(raw: bytes, context_path: Path, *, on_record: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Evaluate a v2 hook input; malformed input/context always denies the call."""
 
     try:
@@ -174,9 +239,7 @@ def run(raw: bytes, context_path: Path) -> dict[str, Any]:
         if not isinstance(event, dict):
             raise ValueError("hook input must be an object")
         context = load_context(context_path)
-        # The first version never starts a reviewer, regardless of file contents.
-        context["reviewer"] = {"kind": "off"}
-        answer: dict[str, Any] = {"decision": "auto_approve"}
+        answer: dict[str, Any] = {"decision": "deny", "reason": "CLI Subagents review: denied, nothing to check."}
         try:
             payloads = translate(event, context)
         except Denied as exc:
@@ -187,10 +250,17 @@ def run(raw: bytes, context_path: Path) -> dict[str, Any]:
             if call["name"] == "write_to_file":
                 target = Path(str(call["args"].get("TargetFile") or ""))
                 target = (target if target.is_absolute() else base / target).resolve()
-                if target == PACKAGE_DIR or PACKAGE_DIR in target.parents:
+                if not any(target == Path(root).resolve() or Path(root).resolve() in target.parents
+                           for root in context["workspaces"]):
+                    return {"decision": "deny", "reason": "CLI Subagents review: writes outside the workspaces are denied."}
+                if target == IMPORT_ROOT or IMPORT_ROOT in target.parents:
                     return {"decision": "deny", "reason": "CLI Subagents review: edits to csa's own package are not allowed."}
+        # One time budget for every reviewer call of this tool call (a patch can need several).
+        context["_deadline"] = time.monotonic() + float(context.get("review_budget") or hook.DEFAULT_BUDGET)
         for payload in payloads:
-            answer, record = hook.evaluate(payload, context)
+            answer, record = hook.evaluate(payload, context, decide=decide)
+            if on_record is not None:
+                on_record(record)
             if context.get("log"):
                 store.log_append(Path(context["log"]), record)
             if answer.get("decision") != "auto_approve":
@@ -204,11 +274,16 @@ def plugin_source(python: str, script: Path, context: Path | None, *, steps: int
                   model: str | None = None, variant: str | None = None,
                   fallback: str = "opencode/deepseek-v4.1-flash-free", restricted: tuple[str, ...] = (),
                   permissions: list[dict[str, str]] | None = None, plugin_id: str = "cli-subagents.worker",
-                  guarded: bool = True) -> str:
+                  guarded: bool = True, review_seconds: int = 10, sandbox: bool = False) -> str:
     """A native v2 Promise plugin (OpenCode v2.1.4 `packages/plugin/src/promise`).
 
     v2 configured local plugins must be directories; the caller writes this as
     server.js beside a package.json with type=module. No npm dependency is needed.
+
+    The review call runs as a child process without blocking OpenCode's event
+    loop, since a reviewer model call can take over a minute. `review_seconds`
+    must cover the reviewer's own timeout; the plugin kills the check after it
+    and denies the call.
 
     Fail-closed order: the review hook (read/edit) and the model guard are
     registered before the prompt hook that moves the session off csa's
@@ -223,10 +298,38 @@ def plugin_source(python: str, script: Path, context: Path | None, *, steps: int
     settings = json.dumps({"python": python, "script": str(script), "context": str(context) if context else None,
                            "steps": steps, "model": model, "variant": variant, "fallback": fallback,
                            "restricted": list(restricted), "permissions": permissions or [],
-                           "id": plugin_id, "guarded": guarded}, ensure_ascii=False)
+                           "id": plugin_id, "guarded": guarded, "reviewMs": max(1, int(review_seconds)) * 1000,
+                           "sandbox": sandbox,
+                           "sandboxScript": str(Path(__file__).resolve().parents[1] / "sandbox" / "integrations" / "opencode.py")},
+                          ensure_ascii=False)
     return '''// Generated per job by CLI Subagents for OpenCode v2.
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 const settings = SETTINGS;
+// The gate check: csa's Python hook reads the call on stdin and prints its decision.
+const check = (input, script = settings.script) => new Promise((resolve, reject) => {
+  const windows = process.platform === "win32";
+  // Its own process group on POSIX, so a timeout also stops the reviewer it started.
+  const child = spawn(settings.python, ["-I", script, settings.context],
+                      { stdio: ["pipe", "pipe", "ignore"], windowsHide: true, detached: !windows });
+  let out = "";
+  const killTree = () => {
+    try {
+      // cmd resolves csa's taskkill.cmd stand-in first on PATH inside MXC.
+      if (windows) spawn("cmd", ["/d", "/s", "/c", "taskkill", "/PID", String(child.pid), "/T", "/F"],
+                         { stdio: "ignore", windowsHide: true })
+        .on("error", () => child.kill());
+      else process.kill(-child.pid, "SIGKILL");
+    } catch (error) { child.kill(); }
+  };
+  const stop = error => { clearTimeout(timer); if (child.pid) killTree(); reject(error); };
+  const timer = setTimeout(() => stop(new Error("timeout")), settings.reviewMs);
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", chunk => { out += chunk; if (out.length > 65536) stop(new Error("too much output")); });
+  child.on("error", stop);
+  child.on("close", code => { clearTimeout(timer); code === 0 ? resolve(out) : reject(new Error(`exit ${code}`)); });
+  child.stdin.on("error", () => {});
+  child.stdin.end(input);
+});
 const parse = value => {
   const match = /^([^/#]+)\\/([^#]+)$/.exec(value);
   if (!match) throw new Error("CLI Subagents: OpenCode models are written provider/model.");
@@ -240,19 +343,18 @@ export default {
   async setup(ctx) {
     // A thrown Error rejects only this tool call (Tool.Error).
     if (settings.context) await ctx.tool.hook("execute.before", async event => {
+      // The shell hook authorizes the actual invocation, including non-tool shell routes.
+      if (settings.sandbox && ["shell", "bash"].includes(event.tool)) return;
       let answer;
       try {
-        const raw = execFileSync(settings.python, [settings.script, settings.context], {
-          input: JSON.stringify({ tool: event.tool, input: event.input }),
-          encoding: "utf8", timeout: 10000, maxBuffer: 65536, windowsHide: true
-        });
-        answer = JSON.parse(raw);
+        answer = JSON.parse(await check(JSON.stringify({ tool: event.tool, input: event.input })));
       } catch (error) {
         throw new Error("CLI Subagents review failed closed; this tool call was denied.");
       }
-      if (answer.decision !== "auto_approve")
-        throw new Error(answer.reason || "CLI Subagents review denied this tool call.");
+      if (!answer || answer.decision !== "auto_approve")
+        throw new Error((answer && answer.reason) || "CLI Subagents review denied this tool call.");
     });
+    SANDBOX_HOOK
     let selected;
     let main;
     // csa picked the model only when the job or csa's config named it.
@@ -309,4 +411,10 @@ export default {
     });
   }
 };
-'''.replace("SETTINGS", settings)
+'''.replace("SETTINGS", settings).replace("SANDBOX_HOOK", _sandbox_hook())
+
+
+def _sandbox_hook() -> str:
+    from cli_subagents.sandbox.integrations.opencode import hook_source
+
+    return hook_source()

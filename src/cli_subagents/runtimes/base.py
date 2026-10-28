@@ -53,7 +53,7 @@ def parent_server(job_id: str) -> dict[str, Any]:
     package_root = str(Path(__file__).resolve().parents[2])
     return {
         "command": sys.executable,
-        "args": ["-m", "cli_subagents", "mcp", "--worker", job_id],
+        "args": ["-I", str(Path(package_root) / "cli_subagents" / "__main__.py"), "mcp", "--worker", job_id],
         "env": {"PYTHONPATH": package_root, "CLI_SUBAGENTS_HOME": str(home())},
     }
 
@@ -101,6 +101,8 @@ class JobSpec:
     created: float = 0.0
     override: str | None = None  # user's words authorizing this start to exceed csa's caps
     max_budget_usd: float | None = None  # internal: granted per-attempt reservation, never caller-controlled
+    sandbox: bool = False  # internal: shell commands use csa's sandbox (set by the runner)
+    sandbox_backend: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -118,6 +120,7 @@ class Launch:
     stdin: str
     session_id: str | None
     warnings: list[str] = field(default_factory=list)
+
 
 
 @dataclass

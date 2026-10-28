@@ -43,9 +43,13 @@ class SetupBase(unittest.TestCase):
         self._primary = patch("cli_subagents.config.default_primary", side_effect=lambda runtime:
                               self.agy_dir if runtime == "antigravity" else default_primary(runtime))
         self._primary.start()
+        # The real sandbox install downloads about 540 MB; tests/test_sandbox_install.py covers it with a fake release.
+        self._sandbox = patch("cli_subagents.sandbox.install.state", return_value=("off", "turned off in these tests"))
+        self._sandbox.start()
         os.environ.pop("FAKE_HOST_FAIL", None)
 
     def tearDown(self):
+        self._sandbox.stop()
         self._primary.stop()
         self._env.stop()
         self._temp.cleanup()

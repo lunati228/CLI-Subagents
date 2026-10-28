@@ -514,8 +514,22 @@ def _check_csa_on_path(report: Report) -> None:
     )
 
 
+def ensure_sandbox(config: Config, report: Report, sandbox: bool = True) -> None:
+    """Install or check csa's MXC sandbox (Windows); an unexpected error never hides the rest of the report."""
+
+    if not sandbox:
+        report.notes.append("Sandbox: skipped (--no-sandbox); csa's MXC sandbox wasn't installed or checked.")
+        return
+    from cli_subagents.sandbox import install
+
+    try:
+        install.ensure(config.sandbox, report, dry_run=report.dry_run)
+    except Exception as exc:
+        report.failed.append(f"Sandbox: the install stopped with an unexpected error: {type(exc).__name__}: {exc}")
+
+
 def run_setup(config: Config, hosts: list[str], accounts: list[str], dry_run: bool = False,
-              claude_route: str = "auto") -> tuple[int, Report]:
+              claude_route: str = "auto", sandbox: bool = True) -> tuple[int, Report]:
     report = Report(dry_run=dry_run)
     if not hosts or "auto" in hosts:
         detected = detect_hosts(config)
@@ -529,6 +543,7 @@ def run_setup(config: Config, hosts: list[str], accounts: list[str], dry_run: bo
         install_plugin(config, host, report, claude_route)
         _check_primary_login(config, host, report)
     setup_accounts(config, accounts, report)
+    ensure_sandbox(config, report, sandbox)
     _check_csa_on_path(report)
     if "antigravity" in hosts:
         report.add_todo("If you haven't signed in to Antigravity yet, run `agy` once and sign in.")
@@ -707,7 +722,8 @@ def update_plugin(config: Config, host: str, report: Report) -> bool:
     return True
 
 
-def run_update(config: Config, hosts: list[str], dry_run: bool = False, package: bool = True) -> tuple[int, Report]:
+def run_update(config: Config, hosts: list[str], dry_run: bool = False, package: bool = True,
+               sandbox: bool = True) -> tuple[int, Report]:
     report = Report(dry_run=dry_run)
     if package:
         update_package(report)
@@ -715,4 +731,5 @@ def run_update(config: Config, hosts: list[str], dry_run: bool = False, package:
     found = [host for host in candidates if update_plugin(config, host, report)]
     if not found:
         report.unchanged.append("No host has the cli-subagents plugin installed. Run `csa setup` to install it.")
+    ensure_sandbox(config, report, sandbox)
     return (1 if report.failed else 0), report

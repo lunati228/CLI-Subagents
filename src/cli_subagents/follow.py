@@ -828,6 +828,9 @@ class Follower:
 
         path = self.folder / REVIEW_LOG
         if not path.exists():
+            # A sandboxed OpenCode worker's gate writes in the job's gate folder.
+            path = self.folder / "gate" / REVIEW_LOG
+        if not path.exists():
             return
         seen_path = self.folder / REVIEW_FOLLOWED
         already = set(read_json(seen_path, []) or [])

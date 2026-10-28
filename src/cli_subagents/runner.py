@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Any
 
-from cli_subagents import accounts, limits, messages, plans, quota, spend
+from cli_subagents import accounts, limits, messages, plans, quota, sandbox, spend
 from cli_subagents.config import OPT_IN_FAILOVER, Account, RuntimeConfig, load_config
 from cli_subagents.fsutil import kill_tree, open_private, process_start_time, unlock, worker_process, write_text
 from cli_subagents.jobs import job_dir, mark_pending, read_spec, update_status
@@ -392,6 +392,19 @@ class Runner:
             attempt.update(ended_at=time.time(), outcome=blocked.outcome, message=blocked.message)
             return blocked
         try:
+            # Decided before the launch is built: the runtime prepares its files for it.
+            # A job that should be sandboxed never runs without the sandbox.
+            box = sandbox.for_job(self.config.sandbox, self.runtime, spec.access)
+        except Exception as exc:  # MxcError, or anything unexpected: the job never runs unsandboxed
+            detail = str(exc) if isinstance(exc, sandbox.SandboxError) else f"{type(exc).__name__}: {exc}"
+            result = AttemptResult(ERROR, message=f"sandbox: {detail}", session_id=session, before_start=True)
+            attempt.update(ended_at=time.time(), outcome=result.outcome, message=result.message)
+            return result
+        if box is not None:
+            spec = dataclasses.replace(spec, sandbox=True, sandbox_backend={"name": box.name, "command": box.command, "probe": box.probe})
+            attempt["sandbox"] = box.label
+            attempt["sandbox_scope"] = "command"
+        try:
             setup = self.runtime.prepare(self.runtime_config, account, spec)
         except Exception as exc:  # setup problems must not kill the job silently
             setup = {}
@@ -410,6 +423,7 @@ class Runner:
         for message in launch.warnings:
             if message not in self.warnings:
                 self.warnings.append(message)
+        argv, env = launch.argv, launch.env
         parser = self.runtime.new_parser()
         time_limit = max(1.0, min(float(self.spec.timeout_seconds), self.deadline - time.time()))
 
@@ -420,7 +434,7 @@ class Runner:
         with open_private(events_path) as events, open_private(stderr_path, append=False) as stderr:
             try:
                 with worker_process(
-                    launch.argv, cwd=self.spec.cwd, env=launch.env, stdin=subprocess.PIPE,
+                    argv, cwd=self.spec.cwd, env=env, stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE, stderr=stderr,
                 ) as process:
                     attempt.update(started_at=time.time(), before_start=False)
@@ -449,6 +463,12 @@ class Runner:
                 return result
             finally:
                 self.status(child_pid=None, child_started=None)
+                # Requests left by a hard-killed launcher contain command data.
+                # The integration owns this folder; never leave per-command policies behind.
+                if box is not None:
+                    for pattern in ("policy-*.json", "command-*.json*"):
+                        for pending in (self.folder / "sandbox").glob(pattern):
+                            pending.unlink(missing_ok=True)
 
         stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:] if stderr_path.exists() else ""
         if stop_reason == CANCELLED:

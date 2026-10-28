@@ -73,6 +73,7 @@ class Scope:
         self.user_home = str(context.get("user_home") or "")
         self.homes = [home for home in (self.agent_home, self.user_home) if home]
         self.protected = [os.path.normpath(str(item)) for item in context.get("protected_paths") or [] if item]
+        self.secrets = [os.path.normpath(paths.resolve(str(item))) for item in context.get("secret_paths") or [] if item]
         self.access = str(context.get("access") or "read")
         self.sandbox = bool(context.get("sandbox"))
         self.trusted_mcp = {str(item) for item in context.get("trusted_mcp_servers") or []}
@@ -82,6 +83,8 @@ class Scope:
         """(resolved path, secret reason or None)."""
 
         normal, resolved, reason = paths.check(value, base=base or self.base, homes=self.homes)
+        if reason is None and any(paths.inside_any(form, self.secrets) for form in (normal, resolved)):
+            reason = "it is an agent login or service credential"
         if reason is None:
             for form in (normal, resolved):
                 # The worker's own home may lie inside a protected folder (CLI Subagents keeps it there);

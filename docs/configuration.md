@@ -31,7 +31,39 @@ enabled = false
 
 This first version uses one primary OpenCode profile and your existing XDG directories. It does not accept extra OpenCode account tables. Free models are for personal projects only. Their per-IP daily allowance resets at UTC midnight, and a free-limit error stops without account rotation. Clear capacity errors use the retry settings above.
 
-OpenCode `read` and `edit` workers get csa's fixed review rules; a reviewer model is not wired up yet. OpenCode has no OS sandbox, so `edit` workers may change files in the project but can't run tests, builds or other commands that change anything, and web access and other MCP servers are denied. See [OpenCode](opencode.md) for the access levels, generated MCP and instruction config, data terms and Fence sandbox recommendation.
+On supported Windows, OpenCode `edit` workers' shell commands run in csa's [MXC sandbox](#sandbox). The review gate applies fixed rules, then the [reviewer chain](#review-gate) for what they can't settle. Ordinary builds and tests inside the sandbox can pass without a reviewer; installs and commands that send data out need review. Without the sandbox, builds and tests need review too. Web access goes to the reviewer, and other MCP servers are denied. See [OpenCode](opencode.md#reviewer) for what the reviewer sees, access levels, generated MCP and instruction config, data terms and the Fence recommendation for macOS/Linux.
+
+## Review gate
+
+Antigravity and OpenCode `read` and `edit` jobs run behind csa's review gate. Fixed rules settle the clear cases. A chain of reviewers judges the rest: tool-less model calls that each answer with one JSON verdict (see [Safety](gemini.md#safety)).
+
+The reviewers are tried in order. csa asks the next one only when the previous one gave no verdict: a usage limit, a missing login, binary or account, an error, a timeout or an answer that isn't the expected JSON. A verdict ends the chain. A denial is final, and so is an approval rated high or critical risk, which counts as a denial. When no reviewer gives a verdict, the action is denied. Each reviewer gets an even share of the time left for that check: 80 seconds per check for Antigravity (agy gives its hook 90) and 240 seconds per tool call for OpenCode (its plugin waits 300). Each reviewer is also capped at its own `timeout`, 75 seconds by default. The job's `review.jsonl` records which reviewer decided and why the ones before it didn't. The per-job decision cache remembers which reviewer gave each answer.
+
+The default chain is Claude Haiku first, then Gemini 3.8 Flash (low) through Antigravity. If a default reviewer's CLI isn't installed or set up, csa leaves it out without a warning. `csa doctor --runtime antigravity` and `--runtime opencode` list each reviewer as ready or skipped, with the reason. The same chain written out:
+
+```toml
+[[review.reviewers]]          # shared by the Antigravity and OpenCode gates
+provider = "claude"           # "claude", "antigravity" or "codex"
+model = "haiku"               # optional; defaults: haiku, gemini-3.8-flash-low, Codex's own default model
+# account = "max-2"           # optional: an account of that provider (default: the primary)
+# timeout = 40                # optional: seconds for this reviewer (default 75, cut to its share of the time left)
+
+[[review.reviewers]]
+provider = "antigravity"
+model = "gemini-3.8-flash-low"
+```
+
+To give one gate its own chain, put the tables under that runtime instead, for example `[[opencode.reviewers]]`. Per-runtime tables replace the shared list for that gate. `reviewers = []` under `[review]` or a runtime turns the reviewers off. Only the fixed rules decide then, and everything they would hand to a reviewer is denied.
+
+The older one-reviewer keys still work and mean a chain with one entry: `reviewer` (`"claude"`, `"agy"`, `"codex"` or `"off"`), `reviewer_model` and `reviewer_account` under `[antigravity]` or `[opencode]`. A section can't have both forms.
+
+What each provider runs:
+
+- `claude`: `claude -p` with no tools (`--tools ""`), no MCP servers (`--strict-mcp-config`), no slash commands and hooks off, on the named Claude account.
+- `antigravity`: `agy --mode plan` from a bare reviewer folder whose gate hook denies the reviewer every tool. Without `account`, it runs on the Antigravity job's own account, or on your primary Antigravity account for OpenCode jobs. An account whose login is a token file in your home folder can't run from such a folder and is skipped.
+- `codex`: `codex exec --json --ephemeral --ignore-user-config --ignore-rules -s read-only -c approval_policy="never"` with web search, MCP servers, the shell tool (`features.shell_tool` and `features.unified_exec`), subagents, apps, plugins, browser and computer use, image tools and hooks turned off. Reasoning effort is low, and it runs in the job's empty reviewer folder. These flags were checked with `codex exec --help` and `codex features list` on codex-cli 0.162.1. Codex has no switch that removes every tool, so csa also discards any answer that comes with a tool event (command, file change, MCP or web search) and moves to the next reviewer. The read-only sandbox with approvals off is the backstop if a later Codex version renames a feature. Set `model`; otherwise Codex uses its own default model.
+
+OpenCode can't be a reviewer: its free models' data terms allow use of the content, and an OpenCode worker would be judged by its own provider.
 
 ## config.toml
 
@@ -68,17 +100,18 @@ name = "plus-2"
 home = "~/.cli-subagents/homes/codex/plus-2"
 ```
 
-The `[codex]` section takes the same keys as `[claude]`, but ignores `connectors` and `edit_permission_mode`. `connectors` only applies to Claude. Codex uses its own approval and sandbox flags for each `access` level; see [Codex](codex.md#using-it). `share_parent_mcp` (default `true`) applies to Codex, Antigravity and OpenCode: workers get the parent's MCP servers (see [codex.md](codex.md#what-a-worker-gets-from-a-claude-code-session)); for Antigravity your own Gemini servers win when two have the same name. `web_search` only applies to Codex: `"disabled"`, `"cached"`, `"indexed"` or `"live"`, passed as `-c web_search="<value>"` on new and resumed runs. Leaving it unset preserves Codex's own default (`"cached"`). `windows_sandbox` only applies to Codex: on Windows, read and edit jobs get `-c windows.sandbox="<value>"` unless your Codex `config.toml` already sets `[windows] sandbox`; `"off"` adds nothing. `network_access` only applies to Codex and defaults to `true`: `edit` jobs get `-c sandbox_workspace_write.network_access=true`, so commands in the sandbox can reach the network and open local sockets (test runners such as VSTest need them). Set it to `false` to keep Codex's own default, which blocks both; see [codex.md](codex.md#using-it). `[antigravity]` takes `binary`, `default_model`, `edit_permission_mode` (`accept-edits` by default, or `auto` where the account supports it) and `share_parent_mcp`, the review keys below, and the account keys further down.
+The `[codex]` section takes the same keys as `[claude]`, but ignores `connectors` and `edit_permission_mode`. `connectors` only applies to Claude. Codex uses its own approval and sandbox flags for each `access` level; see [Codex](codex.md#using-it). `share_parent_mcp` (default `true`) applies to Codex, Antigravity and OpenCode: workers get the parent's MCP servers (see [codex.md](codex.md#what-a-worker-gets-from-a-claude-code-session)); for Antigravity your own Gemini servers win when two have the same name. `web_search` only applies to Codex: `"disabled"`, `"cached"`, `"indexed"` or `"live"`, passed as `-c web_search="<value>"` on new and resumed runs. Leaving it unset preserves Codex's own default (`"cached"`). `windows_sandbox` only applies to Codex: on Windows, read and edit jobs get `-c windows.sandbox="<value>"` unless your Codex `config.toml` already sets `[windows] sandbox`; `"off"` adds nothing. `network_access` only applies to Codex and defaults to `true`: `edit` jobs get `-c sandbox_workspace_write.network_access=true`, so commands in the sandbox can reach the network and open local sockets (test runners such as VSTest need them). Set it to `false` to keep Codex's own default, which blocks both; see [codex.md](codex.md#using-it). `[antigravity]` takes `binary`, `default_model`, `edit_permission_mode` (`accept-edits` by default, or `auto` where the account supports it) and `share_parent_mcp`, `sandbox` and the reviewer chain below, and the account keys further down.
 
 ```toml
 [antigravity]
-reviewer = "agy"            # who judges actions the fixed rules can't settle: "agy", "claude" or "off"
-# reviewer_model = "gemini-3.8-flash-low"   # default for "agy"; "haiku" is the default for "claude"
-# reviewer_account = "max-2"                # the Claude account for reviewer = "claude" (default: your primary)
 sandbox = true              # run edit jobs with agy --sandbox
+
+[[antigravity.reviewers]]   # optional: this gate's own reviewer chain (see Review gate above)
+provider = "claude"
+model = "haiku"
 ```
 
-With `reviewer = "off"` only the fixed rules decide, and everything they would hand to the reviewer is denied. See [Safety](gemini.md#safety) for what the gate does.
+See [Review gate](#review-gate) for the reviewer keys and [Safety](gemini.md#safety) for what the gate does. `sandbox` is Antigravity only.
 
 Extra Antigravity accounts are at your own risk (Google's FAQ says consumer plans don't support automated account switching; see [Gemini](gemini.md#more-than-one-google-account)). As for the other runtimes, `failover` is `"on-limit"` by default: jobs rotate through the primary and the enabled extra accounts (`include_primary` is `true` by default here). Set `failover = "off"` under `[antigravity]` to keep jobs without `account` on the primary account; an extra account is then used only when a job pins it. An Antigravity account folder stands in for a home folder: it gets its own `.gemini`.
 
@@ -187,7 +220,7 @@ A refusal looks like this:
 ```
 Codex is at its limit: 4 of 4 subagents running (plan preset plus: 4 per account; change with max_jobs). Start this with runtime claude, or wait for one to finish.
 Only if the user explicitly asked for more parallel jobs, start again with override=<their words>; otherwise ask the user (say how much of the 5-hour window is left) or use the home model.
-Room: Claude 2 accounts (no usage data) · Codex primary 8% left (5h, resets 03:12)
+Room: Claude 2 accounts (no usage data) Ã‚Â· Codex primary 8% left (5h, resets 03:12)
 ```
 
 The `Room:` line is also in the `subagent_start` and `subagent_accounts` results. With quota steps or pools configured, it appears in the `csa run --follow` header too. It shows what is already known, marks old data with its age (`as of 2 h ago`) and leaves out accounts with no data. Codex usage is read from the newest rollout file in each Codex account folder (the `rate_limits` field only). Claude usage comes from the events of jobs that already ran. Antigravity shows job counts and cooldowns, with no remaining-quota estimate. Nothing starts a job to measure usage.
@@ -277,6 +310,18 @@ The alternative names depend on which other installed runtimes have room. `csa a
 - Your agent instructions (`CLAUDE.md` and the like) hold preferences, such as which model to use for what kind of task.
 - csa decides by itself: it counts running jobs, checks cooldowns and usage, picks an account, and lowers the effort when the account's plan needs it.
 
+## Sandbox
+
+On supported Windows, each OpenCode shell command runs inside csa's MXC process sandbox; see [Sandbox](sandbox.md). `csa setup` installs it and `csa update` keeps it current (`--no-sandbox` skips both).
+
+```toml
+[sandbox]
+# enabled = false                       # run shell commands without the sandbox (default: on where Windows supports it)
+# path = "C:/tools/mxc/wxc-exec.exe"    # use this wxc-exec.exe instead of csa's own install
+```
+
+`enabled` is `true` or `false`; leaving it out turns the sandbox on where this Windows supports it and off elsewhere. With `enabled = true` the sandbox is required, and on a system that can't run it the affected jobs fail. A job that should run in the sandbox never runs without it: when MXC is missing or its probe fails, the job ends as `error` and says what to do. `path` must be the full path of `wxc-exec.exe`; csa then doesn't install MXC itself, but `csa setup` and `csa doctor` still check its signature and probe it. No other keys are accepted.
+
 ## Files
 
 | Path | Contents |
@@ -285,7 +330,8 @@ The alternative names depend on which other installed runtimes have room. `csa a
 | `homes/<runtime>/<account>/` | Account folders (login, state, sessions, linked shared setup) |
 | `homes/antigravity/primary/` | The folder Antigravity jobs on your primary account run in (its login stays in the OS keyring) |
 | `homes/antigravity/.reviewer/<account>/` | The bare folder the Antigravity reviewer runs from |
-| `jobs/<job_id>/` | `spec.json`, `status.json`, `events.jsonl`, `result.md`, `stderr-*.log`, `runner.log`, the message logs `inbox.jsonl` and `outbox.jsonl`, for Claude workers the `mcp.json` and `settings.json` they launch with, and for Antigravity workers the review gate's `review-context.json`, `review.jsonl` (every decision) and `review-cache.json` |
+| `jobs/<job_id>/` | `spec.json`, `status.json`, `events.jsonl`, `result.md`, `stderr-*.log`, `runner.log`, the message logs `channel/inbox.jsonl` and `channel/outbox.jsonl`, for Claude workers the `mcp.json` and `settings.json` they launch with, and for Antigravity and OpenCode workers the review gate's `review-context.json`, `review.jsonl` (every decision) and `review-cache.json`. OpenCode command sandboxes add `sandbox-bin/` and private one-use requests/backend policies in `sandbox/`, removed after use |
+| `sandbox/mxc-<version>/<arch>/` | The MXC release csa installed (`wxc-exec.exe` and its files) with `csa-install.json`, its record of what it installed |
 | `state/<runtime>-usage.json` | Last known usage, cooldowns and last use per account |
 | `state/<runtime>-spend.json` | Durable per-attempt spend and running budget reservations; job retention does not remove this history |
 | `state/leases/` | Lock files for per-account job slots |
@@ -301,5 +347,6 @@ Job records and generated files contain your prompts, results and MCP server set
 | `CLI_SUBAGENTS_DEPTH` | Set by CLI Subagents in workers; used to refuse nested delegation |
 | `CLAUDE_CONFIG_DIR` | Default for `[claude] primary` when the config doesn't set it |
 | `CODEX_HOME` | Default for `[codex] primary` when the config doesn't set it |
+| `CLI_SUBAGENTS_SANDBOX_COMMAND` | For tests: a JSON list (`["python", "fake_wxc.py"]`) that stands in for `wxc-exec.exe` and counts as a supported system |
 
 Workers start from a cleaned environment. Variables that identify or authenticate the host session (`ANTHROPIC_*`, `CLAUDE*`, `CODEX_COMPANION_*` and similar) are removed, so a worker can only use its own account's login. Put environment settings you want workers to have into the `env` block of your primary `settings.json`; it is passed on, minus login-related keys.

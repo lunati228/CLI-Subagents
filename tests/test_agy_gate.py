@@ -28,6 +28,12 @@ class GateJobTests(AgyHome):
             os.environ.pop(key, None)
         super().tearDown()
 
+    def write_agy_config(self, accounts=("a1",), failover="off", extra=""):
+        # These tests are about the agy reviewer; the default chain (Claude Haiku first) has its own test.
+        if "reviewer" not in extra:
+            extra += '\nreviewer = "agy"'
+        super().write_agy_config(accounts=accounts, failover=failover, extra=extra)
+
     def tools(self, *calls):
         os.environ["FAKE_AGY_TOOLS"] = json.dumps(list(calls))
 
@@ -35,10 +41,25 @@ class GateJobTests(AgyHome):
         return jobs.read_result(status["job_id"])["result"].splitlines()[1:]
 
     def worker_record(self):
-        return [record for record in self.records() if not record["reviewer"]][-1]
+        return [record for record in self.records() if record.get("reviewer") is False][-1]
 
     def reviewer_records(self):
-        return [record for record in self.records() if record["reviewer"]]
+        return [record for record in self.records() if record.get("reviewer")]
+
+    def test_default_chain_falls_back_from_claude_to_agy(self):
+        # The fake claude prints no reviewer JSON (no verdict), so the fake agy decides.
+        call = {"name": "run_command", "args": {"CommandLine": "npm install", "Cwd": str(self.project), "BypassSandbox": True}}
+        self.tools(call)
+        super().write_agy_config()
+        status = self.run_job(access="edit")
+        self.assertEqual(self.answer_lines(status), ["run_command: auto_approve"])
+        claude_calls = [record for record in self.records() if "reviewer" not in record]
+        self.assertEqual(len(claude_calls), 1)
+        self.assertIn("--tools", claude_calls[0]["argv"])
+        self.assertEqual(len(self.reviewer_records()), 1)
+        entry = self.review_log(status)[0]
+        self.assertEqual((entry["source"], entry["reviewer"]), ("reviewer", "agy/gemini-3.8-flash-low"))
+        self.assertEqual(entry["failed"][0]["reviewer"], "claude/haiku")
 
     def review_log(self, status):
         path = jobs.job_dir(status["job_id"]) / "review.jsonl"

@@ -77,4 +77,4 @@ Antigravity workers run on the signed-in account. Extra Google accounts are at t
 
 From Antigravity you can still start Claude Code, Codex and OpenCode subagents (`runtime: "claude"`, `"codex"` or `"opencode"`). They get a note listing your GEMINI.md, AGENTS.md, rules and skill folders and read them first.
 
-OpenCode becomes available when its v2 binary is on PATH, unless `[opencode] enabled = false` disables it. Omit `model` to keep the user's OpenCode default. Free models are for personal projects only, and OpenCode has no OS sandbox. See [OpenCode](../../../docs/opencode.md).
+OpenCode becomes available when its v2 binary is on PATH, unless `[opencode] enabled = false` disables it. Omit `model` to keep the user's OpenCode default. Free models are for personal projects only. On supported Windows, OpenCode `edit` workers' shell commands run in csa's MXC sandbox; the review gate applies fixed rules, then the reviewer chain. See [OpenCode](../../../docs/opencode.md).

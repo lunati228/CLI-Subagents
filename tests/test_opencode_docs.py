@@ -30,7 +30,7 @@ class OpenCodeDocumentationTests(unittest.TestCase):
             "Big Pickle", "MiMo", "unpaid-account", "2026-08-15",
             "## Sandbox", "https://github.com/fencesandbox/fence",
             "@fencesandbox/opencode-fence", "Apache-2.0", "macOS and Linux",
-            "native Windows", "no OS sandbox", "tool.execute.before",
+            "native Windows", "MXC sandbox", "reviewer chain", "sandbox_network", "tool.execute.before",
             "codemode: false", "OPENCODE_CONFIG_CONTENT",
         ):
             with self.subTest(requirement=requirement):

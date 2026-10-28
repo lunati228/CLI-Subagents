@@ -68,6 +68,9 @@ from cli_subagents.runtimes.base import (
     clean_environment,
     parent_server,
 )
+from cli_subagents.runtimes.reviewers import (  # noqa: F401
+    AGY_REVIEW_BUDGET, AGY_REVIEWER_MODEL as REVIEWER_MODEL, CLAUDE_REVIEWER_MODEL, REVIEW_TIMEOUT, build_chain,
+)
 
 MAX_PROMPT_CHARS = 24_000  # the prompt travels as one command-line argument
 
@@ -87,9 +90,7 @@ VALID_MODES = ("plan", "accept-edits", "auto")
 GATED_ACCESS = ("read", "edit")
 PRIMARY_FOLDER = "primary"  # homes/antigravity/primary; "primary" can't be an account name
 REVIEWER_FOLDER = ".reviewer"  # homes/antigravity/.reviewer/<account>; account names can't start with a dot
-REVIEWER_MODEL = "gemini-3.8-flash-low"
-CLAUDE_REVIEWER_MODEL = "haiku"
-REVIEW_TIMEOUT = 75  # seconds for one reviewer call; the hook itself may take 90
+# REVIEWER_MODEL, CLAUDE_REVIEWER_MODEL, REVIEW_TIMEOUT and the chain's time budget live in reviewers.py.
 
 WORKER_NOTE = (
     "[You are running as a delegated subagent for another agent session, which will read your "
@@ -586,7 +587,7 @@ class AntigravityRuntime:
             self._write_settings(root, gemini, account, report)
             report["parent_channel"] = self._write_mcp_config(config, root, gemini, spec, report, account)
             report["worker_home"] = str(home)
-            if report["review_gate"] and config.reviewer == "agy" and spec.job_id != PROBE_JOB:
+            if report["review_gate"] and self._uses_own_agy_reviewer(config) and spec.job_id != PROBE_JOB:
                 reviewer_home = self._prepare_reviewer_home(account, home, report)
                 if reviewer_home is not None:
                     report["reviewer_home"] = str(reviewer_home)
@@ -771,37 +772,37 @@ class AntigravityRuntime:
 
     # Review gate ----------------------------------------------------------
 
-    def _reviewer_config(
-        self, config: RuntimeConfig, job: Path, warnings: list[str], reviewer_home: str | None = None
-    ) -> dict[str, Any]:
-        kind = config.reviewer
-        work = job / "reviewer"
-        make_private_dir(work)
-        base = {"kind": kind, "timeout": REVIEW_TIMEOUT, "work_dir": str(work)}
-        if kind == "agy":
-            env = {"HOME": reviewer_home, "USERPROFILE": reviewer_home} if reviewer_home else {}
-            return {**base, "command": self.find_binary(config) or [], "model": config.reviewer_model or REVIEWER_MODEL, "env": env}
-        if kind == "claude":
-            from cli_subagents.config import load_config
-            from cli_subagents.runtimes.claude import ClaudeRuntime
+    def _reviewer_chain(self, config: RuntimeConfig, job: Path, warnings: list[str],
+                        reviewer_home: str | None = None) -> list[dict[str, Any]]:
+        # An agy reviewer without `account` uses the job's own account and its reviewer folder.
+        # The worker runs with a managed HOME and SSH/XDG folders; the other reviewers get the real ones.
+        return build_chain(config, job, warnings, own_agy=(self.find_binary(config) or [], reviewer_home),
+                           home=str(gemini_root(config).parent), unset_env=[*SSH_ENV, *XDG_ENV])
 
-            claude_config = load_config().runtime("claude")
-            account = claude_config.find(config.reviewer_account or "primary")
-            if account is None:
-                warnings.append(f"reviewer_account '{config.reviewer_account}' is not a Claude account; reviewed actions are denied")
-                return {**base, "command": []}
-            runtime = ClaudeRuntime()
-            command = runtime.find_binary(claude_config) or []
-            if not command:
-                warnings.append("the Claude reviewer can't find the claude binary; reviewed actions are denied")
-            real_home = str(gemini_root(config).parent)
-            env = {key: value for key, value in runtime.account_env(claude_config, account).items() if key == "CLAUDE_CONFIG_DIR"}
-            env.update(HOME=real_home, USERPROFILE=real_home)
-            return {
-                **base, "command": command, "model": config.reviewer_model or CLAUDE_REVIEWER_MODEL, "env": env,
-                "unset_env": [*SSH_ENV, *XDG_ENV],
-            }
-        return {"kind": "off"}
+    @staticmethod
+    def _uses_own_agy_reviewer(config: RuntimeConfig) -> bool:
+        entries, _defaults = config.review_chain()
+        return any(entry.kind == "agy" and entry.account is None for entry in entries)
+
+    def standalone_reviewer_home(self, config: RuntimeConfig, account: Account, warnings: list[str]) -> Path | None:
+        """An account's bare reviewer folder, for an agy reviewer outside that account's own jobs
+        (another runtime's job, or an `account` named in the reviewer chain).
+
+        None (with a warning) when the account is the primary and its login is a token file in
+        the real home: the reviewer can't run from a bare folder then, and the real home has no
+        gate to stop it from using tools.
+        """
+
+        worker = self.worker_home(config, account)
+        if worker is None:
+            warnings.append("your primary Antigravity login is a token file in your home folder, so the agy reviewer "
+                            "can't run from its own folder")
+            return None
+        report = sync.new_report()
+        with file_lock(state_dir() / "sync" / f"antigravity-{account.name}.lock", timeout=30):
+            folder = self._prepare_reviewer_home(account, worker, report)
+        warnings.extend(report["warnings"])
+        return folder
 
     def _review_context(
         self, config: RuntimeConfig, spec: JobSpec, home: Path, sandbox: bool, warnings: list[str], setup: dict[str, Any]
@@ -823,7 +824,8 @@ class AntigravityRuntime:
             "agent_home": str(home),
             "user_home": str(root.parent),
             "trusted_mcp_servers": [PARENT_SERVER],
-            "reviewer": self._reviewer_config(config, job, warnings, setup.get("reviewer_home")),
+            "reviewers": self._reviewer_chain(config, job, warnings, setup.get("reviewer_home")),
+            "review_budget": AGY_REVIEW_BUDGET,
             "log": str(job / "review.jsonl"),
             "cache": str(job / "review-cache.json"),
         }

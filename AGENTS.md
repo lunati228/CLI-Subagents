@@ -18,6 +18,8 @@ Plain `csa doctor` checks Claude only. Run `csa doctor --runtime <runtime>` for 
 
 `csa setup` installs the plugin into every installed host (`--host claude|codex|antigravity` limits it), registers and syncs account folders that are already logged in, and prints a "Still needed from you" list. It is safe to run again. Use a `codex:` or `claude:` prefix on `--account` when the folder's runtime is ambiguous.
 
+On Windows 11 24H2/25H2 and later, `csa setup` also installs the [sandbox](docs/sandbox.md) for OpenCode shell commands: it downloads Microsoft's MXC release once (about 540 MB), verifies it and keeps about 37 MB. Tell the user before running it; `--no-sandbox` skips it, and `[sandbox] enabled = false` turns the sandbox off.
+
 After setup, offer the optional [delegation rules](docs/delegation.md) template. It tells the main agent which models to use per tier and keeps work projects with the home vendor. Personal projects can try another CLI first, with helper limits and a fallback to the home model when there is no room. Ask whether the user wants it and which home and try-first models they want for each tier. If they agree, run `csa rules --show` with their values, then install; otherwise skip it. Example: `csa rules --install --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.1 high"`. Use their host and models. Nothing installs the rules without `--install`.
 
 What it runs per host, if you need to do it by hand:
@@ -62,6 +64,7 @@ The tests use fake CLIs (`tests/fake_claude.py`, `fake_codex.py`, `fake_agy.py`,
 | `src/cli_subagents/mcp_server.py`, `tools.py`, `messages.py`, `hooks.py` | MCP server, tools, parent messages, Claude Code hooks |
 | `src/cli_subagents/runtimes/` | Claude Code, Codex and Antigravity adapters |
 | `src/cli_subagents/agy_review/` | The review gate for Antigravity workers (PreToolUse hook, fixed rules, reviewer, policy). Self-contained: no imports from the rest of the package |
+| `src/cli_subagents/sandbox/` | The MXC sandbox for workers on Windows: pinned release and probe (`mxc.py`), install for setup/update/doctor (`install.py`), policy generator (`policy.py`), neutral policy model (`model.py`), backend adapters (`backends/`), shared launcher (`launcher.py`), agent integrations (`integrations/`) and the in-container `taskkill` stand-in. Tests use `tests/fake_wxc.py`, never the real `wxc-exec.exe` |
 | `.claude-plugin/`, `plugin.json`, `mcp_config.json`, `hooks/`, `commands/`, `skills/` | Plugin files for Claude Code, Codex and Antigravity |
 | `agents/` | Claude Code relay agents (`cli-subagents:cli-subagents-claude` and so on) that run `csa run --follow` |
 | `src/cli_subagents/follow.py` | `csa follow`: one readable line per worker event, with end markers for the relay agents |

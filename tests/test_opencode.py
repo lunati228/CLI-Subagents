@@ -215,7 +215,7 @@ class LaunchTests(OpenCodeHome):
         plugin = Path(data["plugins"][-1])
         self.assertTrue((plugin / "server.js").is_file())
         context = json.loads((plugin.parent / "review-context.json").read_text(encoding="utf-8"))
-        self.assertEqual((context["access"], context["sandbox"], context["reviewer"]), ("read", False, {"kind": "off"}))
+        self.assertEqual((context["access"], context["sandbox"], context["reviewers"][0]["kind"]), ("read", False, "claude"))
         self.assertEqual(settings["context"], str(plugin.parent / "review-context.json"))
 
     def test_edit_defaults_external_directory_asks_and_add_dirs(self):
@@ -461,6 +461,8 @@ class ReviewTests(OpenCodeHome):
         denied = self.review("edit", {"path": str(package / "opencode_review" / "__init__.py")})
         self.assertEqual(denied["decision"], "deny")
         self.assertIn("csa's own package", denied["reason"])
+        shadow = self.review("write", {"path": str(package.parent / "stdlib_shadow.py")})
+        self.assertEqual(shadow["decision"], "deny")
         patch_text = f"*** Begin Patch\n*** Update File: {package.name}/hooks.py\n*** End Patch"
         self.assertEqual(self.review("patch", {"patchText": patch_text})["decision"], "deny")
 
@@ -506,7 +508,7 @@ class ReviewTests(OpenCodeHome):
         lines = self.run_plugin(self.launch(access="read"), '''
 const ctx = makeContext({ nativeDefault: { providerID: "private", modelID: "own" } });
 await plugin.setup(ctx);
-if (ctx.order.join() !== "tool:execute.before,session:model.request,session:prompt") throw Error(ctx.order.join());
+if (ctx.order.join() !== "tool:execute.before,shell:create.before,session:model.request,session:prompt") throw Error(ctx.order.join());
 try { await ctx.hooks["tool:execute.before"]({ tool: "shell", input: { command: "rm -rf /" } }); throw Error("not blocked"); }
 catch (error) { if (!error.message.includes("CLI Subagents review")) throw error; }
 await ctx.hooks["session:prompt"]({ sessionID: "ses_1" });
@@ -626,6 +628,7 @@ function makeContext(options = {}) {
     permissions: [{ action: "*", resource: "*", effect: "allow" }], ...(options.buildModel ? { model: options.buildModel } : {}) };
   ctx.worker = { id: "csa-worker", name: "csa-worker", permissions: [{ action: "*", resource: "*", effect: "ask" }] };
   ctx.tool = { hook: register("tool") };
+  ctx.shell = { hook: register("shell") };
   ctx.session = { hook: register("session"), switchModel: async input => { ctx.switched.push(input); } };
   const compaction = options.compactionModel ? { id: "compaction", model: options.compactionModel } : undefined;
   ctx.agent = { transform: async fn => { fn({ get: id => id === "build" ? build : id === "compaction" ? compaction : undefined,

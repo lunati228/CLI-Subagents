@@ -120,7 +120,8 @@ def execute(policy: Policy, command: Command, backend: dict[str, Any], folder: P
 
     parent_pid = parent_pid if parent_pid is not None else os.getppid()
     parent_started = process_start_time(parent_pid)
-    if parent_started is None:
+    # Some systems (macOS) give no start stamp; then a live PID is enough, as in same_process.
+    if not same_process(parent_pid, parent_started):
         raise SandboxError("the parent shell is no longer running")
     adapter = get_backend(str(backend.get("name") or ""))
     argv = backend.get("command")

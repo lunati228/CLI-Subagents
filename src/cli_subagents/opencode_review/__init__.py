@@ -295,7 +295,9 @@ def plugin_source(python: str, script: Path, context: Path | None, *, steps: int
     [opencode] default_model), never from OpenCode or project settings.
     """
 
+    system32 = Path(os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or r"C:\Windows") / "System32"
     settings = json.dumps({"python": python, "script": str(script), "context": str(context) if context else None,
+                           "cmd": str(system32 / "cmd.exe"), "taskkill": str(system32 / "taskkill.exe"),
                            "steps": steps, "model": model, "variant": variant, "fallback": fallback,
                            "restricted": list(restricted), "permissions": permissions or [],
                            "id": plugin_id, "guarded": guarded, "reviewMs": max(1, int(review_seconds)) * 1000,
@@ -314,8 +316,8 @@ const check = (input, script = settings.script) => new Promise((resolve, reject)
   let out = "";
   const killTree = () => {
     try {
-      // cmd resolves csa's taskkill.cmd stand-in first on PATH inside MXC.
-      if (windows) spawn("cmd", ["/d", "/s", "/c", "taskkill", "/PID", String(child.pid), "/T", "/F"],
+      // This cleanup runs on the host; never resolve either tool from worker PATH.
+      if (windows) spawn(settings.cmd, ["/d", "/s", "/c", settings.taskkill, "/PID", String(child.pid), "/T", "/F"],
                          { stdio: "ignore", windowsHide: true })
         .on("error", () => child.kill());
       else process.kill(-child.pid, "SIGKILL");

@@ -13,16 +13,16 @@ It installs as a plugin in Claude Code, Codex and Antigravity, and works as a pl
 
 ```mermaid
 flowchart LR
-    host["Your main session<br/>Claude Code Â· Codex Â· Antigravity"]
-    core["CLI Subagents<br/>jobs Â· accounts Â· messages"]
-    shared[("Your setup<br/>MCP servers Â· skills<br/>plugins Â· instructions")]
+    host["Your main session<br/>Claude Code · Codex · Antigravity"]
+    core["CLI Subagents<br/>jobs · accounts · messages"]
+    shared[("Your setup<br/>MCP servers · skills<br/>plugins · instructions")]
     w1["Claude Code<br/>account 2"]
     w2["Claude Code<br/>account 3"]
     w3["Codex<br/>account 1"]
     w4["Antigravity<br/>Gemini"]
     w5["OpenCode v2<br/>your model or free DeepSeek"]
 
-    host -- "start Â· wait Â· message" --> core
+    host -- "start · wait · message" --> core
     core --> w1 & w2 & w3 & w4 & w5
     shared -. "one shared pool" .-> w1 & w2 & w3
 ```

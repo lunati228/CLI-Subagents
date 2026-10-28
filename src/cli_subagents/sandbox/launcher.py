@@ -88,6 +88,32 @@ def _quarantine_new_paths(missing: list[tuple[Path, Path]]) -> None:
         raise SandboxError("a new protected path appeared during the sandboxed command: " + "; ".join(findings))
 
 
+def snapshot(policy: Policy) -> list[list[str]]:
+    """Job-lifetime baseline kept on the host, beyond any one launcher's lifetime."""
+
+    return [[str(path), str(root)] for path, root in _missing_protected_paths(policy)]
+
+
+def check_snapshot(policy: Policy, baseline: Any) -> None:
+    """Recover after a launcher was killed outright; malformed baselines fail closed."""
+
+    if not isinstance(baseline, list):
+        raise SandboxError("missing protected-path job snapshot")
+    roots = {_key(_real(root)) for root in policy.workspaces}
+    names = {_key(name) for name in [*PROTECTED_NAMES, *policy.protected_names]}
+    missing = []
+    for pair in baseline:
+        if not isinstance(pair, list) or len(pair) != 2 or not all(isinstance(p, str) for p in pair):
+            raise SandboxError("invalid protected-path job snapshot")
+        path, root = map(Path, pair)
+        if (not path.is_absolute() or not root.is_absolute() or _key(str(root)) not in roots
+                or not _inside(str(path), str(root)) or path == root or _key(path.name) not in names
+                or ".." in path.parts):
+            raise SandboxError("invalid protected-path job snapshot")
+        missing.append((path, root))
+    _quarantine_new_paths(missing)
+
+
 def execute(policy: Policy, command: Command, backend: dict[str, Any], folder: Path,
             *, parent_pid: int | None = None) -> int:
     """Inherit stdio, contain descendants, and end them on timeout or parent death."""

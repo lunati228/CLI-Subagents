@@ -290,6 +290,18 @@ class InstallTests(SandboxBase):
         report = self.ensure()
         self.assertIn("its probe failed", report.failed[0])
 
+    def test_setup_requires_host_loopback_and_describes_command_scope(self):
+        from fake_wxc import GOOD_PROBE
+        data = {**GOOD_PROBE, "probes": {**GOOD_PROBE["probes"],
+                                      "baseContainerSupportsIngressHostLoopbackAllow": False}}
+        os.environ["FAKE_WXC_PROBE"] = json.dumps(data)
+        report = self.ensure()
+        self.assertTrue(report.failed)
+        self.assertNotIn("Sandbox: on", "\n".join(report.notes))
+        os.environ.pop("FAKE_WXC_PROBE")
+        report = self.ensure()
+        self.assertIn("edit workers' shell commands run inside it", "\n".join(report.notes))
+
     def test_member_size_cap(self):
         with patch.object(install, "MEMBER_LIMIT", 5):
             report = self.ensure()

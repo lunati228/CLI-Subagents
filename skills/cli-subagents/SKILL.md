@@ -23,7 +23,7 @@ Don't run `csa run`, `csa start` or `csa follow` in your own shell, and don't ca
 ```text
 Agent tool:
   subagent_type: cli-subagents:cli-subagents-codex
-  description: Sol 6.1 high Â· edit Â· fix the login test
+  description: Sol 6.1 high · edit · fix the login test
   run_in_background: true
   prompt: |
     model=gpt-6.1-sol
@@ -33,7 +33,7 @@ Agent tool:
     <the complete, self-contained task>
 ```
 
-- Description: `<model> Â· <access> Â· <task in a few words>`. The user reads it to see what runs where.
+- Description: `<model> · <access> · <task in a few words>`. The user reads it to see what runs where.
 - Prompt: option lines first, one per line (`model=...`, `effort=...`, `access=read|edit`, and only when needed `account=NAME`, `cwd=PATH`, `timeout=SECONDS`, `override=USER_WORDS` under the Limits rule below), then a blank line and the complete task written as below. `access` defaults to `edit` in the Claude relay and `read` in the Codex, Antigravity and OpenCode relays.
 - Start it in the background and keep working. Don't poll or wait in a shell; the notice arrives when it finishes.
 - Its final message is the worker's result, unchanged. If the worker asks something, the agent stops and tells you; answer with SendMessage to that agent and it passes the answer on. While the job runs, SendMessage "cancel" stops it and anything else goes to the worker as a follow-up, unchanged; the relay never answers it itself, whatever the text says. After the job has finished, SendMessage to the same relay continues the worker's conversation as a new job; the relay follows it and returns its result.

@@ -367,13 +367,19 @@ class OpenCodeRuntime:
             host_paths: list[str] = []
             if spec.sandbox:
                 from cli_subagents.sandbox import add_shims, policy
+                from cli_subagents.sandbox.launcher import snapshot
                 env = add_shims(dict(os.environ), job)
                 grants = policy.command_policy([spec.cwd, *spec.add_dirs], env)
                 grants.readonly.append(str(job / "sandbox-bin"))
-                host_paths = policy.host_paths((spec.sandbox_backend or {}).get("command") or [])
+                host_paths = policy._unique([
+                    *policy.host_paths((spec.sandbox_backend or {}).get("command") or []),
+                    *policy.host_paths(self.find_binary(config) or []),
+                    *(path for entry in reviewers for path in policy.host_paths(entry.get("command") or [])),
+                ])
                 grants = replace(grants, pinned=policy._unique([*grants.pinned, *host_paths]))
                 command_sandbox = {"backend": spec.sandbox_backend or {"name": "mxc", "command": []},
-                                   "policy": grants.to_dict()}
+                                   "policy": grants.to_dict(), "missing_protected": snapshot(grants),
+                                   "command_path": next((value for key, value in env.items() if key.upper() == "PATH"), "")}
             context = write_context(job / "review-context.json", {
                 "version": 1, "job": spec.job_id, "access": spec.access, "sandbox": bool(spec.sandbox),
                 **({"sandbox_kind": (spec.sandbox_backend or {}).get("name", "mxc"), "sandbox_network": False, "sandbox_mode": "command",
@@ -438,6 +444,9 @@ class OpenCodeRuntime:
         warnings: list[str] = []
         model, variant = self.model_and_variant(config, spec)
         env = self.account_env(config, account)
+        if spec.sandbox:
+            from cli_subagents.sandbox.policy import host_environment
+            env = host_environment(env, [spec.cwd, *spec.add_dirs])
         # v2 chooses PWD before process.cwd(); a stale parent-shell PWD would
         # otherwise move the worker away from the scope the gate checks.
         env["PWD"] = str(Path(spec.cwd).resolve())

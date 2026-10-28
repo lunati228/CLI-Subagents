@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import secrets
 import shlex
+import subprocess
 import sys
 from typing import Any
 
@@ -19,6 +20,7 @@ from cli_subagents import opencode_review
 from cli_subagents.agy_review.context import load_context
 from cli_subagents.fsutil import make_private_dir, python_executable, write_json
 from cli_subagents.sandbox import add_shims, policy
+from cli_subagents.sandbox.launcher import check_snapshot
 from cli_subagents.sandbox.model import Command, Network, Policy, PolicyError
 
 # Keep toolchain/build settings, not the agent's login or provider credentials.
@@ -44,10 +46,11 @@ def prepare(event: dict[str, Any], context_path: Path) -> dict[str, str]:
     settings = context.get("command_sandbox")
     if not isinstance(settings, dict) or context.get("sandbox") is not True:
         raise PolicyError("no command sandbox configured")
+    base_policy = Policy.from_dict(settings.get("policy"))
+    check_snapshot(base_policy, settings.get("missing_protected"))
     line, cwd = event.get("command"), event.get("cwd")
     if not isinstance(line, str) or not line.strip() or not isinstance(cwd, str):
         raise PolicyError("shell invocation needs a command and cwd")
-    base_policy = Policy.from_dict(settings.get("policy"))
     cwd = policy._real(cwd)
     if not any(policy._inside(cwd, root) for root in base_policy.workspaces):
         raise PolicyError("shell cwd is outside the writable workspaces")
@@ -64,6 +67,11 @@ def prepare(event: dict[str, Any], context_path: Path) -> dict[str, str]:
     if not isinstance(raw_env, dict):
         raise PolicyError("shell environment must be an object")
     env = {k: v for k, v in raw_env.items() if k.upper() in ENV_NAMES and isinstance(v, str)}
+    # Activated workspace tools are safe only inside containment. The host's
+    # PATH was stripped before OpenCode started; restore it for this command.
+    if isinstance(settings.get("command_path"), str):
+        env = {k: v for k, v in env.items() if k.upper() != "PATH"}
+        env["PATH"] = settings["command_path"]
     folder = context_path.parent / "sandbox"
     make_private_dir(folder)
     # Redirect tool state to command-scoped container temp; it cannot change
@@ -87,6 +95,9 @@ def prepare(event: dict[str, Any], context_path: Path) -> dict[str, str]:
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     command = Command([powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
                       cwd, env, network, milliseconds / 1000)
+    if os.name == "nt" and len(subprocess.list2cmdline(command.argv).encode("utf-16-le")) // 2 >= 32767:
+        raise PolicyError("shell command exceeds the Windows command-line limit after PowerShell encoding; "
+                          "split it into shorter commands or run a workspace script")
     if os.name != "nt":
         shell = event.get("shell")
         if not isinstance(shell, str) or not Path(shell).is_absolute():
@@ -146,8 +157,14 @@ def main() -> int:
         print(json.dumps(prepare(json.loads(raw), Path(sys.argv[1]))))
         return 0
     except Exception as exc:
-        sys.stderr.write(f"csa sandbox authorization failed closed: {exc}\n")
-        return 1
+        # The host discards this helper's stderr. Return a trusted failing shell
+        # invocation so the user/model sees the reason (e.g. an overlong command)
+        # without ever falling back to the original input. Quote it as data.
+        message = "CLI Subagents sandbox authorization failed closed: " + str(exc)[:3000]
+        failure = {"shell": powershell(), "command": "throw " + literal(message)} if os.name == "nt" else {
+            "shell": "/bin/sh", "command": "printf '%s\\n' " + shlex.quote(message) + " >&2; exit 125"}
+        print(json.dumps(failure))
+        return 0
 
 
 if __name__ == "__main__":

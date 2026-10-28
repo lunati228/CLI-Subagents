@@ -84,7 +84,10 @@ def evaluate(
     if not chain:
         record.update(decision="deny", source="rule", reason=f"no reviewer is configured, and {verdict.why}")
         return _deny(record["reason"]), record
-    cache_path = Path(context["cache"]) if context.get("cache") else None
+    # A command can execute mutable workspace scripts/manifests. An old verdict
+    # must never grant egress to different code, including legacy cache entries
+    # and jobs with the OS sandbox turned off. Re-review commands everywhere.
+    cache_path = Path(context["cache"]) if context.get("cache") and name not in rules.COMMAND_TOOLS else None
     key = store.action_key(name, args)
     cached = store.cache_get(cache_path, key) if cache_path else None
     if cached:
@@ -99,6 +102,8 @@ def evaluate(
         }
         if name in rules.COMMAND_TOOLS and context.get("review_network"):
             request["network_if_approved"] = context["review_network"]
+            request["readable_git_configs"] = ["~/.gitconfig", "$XDG_CONFIG_HOME/git/config",
+                                               "workspace .git/config (including worktree/submodule gitdirs)"]
         deadline = context.get("_deadline") or started + float(context.get("review_budget") or DEFAULT_BUDGET)
         try:
             answer, used, failures = reviewer.review_chain(chain, request, deadline)

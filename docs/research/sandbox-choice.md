@@ -408,8 +408,14 @@ reported; other new entries still get a quarantine attempt.
 
 This is a post-command check. A concurrent host process could use the new path
 before cleanup, and concurrent host changes to protected names can be mistaken
-for command output. Unmarked nested paths are not scanned. Killing the launcher
-itself or stopping the host prevents the check from running. The backend still
+for command output. Previously absent, unmarked nested paths are not scanned;
+this includes newly planted nested repositories. Existing nested `.git` files,
+directories and referenced gitdir/commondir paths are now pinned read-only.
+Killing the launcher itself skips its check (including OpenCode's host shell
+timeout). A separate job-start baseline is checked before every command
+authorization and in the runner after worker-tree cleanup, including timeout
+and cancel. Both checks fail closed on errors. Killing both the runner and
+launcher, or stopping the host, still prevents recovery. The backend still
 enforces existing protected entries. Fake-wxc tests cover each protected name,
 additional roots, explicit deeper paths, existing entries, links and junctions,
 command failure, timeout, executor termination, parent death and cleanup errors.

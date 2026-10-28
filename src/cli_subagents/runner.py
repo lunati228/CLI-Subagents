@@ -413,7 +413,14 @@ class Runner:
             for message in setup.get(key) or []:
                 if message not in self.warnings:
                     self.warnings.append(message)
+        protected_policy = protected_baseline = None
         try:
+            if box is not None:
+                from cli_subagents.sandbox.launcher import snapshot
+                from cli_subagents.sandbox.model import Policy
+                from cli_subagents.sandbox.policy import check_workspace
+                protected_policy = Policy([check_workspace(root) for root in [spec.cwd, *spec.add_dirs]])
+                protected_baseline = snapshot(protected_policy)
             launch = self.runtime.launch(self.runtime_config, account, spec, prompt, setup)
         except Exception as exc:
             result = AttemptResult(ERROR, message=f"could not start the worker: {exc}", session_id=session, before_start=True)
@@ -431,6 +438,7 @@ class Runner:
         stderr_path = self.folder / f"stderr-{len(self.attempts)}.log"
         stop_reason: str | None = None
         exit_code: int | None = None
+        sandbox_failure: str | None = None
         with open_private(events_path) as events, open_private(stderr_path, append=False) as stderr:
             try:
                 with worker_process(
@@ -466,12 +474,19 @@ class Runner:
                 # Requests left by a hard-killed launcher contain command data.
                 # The integration owns this folder; never leave per-command policies behind.
                 if box is not None:
+                    try:
+                        from cli_subagents.sandbox.launcher import check_snapshot
+                        check_snapshot(protected_policy, protected_baseline)
+                    except Exception as exc:
+                        sandbox_failure = f"sandbox: {exc}"
                     for pattern in ("policy-*.json", "command-*.json*"):
                         for pending in (self.folder / "sandbox").glob(pattern):
                             pending.unlink(missing_ok=True)
 
         stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:] if stderr_path.exists() else ""
-        if stop_reason == CANCELLED:
+        if sandbox_failure:
+            result = AttemptResult(ERROR, message=sandbox_failure, text=parser.last_text, session_id=parser.session_id)
+        elif stop_reason == CANCELLED:
             result = AttemptResult(CANCELLED, message="cancelled", text=parser.last_text, session_id=parser.session_id)
         elif stop_reason == EARLY_STOP and self._early is not None:
             result = dataclasses.replace(

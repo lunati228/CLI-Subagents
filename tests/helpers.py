@@ -51,13 +51,18 @@ class TempHome(unittest.TestCase):
         self.home = self.root / "csa"
         self.primary = self.root / "primary"
         self.project = self.root / "project"
-        for folder in (self.home, self.primary, self.project):
+        self.user_home = self.root / "user"
+        for folder in (self.home, self.primary, self.project, self.user_home):
             folder.mkdir()
         self.record = self.root / "record.jsonl"
         self._env = patch.dict(
             os.environ,
             {
                 "CLI_SUBAGENTS_HOME": str(self.home),
+                "HOME": str(self.user_home),
+                "USERPROFILE": str(self.user_home),
+                "CLAUDE_CONFIG_DIR": str(self.root / "claude-config"),
+                "CODEX_HOME": str(self.root / "codex-config"),
                 "CLI_SUBAGENTS_CLAUDE_COMMAND": json.dumps([sys.executable, str(FAKE_CLAUDE)]),
                 "FAKE_CLAUDE_RECORD": str(self.record),
                 "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),

@@ -29,6 +29,84 @@ ENTRY = Path(launcher.__file__).with_name("__main__.py")
 
 
 class ModelAndBackendTests(TempHome):
+    def test_nested_repositories_and_worktree_targets_are_read_only(self):
+        nested = self.project / "vendor" / "lib"
+        (nested / ".git").mkdir(parents=True)
+        linked = self.project / "submodule"
+        linked.mkdir()
+        gitdir = self.project / "metadata" / "module"
+        gitdir.mkdir(parents=True)
+        common = self.project / "common"
+        common.mkdir()
+        (gitdir / "commondir").write_text("../../common", encoding="utf-8")
+        (linked / ".git").write_text("gitdir: ../metadata/module", encoding="utf-8")
+        value = policy.command_policy([str(self.project)], {})
+        data = get_backend("mxc").request(value, Command([sys.executable], str(self.project), {}))
+        for target in (nested / ".git", linked / ".git", gitdir, common):
+            self.assertIn(str(target), data["filesystem"]["readonlyPaths"])
+
+    def test_scan_skips_in_workspace_reparse_points_on_python_311(self):
+        from types import SimpleNamespace
+        link = self.project / "loop"
+        link.mkdir()
+        original = os.lstat
+        walked = []
+
+        def attributes(path, *args, **kwargs):
+            if Path(path) == link:
+                return SimpleNamespace(st_file_attributes=0x400)
+            return original(path, *args, **kwargs)
+
+        def walk(root, **kwargs):
+            dirs = ["loop"]
+            yield str(self.project), dirs, []
+            if dirs:
+                walked.append("followed junction")
+
+        with patch.object(os, "lstat", side_effect=attributes), patch.object(os, "walk", side_effect=walk):
+            policy.command_policy([str(self.project)], {})
+        self.assertEqual(walked, [])
+
+    def test_unreadable_inherited_tool_directory_is_skipped(self):
+        blocked = self.root / "inaccessible-tools"
+        original = Path.is_dir
+
+        def is_dir(path):
+            if path == blocked:
+                raise PermissionError("fixture inaccessible host folder")
+            return original(path)
+
+        with patch.object(Path, "is_dir", is_dir):
+            self.assertNotIn(str(blocked), policy.toolchain_dirs({"PSModulePath": str(blocked)}))
+
+    def test_host_path_excludes_workspace_junctions_even_when_the_target_is_outside(self):
+        outside = self.root / "trusted-tools"
+        outside.mkdir()
+        link = self.project / "linked-tools"
+        original = policy._real
+
+        def resolved(path):
+            return str(outside) if str(path) == str(link) else original(path)
+
+        with patch.object(policy, "_real", side_effect=resolved):
+            env = policy.host_environment({"PATH": os.pathsep.join([str(link), str(outside)])}, [str(self.project)])
+        self.assertEqual(env["PATH"], str(outside))
+
+    def test_workspace_scan_errors_fail_closed(self):
+        def walk(root, **kwargs):
+            kwargs["onerror"](PermissionError("fixture unreadable workspace"))
+            return iter(())
+
+        with patch.object(os, "walk", side_effect=walk), self.assertRaisesRegex(PolicyError, "cannot scan workspace"):
+            policy.command_policy([str(self.project)], {})
+
+    @unittest.skipUnless(os.name == "nt", "case-insensitive Windows protected names")
+    def test_nested_git_marker_case_does_not_bypass_protection(self):
+        marker = self.project / "nested" / ".GIT"
+        marker.mkdir(parents=True)
+        value = policy.command_policy([str(self.project)], {})
+        self.assertIn(str(marker), value.pinned)
+
     def test_policy_and_command_round_trip_without_backend_fields(self):
         value = Policy([str(self.project)], protected_names=[".git"])
         self.assertEqual(Policy.from_dict(value.to_dict()), value)
@@ -399,7 +477,65 @@ class IntegrationTests(GateBase):
         super().setUp()
         value = Policy([str(self.project)], denied=[str(self.home)])
         self.write(sandbox=True, sandbox_network=False, sandbox_mode="command", review_network="egress",
-                   command_sandbox={"policy": value.to_dict(), "backend": {"name": "mxc", "command": [sys.executable, str(FAKE)]}})
+                   command_sandbox={"policy": value.to_dict(), "missing_protected": launcher.snapshot(value),
+                                    "backend": {"name": "mxc", "command": [sys.executable, str(FAKE)]}})
+
+    def test_job_snapshot_recovers_a_hard_killed_launcher_before_next_authorization(self):
+        value = Policy.from_dict(self.data["command_sandbox"]["policy"])
+        self.data["command_sandbox"]["missing_protected"] = launcher.snapshot(value)
+        self.write()
+        target = self.project / ".claude"
+        target.mkdir()
+        (target / "settings.json").write_text("fixture", encoding="utf-8")
+        with patch.object(opencode_review, "run", side_effect=AssertionError("must check before review")), \
+                self.assertRaisesRegex(SandboxError, "quarantine"):
+            self.issue("npm test")
+        self.assertFalse(target.exists())
+        self.assertEqual(list((self.root / "sandbox").glob("command-*.json")), [])
+
+    def test_snapshot_check_errors_fail_closed_before_review(self):
+        value = Policy.from_dict(self.data["command_sandbox"]["policy"])
+        self.data["command_sandbox"]["missing_protected"] = launcher.snapshot(value)
+        self.write()
+        with patch.object(launcher, "_entry_exists", side_effect=PermissionError("fixture")), \
+                self.assertRaisesRegex(SandboxError, "could not quarantine"):
+            self.issue("npm test")
+
+    @unittest.skipUnless(os.name == "nt", "Windows command-line limit")
+    def test_long_command_has_clear_error_and_no_launch_request(self):
+        with self.assertRaisesRegex(PolicyError, "Windows command-line limit"):
+            self.issue("npm test # " + "x" * 14000)
+        self.assertEqual(list((self.root / "sandbox").glob("command-*.json")), [])
+
+    @unittest.skipUnless(os.name == "nt", "Windows command-line limit")
+    def test_long_command_error_reaches_the_shell_hook_without_executing_input(self):
+        event = {"command": "npm test # " + "x" * 14000, "cwd": str(self.project), "env": dict(os.environ)}
+        done = subprocess.run([sys.executable, str(Path(opencode.__file__)), str(self.context)],
+                              input=json.dumps(event), capture_output=True, text=True, timeout=10)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        failure = json.loads(done.stdout)
+        self.assertIn("Windows command-line limit", failure["command"])
+        self.assertNotIn("npm test", failure["command"])
+        blocked = subprocess.run([failure["shell"], "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", failure["command"]],
+                                 capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("Windows command-line limit", blocked.stderr)
+
+    def test_egress_approvals_are_reviewed_again_after_workspace_code_changes(self):
+        self.write(reviewer=self.fake())
+        for text in ("original", "changed lifecycle script"):
+            (self.project / "package.json").write_text(text, encoding="utf-8")
+            self.issue("npm install")
+        self.assertEqual(self.calls(), 2)
+
+    def test_egress_cannot_reuse_a_legacy_cached_approval(self):
+        from cli_subagents.agy_review import store
+        self.write(reviewer=self.fake())
+        key = store.action_key("run_command", {"CommandLine": "npm install", "Cwd": str(self.project)})
+        store.cache_put(Path(self.data["cache"]), key,
+                        {"decision": "approve", "reason": "old", "risk": "low"})
+        self.issue("npm install")
+        self.assertEqual(self.calls(), 1)
 
     def issue(self, command, **values):
         event = {"command": command, "cwd": str(self.project), "timeout": 1000, "shell": "/bin/sh",
@@ -443,6 +579,9 @@ class IntegrationTests(GateBase):
             self.issue("npm install")
         self.assertEqual(seen[0]["network_if_approved"], "egress")
         self.assertIn('"command network if approved": "egress"', reviewer.build_prompt(seen[0]))
+        prompt = reviewer.build_prompt(seen[0])
+        for name in ("~/.gitconfig", ".git/config", "http.extraHeader", "lifecycle"):
+            self.assertIn(name, prompt)
 
     def test_external_file_writes_and_opencode_logins_never_reach_reviewer(self):
         self.write(reviewer=self.fake())

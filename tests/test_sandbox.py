@@ -303,6 +303,43 @@ class TaskkillTests(unittest.TestCase):
 
 
 class OpenCodeLaunchTests(OpenCodeHome):
+    def test_workspace_reviewer_executable_is_pinned_for_later_host_calls(self):
+        folder = self.project / "reviewer-tools"
+        folder.mkdir()
+        executable = folder / "reviewer.exe"
+        executable.write_text("fixture", encoding="utf-8")
+        chain = [{"kind": "agy", "command": [str(executable)], "timeout": 20}]
+        with patch("cli_subagents.runtimes.opencode.build_chain", return_value=chain):
+            launch = self.launch(access="edit", sandbox=True)
+        _, settings = self.plugin_settings(launch)
+        context = read_json(Path(settings["context"]))
+        self.assertIn(str(folder), context["command_sandbox"]["policy"]["pinned"])
+        self.assertIn(str(folder), context["protected_paths"])
+
+    def test_host_path_excludes_writable_workspace_tools(self):
+        tools = self.project / ".venv" / "Scripts"
+        tools.mkdir(parents=True)
+        outside = self.root / "trusted-tools"
+        outside.mkdir()
+        with patch.dict(os.environ, {"PATH": os.pathsep.join([str(tools), str(outside), ".", ""])}):
+            launch = self.launch(access="edit", sandbox=True)
+        self.assertEqual(launch.env["PATH"], str(outside))
+        _, settings = self.plugin_settings(launch)
+        context = read_json(Path(settings["context"]))
+        from cli_subagents.sandbox.integrations.opencode import prepare
+        prepare({"command": "npm test", "cwd": str(self.project), "env": launch.env, "shell": "/bin/sh"},
+                Path(settings["context"]))
+        [request] = Path(settings["context"]).parent.joinpath("sandbox").glob("command-*.json")
+        command_env = read_json(request)["command"]["env"]
+        self.assertIn(str(tools), command_env["PATH"].split(os.pathsep))
+        self.assertIn(str(self.project / ".claude"),
+                      [path for path, root in context["command_sandbox"]["missing_protected"]])
+
+    def test_disabled_sandbox_does_not_scan_or_stat_tool_paths(self):
+        with patch.object(policy, "command_policy", side_effect=AssertionError("sandbox is off")), \
+                patch.object(policy, "toolchain_dirs", side_effect=PermissionError("host tool folder")):
+            self.launch(access="edit", sandbox=False)
+
     def test_host_runtime_and_custom_executor_cannot_be_changed_from_workspace(self):
         runtime = self.project / "host-python"
         runtime.mkdir()
@@ -462,6 +499,25 @@ class RunnerTests(OpenCodeHome):
             follower = follow.Follower(status["job_id"], None, 1)
             follower.review_lines()
         self.assertTrue(any(line.startswith("review: denied") for line in lines), lines)
+
+    def test_protected_name_is_quarantined_after_job_timeout_or_cancel(self):
+        for stop in ("timeout", "cancel"):
+            with self.subTest(stop=stop):
+                os.environ["FAKE_OPENCODE_SCENARIO"] = "plant_protected_pause"
+                status = jobs.create_job(runtime="opencode", prompt="fixture", cwd=str(self.project), access="edit",
+                                         timeout_seconds=30 if stop == "timeout" else 60)
+                target = self.project / ".claude"
+                deadline = time.monotonic() + 20
+                while not target.exists() and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertTrue(target.exists())
+                if stop == "cancel":
+                    jobs.cancel(status["job_id"])
+                status = jobs.wait_for(status["job_id"], 45)
+                self.assertEqual(status["state"], "done", status)
+                self.assertEqual(status["outcome"], "error", status)
+                self.assertIn("quarantine", status["message"])
+                self.assertFalse(target.exists())
 
 
 class DocumentationTests(unittest.TestCase):

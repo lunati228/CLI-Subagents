@@ -441,13 +441,13 @@ def _report_probe(executable: Path, report: Any) -> None:
         report.add_todo(_update_windows_todo())
         return
     assert data is not None
-    problems = mxc.probe_problems(data)
+    problems = mxc.probe_problems(data, loopback=True)
     if problems:
         report.failed.append("Sandbox: MXC is installed, but can't run csa's sandbox on this system: " + "; ".join(problems) + ".")
         report.add_todo(_update_windows_todo())
         return
     report.notes.append(f"Sandbox: on. MXC's probe reports tier {data.get('tier')} with denied and enumerate-only "
-                        "paths; OpenCode read and edit workers run inside it.")
+                        "paths and host loopback; OpenCode edit workers' shell commands run inside it.")
 
 
 # setup / update --------------------------------------------------------------

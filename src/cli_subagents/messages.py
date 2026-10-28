@@ -6,9 +6,9 @@ Each job's `channel` folder holds two append-only logs:
     inbox.jsonl    main session -> worker: follow-ups and answers
 
 plus small JSON files that remember which entries each side has already seen,
-so every message is delivered once. The channel is the only part of the job
-folder a sandboxed worker can write (its csa-parent tools run inside the
-sandbox); the job's status, spec and review files stay out of its reach.
+so every message is delivered once. The csa-parent tools run on the host, like
+OpenCode and the review gate. Sandboxed shell commands cannot access the job
+folder, including its channel, status, spec and review files.
 Jobs created before the channel folder existed keep their files in the job folder.
 """
 

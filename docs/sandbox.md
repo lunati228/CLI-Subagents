@@ -57,7 +57,10 @@ but their network and installation requirements need separate validation.
 Commands can write the job's workspaces and their own disposable container temp.
 Git metadata and agent/editor settings at workspace roots stay read-only or
 are denied when missing, with a post-command check for newly planted names.
-Existing nested agent settings and secret files are denied.
+Existing nested agent settings and secret files are denied. Nested `.git`
+directories and files are read-only, as are the gitdir and commondir referenced
+by a worktree or submodule marker. The scan skips directory reparse points,
+including junctions on Python 3.11, rather than following dependency-store loops.
 Read grants cover installed toolchains, the Python runtime, csa's code and git
 configuration. The command gets no grant to csa's job records, gate cache, log,
 reviewer folders, policies, authorization requests or the user's agent logins.
@@ -68,18 +71,26 @@ temp; that state ends with the command.
 csa's host Python runtime and the executor's directory stay read-only even when
 installed inside a workspace. The host file-tool gate protects them too, so a
 command cannot replace code that a later host launch will run.
+OpenCode's host PATH excludes workspace directories and relative or empty
+entries, so a command cannot plant a tool that a later host grep or glob runs.
+The original tool PATH, including an activated workspace venv, is available only
+to contained commands. Host timeout cleanup uses absolute Windows system tools.
 
 | Network class | Behavior |
 |---|---|
 | `none` | No egress or host loopback. |
 | `loopback` | No internet or LAN egress; host loopback is allowed for local test servers. Fixed-rule commands, including ordinary builds and tests, use this class. |
-| `egress` | Internet egress and host loopback; used only after reviewer approval, including a cached reviewer verdict. |
+| `egress` | Internet egress and host loopback; requires fresh reviewer approval for each invocation. |
 | `proxy` | Reserved; currently rejected. |
 
 Loopback can reach services on this PC. A command-text rule cannot inspect test
 code, but auto-approved test code still has its egress blocked by the OS policy.
 Package downloads and other changing commands need review. Files outside the
 writable workspaces remain unwritable after reviewer approval.
+Reviewer command verdicts are never cached because workspace scripts and package
+lifecycle hooks can change between invocations. Reviewers are warned that readable Git
+configuration may hold tokens in URL rewrites or `http.extraHeader`; reading
+permissions do not authorize disclosure of those contents.
 
 Node and other tools need drive-root enumeration to resolve paths. This exposes
 names and sizes, not file contents; credential paths are denied. A read grant on
@@ -101,13 +112,19 @@ including `.git` files and dangling links, are left alone. If an entry cannot be
 moved, csa reports that failure and tells you to move it aside before using git
 or agents; it still tries to quarantine the other new entries.
 
-The check runs after normal exit, command failure, timeout, executor termination
-and parent-shell death. It cannot run if the launcher itself is forcibly killed
-or the host stops. It also cannot prevent a concurrent host process from using
+The launcher checks after normal exit, command failure, its own timeout,
+executor termination and parent-shell death while the launcher stays alive.
+OpenCode's shell timeout or a runner timeout/cancel can forcibly kill the
+launcher before its cleanup runs. A separate job-start snapshot is therefore
+checked before each command authorization and in the runner after its worker
+tree stops, including timeout and cancel. Check errors fail closed. If the
+runner and launcher both die, or the host stops, cleanup cannot run. These
+checks also cannot prevent a concurrent host process from using
 a planted path while the command is still running. Avoid concurrent host changes
 to protected names: any newly appearing entry is treated as planted by the
-command. Unmarked nested paths are not searched. Existing protected paths remain
-read-only under the backend policy. See the filesystem probes in the research
+command. Previously absent, unmarked nested paths are not searched, including
+new nested repositories; existing nested Git metadata is read-only. Existing
+protected paths remain read-only under the backend policy. See the filesystem probes in the research
 note for the underlying MXC limitation.
 
 ## Launching and failure handling
@@ -119,6 +136,9 @@ argv, cwd, the filtered environment, network class and timeout in seconds.
 The isolated script entry point consumes the integration's one-use request and
 calls the same API. Commands are data: the Windows integration uses PowerShell
 `-EncodedCommand`, and POSIX integrations can pass an argv shell command.
+Commands whose encoded Windows argv would reach the 32,767 UTF-16 code-unit
+limit fail with a clear error before a request is issued; split them or run a
+workspace script.
 
 The launcher starts the executor suspended, assigns its tree to a kill-on-close
 Windows job, then resumes it. It checks the parent shell's process identity and

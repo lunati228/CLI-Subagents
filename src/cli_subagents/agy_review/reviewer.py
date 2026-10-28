@@ -67,6 +67,8 @@ def build_prompt(request: dict[str, Any], policy: str | None = None) -> str:
         "workspace folders": request.get("workspaces"),
         "commands run in an OS sandbox": request.get("sandboxed"),
         **({"command network if approved": request["network_if_approved"]} if "network_if_approved" in request else {}),
+        **({"readable git configuration (may contain tokens)": request["readable_git_configs"]}
+           if "readable_git_configs" in request else {}),
         "why the fixed rules sent this to you": request.get("why"),
     }
     return (

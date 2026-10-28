@@ -229,15 +229,21 @@ class GateBase(OpenCodeHome):
 
 
 class GateTests(GateBase):
-    def test_reviewer_approves_commands_the_rules_cannot_settle_once_per_job(self):
+    def test_reviewer_rechecks_commands_even_when_the_sandbox_is_off(self):
         self.write(reviewer=self.fake())
         for _ in range(2):
             answer = self.shell("python build.py")
             self.assertEqual(answer["decision"], "auto_approve")
             self.assertIn("approved by the reviewer", answer["reason"])
-        self.assertEqual(self.calls(), 1)
+        self.assertEqual(self.calls(), 2)
         sources = [json.loads(line)["source"] for line in Path(self.data["log"]).read_text().splitlines()]
-        self.assertEqual(sources, ["reviewer", "cache"])
+        self.assertEqual(sources, ["reviewer", "reviewer"])
+
+    def test_non_command_reviews_still_use_the_cache(self):
+        self.write(reviewer=self.fake())
+        for _ in range(2):
+            self.assertEqual(self.review("webfetch", {"url": "https://example.com/docs"})["decision"], "auto_approve")
+        self.assertEqual(self.calls(), 1)
 
     def test_every_failure_denies(self):
         cases = {
@@ -281,8 +287,7 @@ class GateTests(GateBase):
         self.assertEqual((self.calls_of("first"), self.calls_of("second")), (1, 0))
         record = json.loads(Path(self.data["log"]).read_text().splitlines()[-1])
         self.assertEqual((record["reviewer"], record["model"], record.get("failed")), ("agy/first", "first", None))
-        cached = json.loads(Path(self.data["cache"]).read_text())
-        self.assertEqual({entry["reviewer"] for entry in cached.values() if isinstance(entry, dict)}, {"agy/first"})
+        self.assertFalse(Path(self.data["cache"]).exists())
 
     def test_every_no_verdict_falls_through_to_the_next_reviewer(self):
         cases = {
@@ -368,7 +373,7 @@ class GateTests(GateBase):
     def test_claude_reviewer_backend(self):
         self.write(reviewer={**self.fake(FAKE_KIND="claude"), "kind": "claude"})
         self.assertEqual(self.shell("python build.py")["decision"], "auto_approve")
-        Path(self.data["cache"]).unlink()
+        Path(self.data["cache"]).unlink(missing_ok=True)
         self.write(reviewer={**self.fake(FAKE_KIND="claude", FAKE_ERROR="1"), "kind": "claude"})
         self.assertEqual(self.shell("python build.py")["decision"], "deny")
 
@@ -415,7 +420,7 @@ class GateTests(GateBase):
         with patch.object(reviewer, "review", side_effect=fake_review):
             self.shell("git push origin main")
             self.write(sandbox=True)
-            Path(self.data["cache"]).unlink()
+            Path(self.data["cache"]).unlink(missing_ok=True)
             self.shell("git push origin main")
             self.review("webfetch", {"url": "https://example.com/docs"})
         self.assertEqual([item["tool"] for item in seen], ["run_command", "run_command", "read_url_content"])
@@ -578,21 +583,26 @@ console.log(JSON.stringify({ outcome, ticks, ms: Date.now() - started }));
         self.assertIn("failed closed", got["outcome"])
         self.assertLess(time.monotonic() - started, 15)
 
-    @unittest.skipUnless(os.name == "nt", "Windows cmd resolves the taskkill stand-in")
-    def test_timeout_uses_taskkill_cmd_stand_in(self):
-        from cli_subagents.sandbox import taskkill
-
-        # No system taskkill or agent CLI: cmd must find this temporary stand-in.
+    @unittest.skipUnless(os.name == "nt", "Windows host cleanup uses absolute system executables")
+    def test_timeout_ignores_workspace_taskkill_cmd(self):
+        # A planted PATH tool must never run on the host during timeout cleanup.
         marker = self.project / "taskkill-used.txt"
         shims = self.project / "bin"
         shims.mkdir()
         (shims / "taskkill.cmd").write_text(
-            f'@echo used>"{marker}"\n@"{sys.executable}" -I "{taskkill.__file__}" %*\n', encoding="utf-8")
+            f'@echo used>"{marker}"\n', encoding="utf-8")
         plugin = self.plugin('import sys, time\nsys.stdin.read()\ntime.sleep(20)\n', review_seconds=1)
+        source = plugin.read_text(encoding="utf-8")
+        settings = json.loads(source.split("const settings = ", 1)[1].split(";\n", 1)[0])
+        system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+        self.assertEqual(settings["cmd"], str(system32 / "cmd.exe"))
+        self.assertEqual(settings["taskkill"], str(system32 / "taskkill.exe"))
+        started = time.monotonic()
         with patch.dict(os.environ, {"PATH": str(shims) + os.pathsep + os.environ.get("PATH", "")}):
             got = json.loads(self.run_js(plugin, self.CALL)[0])
         self.assertIn("failed closed", got["outcome"])
-        self.assertTrue(marker.is_file(), "timeout bypassed the .cmd stand-in")
+        self.assertFalse(marker.exists(), "host cleanup executed a workspace PATH tool")
+        self.assertLess(time.monotonic() - started, 15)
 
     def test_denial_reason_and_bad_output(self):
         plugin = self.plugin('import json, sys\nsys.stdin.read()\n'

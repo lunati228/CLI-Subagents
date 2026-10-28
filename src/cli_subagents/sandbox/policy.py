@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+import stat
 from typing import Iterable
 
 from cli_subagents.sandbox.model import Policy, PolicyError
@@ -207,7 +208,11 @@ def toolchain_dirs(env: dict[str, str]) -> list[str]:
     result = []
     for candidate in candidates:
         real = _real(os.path.expandvars(candidate))
-        if not Path(real).is_dir() or _is_root(real):
+        try:
+            is_directory = Path(real).is_dir()
+        except OSError:
+            continue  # inherited tool paths can belong to another user or OS
+        if not is_directory or _is_root(real):
             continue
         if windows and _inside(real, _real(windows)):
             continue
@@ -278,23 +283,63 @@ def command_policy(workspaces: list[str], env: dict[str, str]) -> Policy:
     roots = [check_workspace(root) for root in workspaces]
     denied = [*private_roots(), *(str(Path.home() / name) for name in HOME_SECRETS),
               str(Path.home() / ".cargo" / "credentials"), str(Path.home() / ".cargo" / "credentials.toml")]
+    git_paths = []
     seen = 0
+    protected = {_key(name) for name in PROTECTED_NAMES}
+
+    def scan_error(error: OSError) -> None:
+        raise PolicyError(f"cannot scan workspace protections: {error}") from error
+
     for root in roots:
-        for folder, dirs, files in os.walk(root, followlinks=False):
+        for folder, dirs, files in os.walk(root, followlinks=False, onerror=scan_error):
             # Don't follow junctions or read agent/git settings to discover secrets.
             for name in list(dirs):
                 path = Path(folder) / name
-                if name in PROTECTED_NAMES or not _inside(_real(path), root):
+                # Python 3.11's walk(followlinks=False) still follows junctions.
+                # Test the entry itself before resolving it, including internal loops.
+                attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+                reparse = bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT) or path.is_symlink()
+                git_marker = _key(name) == ".git"
+                if git_marker:
+                    git_paths.append(str(path))
+                if _key(name) in protected or reparse or not _inside(_real(path), root):
                     dirs.remove(name)
-                    if name != ".git":
+                    if _key(name) in protected and not git_marker:
                         denied.append(str(path))
             for name in files:
                 seen += 1
                 if seen > 250_000:
                     raise PolicyError("workspace has too many files to check for secrets; use a narrower workspace")
-                path = str(Path(folder) / name)
+                marker = Path(folder) / name
+                path = str(marker)
+                if _key(name) == ".git":
+                    git_paths += [path, *git_dirs_of_worktree(marker)]
                 if secret_reason(path, [str(Path.home())], trusted=root):
                     denied.append(path)
     return Policy(roots, readonly=_unique([*toolchain_dirs(env), *python_dirs(), *git_config_paths(),
                                           *enclosing_git_dir(roots[0])]),
-                  denied=_unique(denied), pinned=host_paths([]), protected_names=list(PROTECTED_NAMES))
+                  denied=_unique(denied), pinned=_unique([*host_paths([]), *git_paths]),
+                  protected_names=list(PROTECTED_NAMES))
+
+
+def host_environment(env: dict[str, str], workspaces: list[str]) -> dict[str, str]:
+    """Host tools must never resolve executables from command-writable folders."""
+
+    roots = _unique(path for root in workspaces
+                    for path in (_real(root), os.path.abspath(os.path.expanduser(root))))
+    result = dict(env)
+    for key, value in env.items():
+        if key.upper() == "PATH":
+            entries = []
+            for entry in value.split(os.pathsep):
+                path = entry.strip().strip('"')
+                # Relative entries (including the empty current-directory entry)
+                # depend on cwd and can silently search the writable workspace.
+                forms = (_real(path), os.path.abspath(path)) if os.path.isabs(path) else ()
+                # Keep neither spelling of a workspace junction: its link can
+                # be replaced even when its current target is a trusted folder.
+                if not forms or any(_inside(form, root) for form in forms for root in roots):
+                    continue
+                entries.append(entry)
+            result[key] = os.pathsep.join(entries)
+    return result

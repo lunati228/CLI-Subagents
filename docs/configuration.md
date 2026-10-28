@@ -220,7 +220,7 @@ A refusal looks like this:
 ```
 Codex is at its limit: 4 of 4 subagents running (plan preset plus: 4 per account; change with max_jobs). Start this with runtime claude, or wait for one to finish.
 Only if the user explicitly asked for more parallel jobs, start again with override=<their words>; otherwise ask the user (say how much of the 5-hour window is left) or use the home model.
-Room: Claude 2 accounts (no usage data) Ã‚Â· Codex primary 8% left (5h, resets 03:12)
+Room: Claude 2 accounts (no usage data) · Codex primary 8% left (5h, resets 03:12)
 ```
 
 The `Room:` line is also in the `subagent_start` and `subagent_accounts` results. With quota steps or pools configured, it appears in the `csa run --follow` header too. It shows what is already known, marks old data with its age (`as of 2 h ago`) and leaves out accounts with no data. Codex usage is read from the newest rollout file in each Codex account folder (the `rate_limits` field only). Claude usage comes from the events of jobs that already ran. Antigravity shows job counts and cooldowns, with no remaining-quota estimate. Nothing starts a job to measure usage.

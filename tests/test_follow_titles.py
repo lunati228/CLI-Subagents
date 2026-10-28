@@ -2,7 +2,9 @@
 
 import io
 import json
+import os
 from pathlib import Path
+import sys
 import unittest
 import unicodedata
 
@@ -62,6 +64,9 @@ class FollowTitleTests(TempHome):
     def setUp(self):
         super().setUp()
         self.write_config(accounts=("a1",))
+        # OpenCode jobs need a binary; use the fake one so this never depends on the machine.
+        fake = Path(__file__).resolve().parent / "fake_opencode.py"
+        os.environ["CLI_SUBAGENTS_OPENCODE_COMMAND"] = json.dumps([sys.executable, str(fake)])
 
     def job(self, runtime, records):
         job_id = jobs.create_job(runtime=runtime, prompt="task", cwd=str(self.project), start=False)["job_id"]

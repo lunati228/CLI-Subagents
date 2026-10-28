@@ -155,8 +155,10 @@ class ModelAndBackendTests(TempHome):
         self.assertIn(str(self.project / ".env"), value.denied)
         self.assertIn(str(nested / "secret.key"), value.denied)
         self.assertIn(str(self.home), value.denied)
-        for relative in (".local/share/opencode/auth.json", ".config/opencode/service.json",
-                         "AppData/Local/opencode/auth.json", "AppData/Roaming/opencode/service.json"):
+        relatives = [".local/share/opencode/auth.json", ".config/opencode/service.json"]
+        if os.name == "nt":  # OpenCode's AppData locations exist only on Windows
+            relatives += ["AppData/Local/opencode/auth.json", "AppData/Roaming/opencode/service.json"]
+        for relative in relatives:
             self.assertIsNotNone(paths.secret_reason(str(self.root / relative), [str(self.root)]))
 
     def test_missing_secret_parents_are_denied_at_the_first_missing_component(self):

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import stat
 import sys
 import tempfile
 import time
@@ -16,6 +17,73 @@ from cli_subagents.fsutil import make_private_dir, process_start_time, same_proc
 from cli_subagents.sandbox.backends import get_backend
 from cli_subagents.sandbox.model import Command, Policy, SandboxError
 from cli_subagents.sandbox.policy import PROTECTED_NAMES, _inside, _key, _real, _unique, host_paths
+
+# Opportunistic nested-repository detection. Bounds apply independently before
+# and after a command; unvisited existing subtrees are never treated as new.
+NESTED_DEPTH = 3
+NESTED_DIRS = 1024
+NESTED_ENTRIES = 20000
+NESTED_BYTES = 48 * 1024  # leave room for policy/review fields in the 256 KiB gate context
+NESTED_SKIP = {"node_modules", ".venv", "venv", "__pycache__", "target", "dist", "build"}
+
+
+def _nested_folders(policy: Policy) -> list[dict[str, Any]]:
+    result = []
+    pending = [(Path(_real(root)), Path(_real(root)), 0) for root in _unique(policy.workspaces)]
+    entries = 0
+    stored_bytes = 0
+    protected = {_key(name) for name in [*PROTECTED_NAMES, *policy.protected_names]}
+    while pending and len(result) < NESTED_DIRS and entries < NESTED_ENTRIES:
+        folder, root, depth = pending.pop(0)
+        children = []
+        try:
+            # Never follow a link/junction, including one replacing a queued dir.
+            attributes = folder.lstat()
+            if getattr(attributes, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT or folder.is_symlink():
+                continue
+            with os.scandir(folder) as items:
+                for item in items:
+                    entries += 1
+                    if entries > NESTED_ENTRIES:
+                        # A partial listing cannot prove a child did not exist.
+                        return result
+                    if (item.is_dir(follow_symlinks=False) and not item.is_symlink()
+                            and not getattr(item.stat(follow_symlinks=False), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                        children.append(item.name)
+            row = {"folder": str(folder), "root": str(root), "children": children,
+                   "git": _entry_exists(folder / ".git")}
+            # Budget for the extra indentation when embedded in a gate context.
+            stored_bytes += len(json.dumps(row, indent=2, ensure_ascii=False).encode("utf-8")) + 24 * (len(children) + 8)
+            if stored_bytes > NESTED_BYTES:
+                return result
+            result.append(row)
+            if depth < NESTED_DEPTH:
+                for name in sorted(children):
+                    if (_key(name) not in protected and name.lower() not in NESTED_SKIP
+                            and ".csa-quarantine-" not in name):
+                        pending.append((folder / name, root, depth + 1))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as exc:
+            raise SandboxError(f"cannot scan nested repository protections at {folder}: {exc}") from exc
+    return result
+
+
+def _new_nested_git(policy: Policy, before: list[dict[str, Any]]) -> list[tuple[Path, Path]]:
+    known = {_key(row["folder"]): row for row in before}
+    new_folders: set[str] = set()
+    missing = []
+    for row in _nested_folders(policy):
+        folder, root = Path(row["folder"]), Path(row["root"])
+        previous = known.get(_key(str(folder)))
+        parent = known.get(_key(str(folder.parent)))
+        new = (_key(str(folder.parent)) in new_folders or
+               (parent is not None and _key(folder.name) not in {_key(n) for n in parent["children"]}))
+        if new:
+            new_folders.add(_key(str(folder)))
+        if row["git"] and ((previous is not None and not previous["git"]) or new):
+            missing.append((folder / ".git", root))
+    return missing
 
 
 def _entry_exists(path: Path) -> bool:
@@ -88,15 +156,20 @@ def _quarantine_new_paths(missing: list[tuple[Path, Path]]) -> None:
         raise SandboxError("a new protected path appeared during the sandboxed command: " + "; ".join(findings))
 
 
-def snapshot(policy: Policy) -> list[list[str]]:
+def snapshot(policy: Policy) -> dict[str, Any]:
     """Job-lifetime baseline kept on the host, beyond any one launcher's lifetime."""
 
-    return [[str(path), str(root)] for path, root in _missing_protected_paths(policy)]
+    return {"missing": [[str(path), str(root)] for path, root in _missing_protected_paths(policy)],
+            "nested": _nested_folders(policy)}
 
 
 def check_snapshot(policy: Policy, baseline: Any) -> None:
     """Recover after a launcher was killed outright; malformed baselines fail closed."""
 
+    nested = None
+    if isinstance(baseline, dict) and set(baseline) == {"missing", "nested"}:
+        nested = baseline["nested"]
+        baseline = baseline["missing"]
     if not isinstance(baseline, list):
         raise SandboxError("missing protected-path job snapshot")
     roots = {_key(_real(root)) for root in policy.workspaces}
@@ -111,6 +184,21 @@ def check_snapshot(policy: Policy, baseline: Any) -> None:
                 or ".." in path.parts):
             raise SandboxError("invalid protected-path job snapshot")
         missing.append((path, root))
+    if nested is not None:
+        if not isinstance(nested, list) or len(nested) > NESTED_DIRS:
+            raise SandboxError("invalid nested-repository snapshot")
+        for row in nested:
+            if (not isinstance(row, dict) or set(row) != {"folder", "root", "children", "git"}
+                    or not isinstance(row["folder"], str) or not isinstance(row["root"], str)
+                    or not isinstance(row["git"], bool) or not isinstance(row["children"], list)
+                    or not Path(row["folder"]).is_absolute() or not Path(row["root"]).is_absolute()
+                    or _key(row["root"]) not in roots or not _inside(row["folder"], row["root"])
+                    or ".." in Path(row["folder"]).parts
+                    or not all(isinstance(n, str) and n not in ("", ".", "..") and not any(c in n for c in "\\/:\0")
+                               for n in row["children"])):
+                raise SandboxError("invalid nested-repository snapshot")
+        missing += _new_nested_git(policy, nested)
+    missing = list({_key(str(path)): (path, root) for path, root in missing}.values())
     _quarantine_new_paths(missing)
 
 
@@ -133,7 +221,7 @@ def execute(policy: Policy, command: Command, backend: dict[str, Any], folder: P
         # Only the launcher can read this folder; the container receives neither
         # its policy nor its authorization request as a filesystem grant.
         protected = replace(policy, pinned=_unique([*policy.pinned, *host_paths(argv)]))
-        missing = _missing_protected_paths(protected)
+        baseline = snapshot(protected)
         prepared = adapter.prepare(protected, command, argv, path)
         write_text(path, prepared.policy_text)
         started = time.monotonic()
@@ -150,7 +238,7 @@ def execute(policy: Policy, command: Command, backend: dict[str, Any], folder: P
         finally:
             # worker_process has stopped the whole tree, including on early
             # returns and exceptions, before we inspect or rename anything.
-            _quarantine_new_paths(missing)
+            check_snapshot(protected, baseline)
     finally:
         path.unlink(missing_ok=True)
 

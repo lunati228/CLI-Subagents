@@ -226,11 +226,19 @@ class RuntimeConfig:
 
 
 @dataclass
+class ClaudeSandboxSettings:
+    mode: str = "off"
+    additional_dirs: list[Path] = field(default_factory=list)
+    timeout_seconds: int = 120
+
+
+@dataclass
 class SandboxSettings:
     """`[sandbox]`: csa's OS sandbox for commands (Microsoft MXC on Windows; see docs/sandbox.md)."""
 
     enabled: bool | None = None  # None: on where this system supports it
     path: Path | None = None  # wxc-exec.exe to use instead of csa's own install
+    claude: ClaudeSandboxSettings = field(default_factory=ClaudeSandboxSettings)
 
 
 @dataclass
@@ -515,16 +523,30 @@ def _sandbox_from(data: Any) -> SandboxSettings:
         return SandboxSettings()
     if not isinstance(data, dict):
         raise ValueError("[sandbox] must be a table")
-    unknown = sorted(set(data) - {"enabled", "path"})
+    unknown = sorted(set(data) - {"enabled", "path", "claude"})
     if unknown:
-        raise ValueError(f"[sandbox] has unknown keys: {', '.join(unknown)} (known: enabled, path)")
+        raise ValueError(f"[sandbox] has unknown keys: {', '.join(unknown)} (known: enabled, path, claude)")
     enabled = data.get("enabled")
     if enabled is not None and not isinstance(enabled, bool):
         raise ValueError("[sandbox] enabled must be true or false")
     path = data.get("path")
     if path is not None and (not isinstance(path, str) or not path.strip()):
         raise ValueError("[sandbox] path must be the full path of wxc-exec.exe")
-    return SandboxSettings(enabled=enabled, path=_path(path, Path()) if path else None)
+    claude = data.get("claude", {})
+    if not isinstance(claude, dict) or set(claude) - {"mode", "additional_dirs", "timeout_seconds"}:
+        raise ValueError("[sandbox.claude] accepts mode, additional_dirs and timeout_seconds")
+    mode = claude.get("mode", "off")
+    if mode not in ("off", "powershell", "block-bash"):
+        raise ValueError('[sandbox.claude] mode must be "off", "powershell" or "block-bash"')
+    directories = claude.get("additional_dirs", [])
+    if not isinstance(directories, list) or not all(isinstance(p, str) and p and "\0" not in p and Path(p).is_absolute()
+                                                  for p in directories):
+        raise ValueError("[sandbox.claude] additional_dirs must be a list of absolute paths")
+    timeout = claude.get("timeout_seconds", 120)
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 86400:
+        raise ValueError("[sandbox.claude] timeout_seconds must be an integer from 1 to 86400")
+    return SandboxSettings(enabled=enabled, path=_path(path, Path()) if path else None,
+                           claude=ClaudeSandboxSettings(mode, [Path(p) for p in directories], timeout))
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -584,6 +606,11 @@ def dump_config(config: Config) -> str:
             lines.append(f"enabled = {_toml_value(config.sandbox.enabled)}")
         if config.sandbox.path:
             lines.append(f"path = {_toml_value(str(config.sandbox.path))}")
+    claude = config.sandbox.claude
+    if claude != ClaudeSandboxSettings():
+        lines += ["", "[sandbox.claude]", f"mode = {_toml_value(claude.mode)}",
+                  f"additional_dirs = {json.dumps([str(p) for p in claude.additional_dirs])}",
+                  f"timeout_seconds = {claude.timeout_seconds}"]
     if config.reviewers is not None:
         lines += ["", "[review]"] + (["reviewers = []"] if not config.reviewers else [])
         lines += _reviewer_lines("review", config.reviewers)

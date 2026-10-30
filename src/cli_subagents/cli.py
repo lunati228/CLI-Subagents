@@ -666,10 +666,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     hook = sub.add_parser("hook", help="Claude Code hook commands (see hooks/hooks.json).")
     hook.add_argument(
-        "action", choices=("await", "pending", "inbox", "relay-write"),
+        "action", choices=("await", "pending", "inbox", "relay-write", "claude-sandbox",
+                           "claude-sandbox-start", "claude-sandbox-end"),
         help="await: wake the main session when a job finishes or asks something. "
         "pending: list uncollected results at session start. inbox: a worker's follow-ups. "
-        "relay-write: allow a relay's new Write inside the csa inbox only.",
+        "relay-write: allow a relay's new Write inside the csa inbox only. "
+        "claude-sandbox/start/end: opt-in main-session PowerShell containment.",
     )
     hook.add_argument("job_id", nargs="?", help="The worker's job (inbox only).")
 

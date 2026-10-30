@@ -576,6 +576,7 @@ def status(settings: SandboxSettings) -> dict[str, Any]:
         "configured": bool(settings.path), "installed": executable.is_file(), "integrity": None,
         "signatures": None, "probe": None, "probe_error": None, "problems": [],
     }
+    info["claude_mode"] = settings.claude.mode
     problems: list[str] = info["problems"]
     if current == "off":
         return info
@@ -631,12 +632,21 @@ def describe(info: dict[str, Any]) -> list[str]:
 
     reason = str(info.get("reason") or "")
     lines = [f"Sandbox: {info['state']}. {reason[:1].upper()}{reason[1:]}."]
+    mode = info.get("claude_mode", "off")
+    if mode == "off":
+        lines.append("  Claude Code main-session sandbox: off (opt in with [sandbox.claude] mode).")
+    else:
+        lines.append(f"  Claude Code main-session sandbox: {mode}; requires Claude Code 2.1.295+ and a new session.")
+        if mode == "powershell":
+            lines.append("  Warning: Claude's Bash tool remains outside the sandbox in powershell mode.")
+        if info["state"] != "on":
+            lines.append("  Warning: Claude sandbox mode is enabled but MXC is unavailable; PowerShell calls will be denied.")
     if info["state"] != "on":
         for problem in info["problems"]:
             lines.append(f"Problem: sandbox: {problem}.")
         return lines
     lines.append("  Backend: mxc. Integration: OpenCode shell.create.before (commands only; read jobs run none).")
-    lines.append("  Other integrations: Claude Code PowerShell hook planned; Codex uses its own sandbox.")
+    lines.append("  Codex uses its own sandbox.")
     where = "configured path" if info.get("configured") else "installed by csa" if info.get("installed") else "not installed"
     detail = f"  MXC {info['version']}: {info['executable']} ({where}"
     if info.get("integrity") == "verified":

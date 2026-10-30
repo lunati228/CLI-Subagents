@@ -283,7 +283,8 @@ def plugin_source(python: str, script: Path, context: Path | None, *, steps: int
     The review call runs as a child process without blocking OpenCode's event
     loop, since a reviewer model call can take over a minute. `review_seconds`
     must cover the reviewer's own timeout; the plugin kills the check after it
-    and denies the call.
+    and denies the call. OpenCode 2.1.4's tool.execute.before dispatcher and
+    Promise adapter impose no separate deadline (see docs/research/sandbox-main-session.md).
 
     Fail-closed order: the review hook (read/edit) and the model guard are
     registered before the prompt hook that moves the session off csa's

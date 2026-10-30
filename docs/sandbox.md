@@ -27,8 +27,8 @@ it, and test that unsupported policy classes fail closed. To add an integration,
 translate its hook input into the shared policy/command interfaces and register
 the hook before the agent can act. It must authorize every invocation, validate
 its cwd, and keep gate state outside command grants. Neither addition changes
-another backend or integration. The next integration is Claude Code's main-session
-PowerShell hook; Codex keeps its own sandbox.
+another backend or integration. Claude Code's opt-in main-session PowerShell
+hook uses the same interfaces; Codex keeps its own sandbox.
 
 On supported Windows, csa runs each OpenCode shell command in a fresh MXC
 process container. OpenCode, its file tools, the review gate, reviewers and
@@ -45,7 +45,7 @@ no OS containment for their file reads.
 | OpenCode `full` | No gate or csa command sandbox; requires the user's explicit request. |
 | Codex | Keeps its own Windows sandbox and approval modes. |
 | Antigravity | Keeps `agy --sandbox` for edit jobs. |
-| Claude Code | Its main-session PowerShell hook is the next integration; workers are unchanged. |
+| Claude Code main session | Opt-in PowerShell command containment; `block-bash` also denies the Bash tool. csa workers keep their existing behavior. |
 
 Windows 11 24H2 build 26100.9278, 25H2 build 26200.9278 and later supported
 releases can run the backend; the capability probe is authoritative. Linux and
@@ -122,8 +122,15 @@ runner and launcher both die, or the host stops, cleanup cannot run. These
 checks also cannot prevent a concurrent host process from using
 a planted path while the command is still running. Avoid concurrent host changes
 to protected names: any newly appearing entry is treated as planted by the
-command. Previously absent, unmarked nested paths are not searched, including
-new nested repositories; existing nested Git metadata is read-only. Existing
+command. A bounded additional scan catches new nested `.git` markers down to
+three directory levels below each writable root, including entirely new folders.
+Each pass visits at most 1,024 directories and 20,000 entries, with a 48 KiB
+snapshot budget so it fits alongside the gate policy. Complete prior
+parent listings distinguish new folders from old unvisited ones. It skips links,
+junctions, protected settings, quarantine folders and common dependency/build
+trees (`node_modules`, `.venv`, `venv`, `__pycache__`, `target`, `dist`, `build`).
+New repositories beyond those bounds remain unchecked. Existing nested Git
+metadata is read-only. Existing
 protected paths remain read-only under the backend policy. See the filesystem probes in the research
 note for the underlying MXC limitation.
 
@@ -173,8 +180,106 @@ fallback. See the [research and sources](research/sandbox-choice.md).
 With `enabled = true`, unsupported systems and missing or broken executors fail
 closed. With the key omitted, unsupported systems leave the integration off.
 `csa doctor` shows the backend, version, signature/integrity checks, probe tier
-and active integration. `enabled` remains the common switch; future per-agent
-settings can sit above the same policy and launcher interfaces.
+and active integration. `enabled` remains the common switch; Claude's opt-in
+settings use the same policy and launcher interfaces.
+
+## Claude Code main sessions
+
+The installed plugin includes synchronous SessionStart and PreToolUse hooks.
+They do nothing until you choose a mode, and skip csa worker sessions. Requires
+Claude Code **2.1.295 or later**, which supports fail-closed `onFailure: "block"`
+hooks, plus a working MXC installation on supported Windows.
+
+```toml
+[sandbox.claude]
+mode = "powershell"  # or "block-bash"; default "off"
+additional_dirs = ["C:/projects/shared"]  # absolute, existing folders
+timeout_seconds = 120  # maximum per command; 1..86400
+```
+
+`powershell` contains PowerShell tool commands. Bash keeps running normally, and
+`csa doctor` warns that Bash is outside the sandbox. `block-bash` also denies the
+Bash tool so the agent uses PowerShell. Git Bash cannot start inside MXC, so it
+cannot be translated transparently. If `[sandbox] enabled = false` conflicts with
+an enabled Claude mode, PowerShell calls are denied until you fix the settings.
+An unsupported host or broken backend also denies PowerShell. Bash still follows
+the selected mode.
+
+Start a **new session** after enabling the mode or changing its roots. The first
+SessionStart records the project cwd and configured additional directories in a
+private host baseline. Claude's documented hook payload does not expose `--add-dir`
+grants: mirror those folders in `additional_dirs`. That list grants only csa's
+command sandbox access; configure Claude's own directory permissions separately.
+Resuming a session keeps its original roots. Changing shell cwd never adds a
+writable root. csa refuses profile, agent-state and drive-root grants as usual.
+
+The hook encodes the original script as command data in a private one-use request
+and replaces the tool command with the shared launcher. It returns no permission
+allow decision; Claude still checks the rewritten invocation. Its permission
+dialog therefore shows a launcher command, while the tool description remains
+available. This integration does not classify or review the original script.
+Networking is loopback-only for every contained command, so package downloads
+are unavailable through this hook. File tools, MCP servers, other plugins and
+Claude itself run on the host and are outside this command boundary.
+
+The command's requested timeout, in milliseconds, is capped by `timeout_seconds`.
+The launcher uses a kill-on-close process job and watches its parent shell.
+Background tool calls retain that lifetime and timeout; detached children do not
+survive the command. Tool state is redirected to container temp. Profiles and
+PowerShell state do not persist between commands. A forcibly killed launcher may
+miss its immediate quarantine check; the next command, resumed SessionStart or
+SessionEnd checks the stored baseline again. If Claude and the host both stop,
+cleanup waits until the session is resumed. SessionEnd removes unused requests;
+the baseline is retained for resume under csa's private `claude-sandbox` folder.
+Preparation itself has a 60-second hook deadline; startup errors or timeouts
+block calls on a supported Claude version.
+
+## Proposed domain allowlist
+
+This is a design for a later release. `Network.PROXY` remains rejected and there
+is no domain allowlist config key yet. A proxy setting alone would not filter
+destinations.
+
+MXC v1.0.1's [proxy-only networking contract](https://github.com/microsoft/mxc/blob/v1.0.1/docs/backends/process-container/networking.md#model-2-proxy-only-egress-recommended)
+requires a separately running host proxy. A Python standard-library proxy can
+bind an ephemeral port on exactly `127.0.0.1`, then pass its address through
+`runtimeConfig.networkProxy`. The client policy must deny direct egress and use
+the ProcessContainer proxy ingress mapping. For an unpackaged Python process,
+there is no `allowedProxyPeer` identity; this uses MXC's weaker, identity-less
+compatibility path. It needs request-aware capability validation and must not
+fall back to unrestricted egress. Its ingress behavior differs from csa's current
+loopback policy, so it needs a separate backend capability and live validation.
+
+Proposed configuration would be `[sandbox.egress] allowed_domains = [...]`,
+omitted by default. An explicit list would narrow reviewer-approved egress into
+proxy-only traffic; an empty list would deny egress. Fixed-rule commands would
+remain loopback-only. Claude's hook could opt into that same domain policy only
+through an explicit separate network setting; its current default stays
+loopback-only. An unsupported host would reject the request before execution.
+
+The proxy should allow exact, normalized DNS hostnames, with explicit subdomain
+rules if added later. It would accept bounded HTTP absolute-form requests and
+HTTPS CONNECT to port 443, reject IP literals, userinfo, ambiguous authorities,
+conflicting Host headers, upgrades and malformed framing, and close connections
+after one HTTP request. CONNECT tunnels need byte limits, idle deadlines and a
+fixed connection count. DNS results must all be public addresses; the proxy must
+connect to an already validated address to prevent a second DNS lookup from
+rebinding the destination. Private, loopback, link-local and metadata addresses
+would be denied. Redirect destinations face a fresh hostname check. HTTPS
+tunnels cannot inspect encrypted paths, request bodies, or prove that traffic
+inside a permitted tunnel uses the declared application protocol; a domain rule
+also cannot prevent disclosure to an allowed domain.
+
+The launcher would own one proxy per command, use private random authentication
+where client libraries support it, pass HTTP(S)_PROXY/NO_PROXY overrides into the
+container, and terminate proxy connections with the contained process tree.
+Other host processes could reach an identity-less proxy port, so its authority
+must stay limited to that command's allowlist. Logs would contain destination
+host, port and verdict only, never URL paths, headers or credentials. Tests need
+fake transport coverage for parsing, DNS rebinding, redirects, IPv6, cancellation,
+proxy death and limits, followed by real-MXC probes for direct TCP/UDP and
+loopback bypass, CLI proxy support and WFP endpoint enforcement. This is enough
+new networking and lifecycle work to defer under the current task's time budget.
 
 ## Compatibility and stage 1 migration
 

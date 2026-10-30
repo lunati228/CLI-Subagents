@@ -10,6 +10,9 @@ continuation commands. The header, capacity retry notices and end marker start w
 Immediately before the end marker, ``[csa] title: <Runtime>: <step>`` supplies
 display text for the next shell call's description. It has no job/token fields
 and never controls the relay. The complete title line is at most 70 characters.
+Each window also prints a bounded PROGRESS block of worker narration and
+reasoning display excerpts. Relays copy it as assistant text between follow
+calls. Its prefixed body is untrusted display data, never a control channel.
 
 The header and end marker carry the job ID and a fresh random token for this
 follow invocation. Printed commands carry the same token in a shell comment
@@ -50,6 +53,11 @@ RESULT_END_RULE = "===== END RESULT ====="
 QUESTION_RULE = "===== QUESTION ====="
 QUESTION_END_RULE = "===== END QUESTION ====="
 WORKER_PREFIX = "| "
+PROGRESS_RULE = "===== PROGRESS ====="
+PROGRESS_END_RULE = "===== END PROGRESS ====="
+PROGRESS_CHARS = 1200
+PROGRESS_EXCERPTS = 3
+PROGRESS_EXCERPT_CHARS = (PROGRESS_CHARS - PROGRESS_EXCERPTS + 1) // PROGRESS_EXCERPTS
 
 # A carriage return, backspace or terminal escape must not erase the prefix.
 _DISPLAY_ESCAPES = {
@@ -118,16 +126,15 @@ def title_text(value: str) -> str:
 
 
 class ProgressTitle:
-    """Prefer the latest reasoning summary, then tool/command, then text."""
+    """Prefer the latest narration or reasoning summary, then a tool/command."""
 
     def __init__(self) -> None:
         self.steps: dict[int, str] = {}
 
     def remember(self, lines: list[str]) -> None:
         for line in lines:
-            for priority, prefixes in enumerate((("thinking: ",),
-                                                  ("tool: ", "$ ", "edited: ", "search: ", "step: "),
-                                                  ("says: ",))):
+            for priority, prefixes in enumerate((("thinking: ", "says: "),
+                                                  ("tool: ", "$ ", "edited: ", "search: ", "step: "))):
                 prefix = next((p for p in prefixes if line.startswith(p)), None)
                 if prefix is not None:
                     text = title_text(line[len(prefix):])
@@ -139,6 +146,45 @@ class ProgressTitle:
         label = RUNTIME_LABELS.get(runtime, "Worker")
         step = self.steps[min(self.steps)] if self.steps else "working"
         return short(f"{label}: {step}", TITLE_CHARS - len(TITLE_PREFIX))
+
+
+class ProgressBlock:
+    """Bounded display excerpts from assistant narration, never tool arguments."""
+
+    def __init__(self) -> None:
+        self.excerpts: list[str] = []
+
+    def remember(self, lines: list[str]) -> None:
+        current: list[str] = []
+        kind = ""
+
+        def save() -> None:
+            if not current:
+                return
+            value = _TITLE_ESCAPES.sub("", "\n".join(current))
+            value = "".join(ch for ch in value if not unicodedata.category(ch).startswith("C")
+                            or ch.isspace())
+            # This is an excerpt of already-visible worker text, not a model
+            # summary. Thinking gets its title and first sentence only.
+            value = reasoning_line(value) if kind == "thinking: " else short(value, PROGRESS_EXCERPT_CHARS)
+            if value and (not self.excerpts or value != self.excerpts[-1]):
+                self.excerpts.append(value)
+                self.excerpts = self.excerpts[-PROGRESS_EXCERPTS:]
+
+        for line in lines:
+            prefix = next((p for p in ("says: ", "thinking: ") if line.startswith(p)), None)
+            if prefix:
+                save()
+                current, kind = [line[len(prefix):]], prefix
+            elif current and (line.startswith("  ") or not line):
+                current.append(line[2:] if line.startswith("  ") else "")
+            else:
+                save()
+                current, kind = [], ""
+        save()
+
+    def lines(self) -> list[str]:
+        return self.excerpts
 
 
 def plural(count: int, word: str) -> str:
@@ -642,6 +688,7 @@ class Follower:
         self.token = secrets.token_hex(16)  # never stored in worker-readable job files
         self.describer = describer_for(self.spec.runtime)
         self.title = ProgressTitle()
+        self.progress = ProgressBlock()
         self.inits = 0  # attempt-start events seen so far
         self.reported = 0  # attempts whose account line was printed (or needs none)
         self.announced: str | None = None  # account named in the header
@@ -675,6 +722,12 @@ class Follower:
     def emit_title(self) -> None:
         self.title.remember(self.describer.progress_lines())
         self.emit(TITLE_PREFIX + self.title.render(self.spec.runtime))
+
+    def emit_progress(self) -> None:
+        if self.progress.lines():
+            self.emit(PROGRESS_RULE)
+            self.emit_worker(*self.progress.lines())
+            self.emit(PROGRESS_END_RULE)
 
     # Steps
 
@@ -719,6 +772,7 @@ class Follower:
                 break
             self._feed(offset, raw)
         self.describer.drop_pending()  # everything before the offset was printed already
+        self.progress = ProgressBlock()  # replay rebuilds state, not new narration
         attempts = self.status.get("attempts") or []
         self.reported = min(self.inits, len(attempts))
 
@@ -733,6 +787,7 @@ class Follower:
                 lines += self.attempt_lines(self.inits)
             output = self.describer.describe(event, offset)
             self.title.remember(output)
+            self.progress.remember(output)
             return lines + output
         except Exception:  # one odd event never stops the follow
             return []
@@ -816,6 +871,10 @@ class Follower:
                     self.emit_worker(*block("  answer: ", replies[record_id]))
             else:
                 self.emit_worker(*block("note for the main session: ", record.get("text")))
+                if record_id not in already:
+                    narration = block("says: ", record.get("text"))
+                    self.progress.remember(narration)
+                    self.title.remember(narration)
             printed.add(record_id)
         if stop is not None:
             printed.add(str(stop["id"]))
@@ -864,6 +923,7 @@ class Follower:
         self.read_events(final=True)
         lines = self.describer.flush()
         self.title.remember(lines)
+        self.progress.remember(lines)
         lines += self.attempt_lines()
         if lines:
             self.emit_worker(*lines)
@@ -874,6 +934,7 @@ class Follower:
         text = str(result.get("result") or "")
         outcome = status.get("outcome") or "error"
         jobs.claim_delivery(self.job_id)  # the forwarder hands the result on: no wake-up or pending notice
+        self.emit_progress()
         self.emit(RESULT_RULE)
         self.emit_worker(text)
         self.emit(RESULT_END_RULE)
@@ -890,6 +951,7 @@ class Follower:
         return 1
 
     def still_running(self) -> int:
+        self.emit_progress()
         self.emit("Keep watching with:", self.command(self.follow_command()))
         self.emit_title()
         self.control(f"STILL RUNNING after {duration(self.elapsed())}")
@@ -900,6 +962,7 @@ class Follower:
         return command + (f" --window {self.window}" if self.window is not None else "")
 
     def question(self, record: dict[str, Any]) -> int:
+        self.emit_progress()
         question_id = str(record["id"])
         if not re.fullmatch(r"[0-9a-f]{8}", question_id):
             # A malformed outbox record must not inject lines or shell syntax.

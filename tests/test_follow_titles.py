@@ -57,7 +57,7 @@ class TitleSanitizationTests(unittest.TestCase):
         self.assertEqual(title.render("codex"), "Codex: working")
         title.remember(["says: first", "says: last", "tool: Read", "$ python -m unittest",
                         "thinking: first thought", "thinking: latest thought", "tool: Write", "says: done"])
-        self.assertEqual(title.render("codex"), "Codex: latest thought")
+        self.assertEqual(title.render("codex"), "Codex: done")
 
 
 class FollowTitleTests(TempHome):
@@ -100,7 +100,8 @@ class FollowTitleTests(TempHome):
         for runtime, events in records.items():
             with self.subTest(runtime=runtime):
                 lines = self.watch(self.job(runtime, events))
-                self.assertEqual(lines[-2], f"[csa] title: {labels[runtime]}: checking the shell hook")
+                expected = "checking the shell hook" if runtime == "antigravity" else "later text"
+                self.assertEqual(lines[-2], f"[csa] title: {labels[runtime]}: {expected}")
 
     def test_tool_and_command_fallback_for_all_runtimes(self):
         records = {

@@ -54,6 +54,8 @@ Use the native `spawn_agent` tool with `agent_type` set to `cli-subagents-claude
 
 Codex's documentation says the app exposes individual subagent threads for inspection; the CLI's `/subagents` picker switches between them. The relay runs `csa run --follow`, which prints the worker's steps into that thread. The exact app labels and live refresh behavior still need an app check. Codex inherits the parent's sandbox and MCP servers and supports only some capability reductions per agent. The relay uses native apply_patch solely to write a plain-text payload in the caller's `.csa-relay-inbox/`, allocated by `csa relay-path --workspace`, and passes it to `csa run/message --relay-file <path>`. Line-ending normalization or an added final newline is acceptable. csa creates an inbox `.gitignore` containing `*` before issuing a path. This uses the parent's writable workspace without widening permissions. Tool restrictions are instructions; Codex has no enforced per-role allowlist. The [native-agent research](research/codex-native-agents.md) and [file-transport research](research/relay-length-limit.md) record the sources and remaining app checks.
 
+Between follow calls, the relays copy bounded worker narration into assistant messages in their own threads, using the same [progress block](claude-code.md#subagents-in-the-agent-list) as the Claude Code relays. Tool output remains inside shell results. Codex shell tools without a description field keep their existing titles.
+
 The agent files are personal Codex configuration: disabling or uninstalling the plugin does not remove them. Remove the four `cli-subagents-*.toml` files from the main home's `agents/` folder if you no longer want them.
 
 When native relays are unavailable, use the MCP tools. Without the plugin, add the server yourself:
@@ -95,6 +97,10 @@ native agent, including after it finishes. Prefer these relays over
 [Antigravity host instructions](../skills/cli-subagents/hosts/antigravity.md).
 
 The relay's tools are `run_command`, `command_status` and `write_to_file`.
+Between follow calls it copies bounded worker narration as assistant text;
+tool output stays inside command results. The same
+[progress block](claude-code.md#subagents-in-the-agent-list) and display-only
+rules apply across the three host families.
 It allocates files with `csa relay-path --workspace`, writes each complete
 prompt, answer or follow-up into the caller's `.csa-relay-inbox/`, then runs
 `csa run/message --relay-file <path>`. csa validates and deletes the UTF-8

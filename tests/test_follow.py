@@ -287,7 +287,7 @@ class FollowTests(TempHome):
         self.assertTrue(any(line.startswith("| started: Claude Code 9.9.9 · claude-haiku-5-5 · 1 MCP server") for line in lines))
         self.assertRegex(lines[-1], r"^\[csa\] DONE · success · \d+s · 1 tool call · account a1 · job \S+ · token [0-9a-f]{32}$")
         self.assertEqual(lines[-5:-2], ["===== RESULT =====", "| done on a1", "===== END RESULT ====="])
-        self.assertEqual(lines[-2], "[csa] title: Claude Code: Read")
+        self.assertEqual(lines[-2], "[csa] title: Claude Code: done on a1")
         job_id, token = FRAME_RE.search(lines[0]).groups()
         self.assertEqual(FRAME_RE.search(lines[-1]).groups(), (job_id, token))
         # The follower delivered the result: nothing is left for the wake-up or SessionStart hooks.
@@ -522,7 +522,8 @@ class FollowTests(TempHome):
         self.assertTrue(lines[0].startswith("[csa] CLI Subagents · Antigravity · model gemini-test · access edit"), lines)
         self.assertEqual(
             [line for line in lines[1:lines.index("===== RESULT =====")] if not line.startswith("| running")],
-            ["| started: Antigravity · gemini-test", "| step: tool_call", "| says: gemini done"],
+            ["| started: Antigravity · gemini-test", "| step: tool_call", "| says: gemini done",
+             "===== PROGRESS =====", "| gemini done", "===== END PROGRESS ====="],
         )
         self.assertRegex(lines[-1], r"^\[csa\] DONE · success · \d+s · 1 tool call · account primary · job \S+ · token [0-9a-f]{32}$")
         self.assertEqual(result_body(text), "gemini done")

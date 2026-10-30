@@ -271,6 +271,10 @@ def relay_write_permission(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def main(action: str, job_id: str | None = None) -> int:
+    if action in ("claude-sandbox", "claude-sandbox-start", "claude-sandbox-end"):
+        # Unlike notification hooks, this integration must never swallow errors.
+        from cli_subagents.sandbox.integrations.claude import main as sandbox_hook
+        return sandbox_hook(action)
     try:
         if action == "await":
             code, text = await_job(read_input())

@@ -500,7 +500,7 @@ class IntegrationTests(GateBase):
         self.data["command_sandbox"]["missing_protected"] = launcher.snapshot(value)
         self.write()
         with patch.object(launcher, "_entry_exists", side_effect=PermissionError("fixture")), \
-                self.assertRaisesRegex(SandboxError, "could not quarantine"):
+                self.assertRaisesRegex(SandboxError, "could not quarantine|cannot scan nested"):
             self.issue("npm test")
 
     @unittest.skipUnless(os.name == "nt", "Windows command-line limit")

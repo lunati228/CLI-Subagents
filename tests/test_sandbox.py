@@ -333,7 +333,7 @@ class OpenCodeLaunchTests(OpenCodeHome):
         command_env = read_json(request)["command"]["env"]
         self.assertIn(str(tools), command_env["PATH"].split(os.pathsep))
         self.assertIn(str(self.project / ".claude"),
-                      [path for path, root in context["command_sandbox"]["missing_protected"]])
+                      [path for path, root in context["command_sandbox"]["missing_protected"]["missing"]])
 
     def test_disabled_sandbox_does_not_scan_or_stat_tool_paths(self):
         with patch.object(policy, "command_policy", side_effect=AssertionError("sandbox is off")), \

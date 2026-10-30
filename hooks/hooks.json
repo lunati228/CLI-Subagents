@@ -12,6 +12,21 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "csa",
+            "args": [
+              "hook",
+              "claude-sandbox"
+            ],
+            "timeout": 60,
+            "onFailure": "block"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -48,6 +63,35 @@
             "type": "command",
             "command": "csa hook pending",
             "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "csa",
+            "args": [
+              "hook",
+              "claude-sandbox-start"
+            ],
+            "timeout": 60,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "csa",
+            "args": [
+              "hook",
+              "claude-sandbox-end"
+            ],
+            "timeout": 60
           }
         ]
       }

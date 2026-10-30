@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import time
 from typing import Any
@@ -111,19 +112,30 @@ def _no_window() -> dict[str, Any]:
     return {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 
+def _own_session() -> dict[str, Any]:
+    """Popen arguments that give the reviewer its own process group, so a timeout stops its children too."""
+
+    return {} if os.name == "nt" else {"start_new_session": True}
+
+
 def _kill(process: subprocess.Popen) -> None:
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False, timeout=30,
+        # Never a bare name: worker PATH folders can hold a planted taskkill.
+        taskkill = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+        subprocess.run([taskkill, "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False, timeout=30,
                        **_no_window())
-    else:  # pragma: no cover
-        process.kill()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
 
 
 def _run(argv: list[str], *, env: dict[str, str], cwd: str, stdin: str, timeout: float) -> str:
     try:
         process = subprocess.Popen(
             argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            **_no_window(),
+            **_no_window(), **_own_session(),
         )
     except OSError as exc:
         raise ReviewError(f"could not start the reviewer: {type(exc).__name__}") from exc

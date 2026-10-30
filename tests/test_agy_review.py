@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -226,6 +227,22 @@ class CommandsTests(TempCase):
         self.assertTrue(self.ro("git status"))
         (self.ws / "git.bat").write_text("@echo hi", encoding="utf-8")
         self.assertFalse(self.ro("git status"))
+
+    def test_shadowing_covers_every_pathext_extension(self) -> None:
+        (self.ws / "rg.js").write_text("x", encoding="utf-8")
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PATHEXT", None)  # the default list includes .JS
+            self.assertTrue(commands._shadowed("rg", str(self.ws)))
+        self.assertFalse(self.ro("rg foo README.md"))
+        with mock.patch.dict(os.environ, {"PATHEXT": ".EXE;"}):
+            self.assertFalse(commands._shadowed("rg", str(self.ws)))
+        with mock.patch.dict(os.environ, {"PATHEXT": ".EXE;.FOO;"}):
+            (self.ws / "x.foo").write_text("x", encoding="utf-8")
+            self.assertTrue(commands._shadowed("x", str(self.ws)))
+            self.assertFalse(commands._shadowed("y", str(self.ws)))
+        (self.ws / "tool.ps1").write_text("x", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"PATHEXT": ".EXE"}):
+            self.assertTrue(commands._shadowed("tool", str(self.ws)))
 
     def test_options_that_write_execute_or_read_indirect_files(self) -> None:
         for command in (
@@ -635,6 +652,42 @@ class ReviewerCallTests(TempCase):
         with self.assertRaises(ReviewError):
             reviewer.ask_claude(config, "prompt")
         self.assertLess(time.monotonic() - started, 20)
+
+
+class ReviewerKillTests(TempCase):
+    """A timed-out reviewer takes its own child processes with it, and Windows cleanup never uses PATH."""
+
+    def test_posix_timeout_kills_the_reviewer_group(self) -> None:
+        sigkill = getattr(signal, "SIGKILL", 9)  # Windows has no SIGKILL; the POSIX branch is mocked here
+        process = mock.Mock(pid=4321)
+        process.communicate.side_effect = [subprocess.TimeoutExpired(["reviewer"], 1), (b"", b"")]
+        with mock.patch.object(reviewer.signal, "SIGKILL", sigkill, create=True), \
+                mock.patch.object(reviewer.os, "name", "posix"), \
+                mock.patch.object(reviewer.os, "killpg", create=True) as killpg, \
+                mock.patch.object(reviewer.subprocess, "Popen", return_value=process) as popen:
+            with self.assertRaises(ReviewError):
+                reviewer._run(["reviewer"], env={}, cwd=str(self.root), stdin="", timeout=1)
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        killpg.assert_called_once_with(4321, sigkill)
+
+    def test_posix_kill_falls_back_to_the_direct_child(self) -> None:
+        process = mock.Mock(pid=5)
+        with mock.patch.object(reviewer.signal, "SIGKILL", getattr(signal, "SIGKILL", 9), create=True), \
+                mock.patch.object(reviewer.os, "name", "posix"), \
+                mock.patch.object(reviewer.os, "killpg", create=True, side_effect=OSError):
+            reviewer._kill(process)
+        process.kill.assert_called_once()
+
+    def test_windows_timeout_uses_an_absolute_taskkill(self) -> None:
+        process = mock.Mock(pid=99)
+        with mock.patch.object(reviewer.os, "name", "nt"), \
+                mock.patch.object(reviewer, "_no_window", return_value={}), \
+                mock.patch.dict(os.environ, {"SystemRoot": r"C:\Windows"}), \
+                mock.patch.object(reviewer.subprocess, "run") as run:
+            reviewer._kill(process)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[0], os.path.join(r"C:\Windows", "System32", "taskkill.exe"))
+        self.assertEqual(argv[1:], ["/PID", "99", "/T", "/F"])
 
 
 class StoreTests(TempCase):

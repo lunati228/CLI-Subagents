@@ -450,6 +450,19 @@ class ReviewTests(OpenCodeHome):
         self.assertEqual(limited["decision"], "deny")
         self.assertIn("too many", limited["reason"])
 
+    def test_node_modules_is_skipped_only_when_git_ignores_it(self):
+        # rg searches node_modules unless .gitignore covers it, so csa must check it too.
+        (self.project / "node_modules").mkdir()
+        (self.project / "node_modules" / ".env").write_text("API_KEY=secret\n", encoding="utf-8")
+        denied = self.review("grep", {"pattern": "API_KEY"})
+        self.assertEqual(denied["decision"], "deny")
+        self.assertIn("node_modules", denied["reason"])
+        if not shutil.which("git"):
+            self.skipTest("git is needed to check whether .gitignore covers node_modules")
+        subprocess.run(["git", "init", "-q"], cwd=str(self.project), capture_output=True, check=True, timeout=60)
+        (self.project / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+        self.assertEqual(self.review("grep", {"pattern": "API_KEY"})["decision"], "auto_approve")
+
     def test_csa_package_can_be_read_but_not_edited(self):
         package = opencode_review.PACKAGE_DIR
         self.context_data.update(workspaces=[str(package.parent)])

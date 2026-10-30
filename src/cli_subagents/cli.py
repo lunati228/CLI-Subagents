@@ -294,6 +294,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print("\n" + "\n".join(sandbox_install.describe(sandbox)))
     if sandbox["problems"]:
         problems += 1
+    hook_status, hooks_match = setup.claude_sandbox_hook_status(config)
+    print("  " + hook_status)
+    if not hooks_match:
+        problems += 1
+        print("Problem: Claude Code sandbox hooks do not match the configured mode. "
+              "Run `csa setup` or `csa update`, then restart Claude Code.")
     if args.runtime in ("antigravity", "opencode"):
         from cli_subagents.runtimes.reviewers import describe_chain
 

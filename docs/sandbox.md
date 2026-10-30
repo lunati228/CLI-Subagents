@@ -185,8 +185,8 @@ settings use the same policy and launcher interfaces.
 
 ## Claude Code main sessions
 
-The installed plugin includes synchronous SessionStart and PreToolUse hooks.
-They do nothing until you choose a mode, and skip csa worker sessions. Requires
+The main-session sandbox is off by default, with no sandbox hooks installed.
+When enabled, synchronous SessionStart and PreToolUse hooks skip csa worker sessions. Requires
 Claude Code **2.1.295 or later**, which supports fail-closed `onFailure: "block"`
 hooks, plus a working MXC installation on supported Windows.
 
@@ -197,6 +197,14 @@ additional_dirs = ["C:/projects/shared"]  # absolute, existing folders
 timeout_seconds = 120  # maximum per command; 1..86400
 ```
 
+After setting the mode, run `csa setup` or `csa update`, then **restart Claude
+Code**. These commands merge the three sandbox hooks (PreToolUse, SessionStart
+and SessionEnd) into `settings.json` in `CLAUDE_CONFIG_DIR` or `~/.claude`, keeping
+other settings and hooks and backing up changes. The plugin itself does not
+install these hooks. `csa doctor` reports whether they are installed and match
+the configured mode. To disable them, set `mode = "off"`, run `csa setup` or
+`csa update` again, then restart Claude Code; only csa's sandbox hooks are removed.
+
 `powershell` contains PowerShell tool commands. Bash keeps running normally, and
 `csa doctor` warns that Bash is outside the sandbox. `block-bash` also denies the
 Bash tool so the agent uses PowerShell. Git Bash cannot start inside MXC, so it
@@ -205,7 +213,7 @@ an enabled Claude mode, PowerShell calls are denied until you fix the settings.
 An unsupported host or broken backend also denies PowerShell. Bash still follows
 the selected mode.
 
-Start a **new session** after enabling the mode or changing its roots. The first
+Start a **new session** after changing the mode or its roots. The first
 SessionStart records the project cwd and configured additional directories in a
 private host baseline. Claude's documented hook payload does not expose `--add-dir`
 grants: mirror those folders in `additional_dirs`. That list grants only csa's

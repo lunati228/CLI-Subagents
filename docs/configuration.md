@@ -320,7 +320,25 @@ On supported Windows, each OpenCode shell command runs inside csa's MXC process 
 # path = "C:/tools/mxc/wxc-exec.exe"    # use this wxc-exec.exe instead of csa's own install
 ```
 
-`enabled` is `true` or `false`; leaving it out turns the sandbox on where this Windows supports it and off elsewhere. With `enabled = true` the sandbox is required, and on a system that can't run it the affected jobs fail. A job that should run in the sandbox never runs without it: when MXC is missing or its probe fails, the job ends as `error` and says what to do. `path` must be the full path of `wxc-exec.exe`; csa then doesn't install MXC itself, but `csa setup` and `csa doctor` still check its signature and probe it. No other keys are accepted.
+`enabled` is `true` or `false`; leaving it out turns the sandbox on where this Windows supports it and off elsewhere. With `enabled = true` the sandbox is required, and on a system that can't run it the affected jobs fail. A job that should run in the sandbox never runs without it: when MXC is missing or its probe fails, the job ends as `error` and says what to do. `path` must be the full path of `wxc-exec.exe`; csa then doesn't install MXC itself, but `csa setup` and `csa doctor` still check its signature and probe it.
+
+Claude Code main sessions have a separate opt-in mode:
+
+```toml
+[sandbox.claude]
+mode = "off"                 # "off", "powershell" or "block-bash"
+additional_dirs = []          # absolute existing folders in addition to the project
+timeout_seconds = 120         # command timeout cap; 1..86400
+```
+
+To enable it, set the mode, run `csa setup` or `csa update`, then restart Claude Code.
+These commands merge csa's sandbox hooks into the user's `settings.json` in
+`CLAUDE_CONFIG_DIR` or `~/.claude`, with a backup and other settings and hooks
+preserved. With `mode = "off"`, the same commands remove only those hooks.
+No sandbox hooks ship in the plugin, so the default mode adds no per-command
+hook startup. `csa doctor` reports hook installation and any mismatch with the
+mode. See [Claude Code main sessions](sandbox.md#claude-code-main-sessions) for
+the modes, required Claude Code version and command boundary.
 
 ## Files
 

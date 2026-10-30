@@ -190,15 +190,14 @@ class ClaudeCommandSandboxTests(TempHome):
         self.assertTrue(marker.exists())
         self.assertEqual(self.requests(), [])
 
-    def test_plugin_hooks_fail_closed_and_cover_session_lifetime(self):
+    def test_plugin_hooks_do_not_install_the_opt_in_sandbox(self):
         root = Path(__file__).resolve().parents[1]
-        definitions = json.loads((root / "hooks/hooks.json").read_text())["hooks"]
-        shell = [h for group in definitions["PreToolUse"] if group.get("matcher") == "Bash|PowerShell" for h in group["hooks"]]
-        self.assertEqual(len(shell), 1)
-        self.assertEqual(shell[0]["onFailure"], "block")
-        self.assertNotIn("async", shell[0])
-        for event, action in (("SessionStart", "claude-sandbox-start"), ("SessionEnd", "claude-sandbox-end")):
-            self.assertTrue(any(action in h.get("args", []) for group in definitions[event] for h in group["hooks"]))
+        definitions = json.loads((root / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+        self.assertNotIn("SessionEnd", definitions)
+        self.assertEqual([group["matcher"] for group in definitions["PreToolUse"]], ["Write"])
+        self.assertEqual([group["matcher"] for group in definitions["SessionStart"]], ["resume|compact"])
+        commands = [hook["command"] for groups in definitions.values() for group in groups for hook in group["hooks"]]
+        self.assertEqual(commands, ["csa hook relay-write; exit 0", "csa hook await", "csa hook await", "csa hook pending"])
 
 
 class ClaudeSandboxConfigTests(TempHome):

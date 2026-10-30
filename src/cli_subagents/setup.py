@@ -320,6 +320,34 @@ def install_plugin(config: Config, host: str, report: Report, claude_route: str 
     report.add_todo(RELOAD[host])
 
 
+def _read_claude_settings(primary: Path) -> dict[str, Any]:
+    path = primary / "settings.json"
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} isn't a JSON object")
+    return data
+
+
+def _write_claude_settings(primary: Path, data: dict[str, Any]) -> Path | None:
+    """Shared settings merge writer; preserve symlinks and every previous backup."""
+
+    path = primary / "settings.json"
+    target = path.resolve() if path.is_symlink() else path
+    backup = None
+    if target.exists():
+        base = f"{target.name}.csa-backup-{time.strftime('%Y%m%d-%H%M%S')}"
+        backup = target.with_name(base)
+        suffix = 0
+        while backup.exists():
+            suffix += 1
+            backup = target.with_name(f"{base}-{suffix}")
+        shutil.copy2(target, backup)
+    write_json(target, data)
+    return backup
+
+
 def _declare_in_settings(primary: Path, report: Report, why: str | None) -> None:
     """Declare the marketplace and enable the plugin in Claude Code's user settings.
 
@@ -329,18 +357,12 @@ def _declare_in_settings(primary: Path, report: Report, why: str | None) -> None
 
     path = primary / "settings.json"
     label = LABELS["claude"]
-    target = path.resolve() if path.is_symlink() else path  # keep a dotfiles symlink in place
-    data: Any = {}
-    if target.exists():
-        try:
-            data = json.loads(target.read_text(encoding="utf-8") or "{}")
-        except (OSError, ValueError) as exc:
-            report.failed.append(f"{label}: can't read {path} as JSON ({exc}); it was left unchanged.")
-            report.add_todo(f"{label}: install the plugin with `claude plugin install {PLUGIN} --marketplace {REPO}` or `/plugin install {PLUGIN_ID}`.")
-            return
-        if not isinstance(data, dict):
-            report.failed.append(f"{label}: {path} isn't a JSON object; it was left unchanged.")
-            return
+    try:
+        data = _read_claude_settings(primary)
+    except (OSError, ValueError) as exc:
+        report.failed.append(f"{label}: can't read {path} as JSON ({exc}); it was left unchanged.")
+        report.add_todo(f"{label}: install the plugin with `claude plugin install {PLUGIN} --marketplace {REPO}` or `/plugin install {PLUGIN_ID}`.")
+        return
     markets = data.get("extraKnownMarketplaces")
     plugins = data.get("enabledPlugins")
     if (markets is not None and not isinstance(markets, dict)) or (plugins is not None and not isinstance(plugins, dict)):
@@ -363,14 +385,110 @@ def _declare_in_settings(primary: Path, report: Report, why: str | None) -> None
     merged["extraKnownMarketplaces"].setdefault(MARKETPLACE, {"source": {"source": "github", "repo": REPO}})
     merged["enabledPlugins"] = dict(plugins or {})
     merged["enabledPlugins"][PLUGIN_ID] = True
-    backup = None
-    if target.exists():
-        backup = target.with_name(f"{target.name}.csa-backup-{time.strftime('%Y%m%d-%H%M%S')}")
-        shutil.copy2(target, backup)
-    write_json(target, merged)
+    backup = _write_claude_settings(primary, merged)
     note = f"; backup at {backup}" if backup else ""
     report.done.append(f"{label}: added the {MARKETPLACE} marketplace and enabled {PLUGIN_ID} in {path}{reason}{note}")
     report.add_todo("Restart Claude Code so it installs the cli-subagents plugin from its settings (a restart, not /reload-plugins).")
+
+
+def claude_sandbox_hooks() -> dict[str, list[dict[str, Any]]]:
+    """Opt-in user hooks. The command/args pair identifies csa's own hooks."""
+
+    definitions = {}
+    for event, action in (("PreToolUse", "claude-sandbox"), ("SessionStart", "claude-sandbox-start"),
+                          ("SessionEnd", "claude-sandbox-end")):
+        hook: dict[str, Any] = {"type": "command", "command": "csa", "args": ["hook", action], "timeout": 60}
+        if event != "SessionEnd":
+            hook["onFailure"] = "block"
+        group: dict[str, Any] = {"hooks": [hook]}
+        if event == "PreToolUse":
+            group["matcher"] = "Bash|PowerShell"
+        definitions[event] = [group]
+    return definitions
+
+
+def _is_claude_sandbox_hook(hook: Any) -> bool:
+    return (isinstance(hook, dict) and hook.get("command") == "csa"
+            and hook.get("args") in (["hook", "claude-sandbox"], ["hook", "claude-sandbox-start"],
+                                     ["hook", "claude-sandbox-end"]))
+
+
+def _split_claude_sandbox_hooks(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
+    """Remove only managed commands, retaining other commands even in a shared group."""
+
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError("hooks isn't a JSON object")
+    remaining = dict(hooks)
+    owned: dict[str, list[dict[str, Any]]] = {}
+    for event in claude_sandbox_hooks():
+        groups = hooks.get(event, [])
+        if not isinstance(groups, list):
+            raise ValueError(f"hooks.{event} isn't a list")
+        kept = []
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                raise ValueError(f"unexpected hook group in hooks.{event}")
+            managed = [hook for hook in group["hooks"] if _is_claude_sandbox_hook(hook)]
+            if not managed:
+                kept.append(group)
+                continue
+            owned.setdefault(event, []).append({**group, "hooks": managed})
+            others = [hook for hook in group["hooks"] if not _is_claude_sandbox_hook(hook)]
+            if others:
+                kept.append({**group, "hooks": others})
+        if event in owned:
+            if kept:
+                remaining[event] = kept
+            else:
+                remaining.pop(event, None)
+    return remaining, owned
+
+
+def sync_claude_sandbox_hooks(config: Config, report: Report) -> None:
+    primary = config.runtime("claude").primary
+    path = primary / "settings.json"
+    enabled = config.sandbox.claude.mode != "off"
+    try:
+        data = _read_claude_settings(primary)
+        remaining, owned = _split_claude_sandbox_hooks(data)
+        expected = claude_sandbox_hooks() if enabled else {}
+        if owned == expected:
+            report.unchanged.append(f"Claude Code sandbox hooks: {'installed' if enabled else 'not installed'}; matches mode {config.sandbox.claude.mode}.")
+            return
+        merged = dict(data)
+        for event, groups in expected.items():
+            remaining[event] = [*remaining.get(event, []), *groups]
+        if remaining:
+            merged["hooks"] = remaining
+        else:
+            merged.pop("hooks", None)
+        verb = "install" if enabled else "remove"
+        if report.dry_run:
+            report.done.append(f"Claude Code: would {verb} csa's sandbox hooks in {path} (mode {config.sandbox.claude.mode}).")
+        else:
+            backup = _write_claude_settings(primary, merged)
+            note = f"; backup at {backup}" if backup else ""
+            report.done.append(f"Claude Code: {'installed' if enabled else 'removed'} csa's sandbox hooks in {path}{note}")
+        report.add_todo("Restart Claude Code so the sandbox hook settings take effect (a restart, not /reload-plugins).")
+    except (OSError, ValueError) as exc:
+        report.failed.append(f"Claude Code: couldn't sync sandbox hooks in {path} ({exc}); settings were left unchanged.")
+
+
+def claude_sandbox_hook_status(config: Config) -> tuple[str, bool]:
+    """Read-only doctor check, including modified, duplicate or stale managed hooks."""
+
+    path = config.runtime("claude").primary / "settings.json"
+    mode = config.sandbox.claude.mode
+    try:
+        _, owned = _split_claude_sandbox_hooks(_read_claude_settings(path.parent))
+    except (OSError, ValueError) as exc:
+        return f"Claude Code sandbox hooks: can't inspect {path} ({exc}).", False
+    installed = owned == claude_sandbox_hooks()
+    state = "installed" if installed else "partially installed or modified" if owned else "not installed"
+    matches = installed if mode != "off" else not owned
+    return (f"Claude Code sandbox hooks: {state} in {path}; "
+            f"{'matches' if matches else 'does not match'} mode {mode}."), matches
 
 
 # Accounts --------------------------------------------------------------------
@@ -541,6 +659,8 @@ def run_setup(config: Config, hosts: list[str], accounts: list[str], dry_run: bo
             )
     for host in hosts:
         install_plugin(config, host, report, claude_route)
+        if host == "claude":
+            sync_claude_sandbox_hooks(config, report)
         _check_primary_login(config, host, report)
     setup_accounts(config, accounts, report)
     ensure_sandbox(config, report, sandbox)
@@ -729,6 +849,8 @@ def run_update(config: Config, hosts: list[str], dry_run: bool = False, package:
         update_package(report)
     candidates = HOSTS if not hosts or "auto" in hosts else [host for host in HOSTS if host in hosts]
     found = [host for host in candidates if update_plugin(config, host, report)]
+    if "claude" in candidates:
+        sync_claude_sandbox_hooks(config, report)
     if not found:
         report.unchanged.append("No host has the cli-subagents plugin installed. Run `csa setup` to install it.")
     ensure_sandbox(config, report, sandbox)

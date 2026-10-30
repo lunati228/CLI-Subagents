@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from cli_subagents import cli, setup
-from cli_subagents.config import default_primary, load_config
+from cli_subagents.config import default_primary, load_config, save_config
 from cli_subagents.runtimes.claude import ClaudeRuntime
 
 FAKE_HOST = Path(__file__).with_name("fake_host.py")
@@ -209,6 +209,160 @@ class SettingsRouteTests(SetupBase):
         self.assertEqual(code, 0, out)
         self.assertIn("would add the cli-subagents marketplace", out)
         self.assertFalse((self.claude_dir / "settings.json").exists())
+
+
+class SandboxHookSettingsTests(SetupBase):
+    def set_mode(self, mode):
+        config = load_config()
+        config.sandbox.claude.mode = mode
+        save_config(config)
+        return config
+
+    def settings(self):
+        return json.loads((self.claude_dir / "settings.json").read_text(encoding="utf-8"))
+
+    def write_settings(self, data):
+        (self.claude_dir / "settings.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def test_setup_installs_hooks_on_both_routes_and_for_both_enabled_modes(self):
+        for mode in ("powershell", "block-bash"):
+            for route in ("cli", "settings"):
+                with self.subTest(mode=mode, route=route):
+                    self.set_mode(mode)
+                    self.write_settings({"model": "fixture"})
+                    code, out = self.run_cli("--host", "claude", "--claude-route", route)
+                    self.assertEqual(code, 0, out)
+                    data = self.settings()
+                    self.assertEqual(data["model"], "fixture")
+                    self.assertEqual(data["hooks"], setup.claude_sandbox_hooks())
+                    self.assertIn("Restart Claude Code so the sandbox hook settings take effect", out)
+                    for event in ("PreToolUse", "SessionStart"):
+                        hook = data["hooks"][event][0]["hooks"][0]
+                        self.assertEqual(hook["onFailure"], "block")
+                        self.assertNotIn("async", hook)
+                    self.assertNotIn("matcher", data["hooks"]["SessionStart"][0])
+
+    def test_off_mode_does_not_create_settings(self):
+        self.set_mode("off")
+        code, out = self.run_cli("--host", "claude", "--claude-route", "cli")
+        self.assertEqual(code, 0, out)
+        self.assertFalse((self.claude_dir / "settings.json").exists())
+        self.assertIn("not installed; matches mode off", out)
+
+    def test_merge_and_removal_preserve_other_settings_and_shared_hook_groups(self):
+        config = self.set_mode("powershell")
+        custom = {"type": "command", "command": "csa", "args": ["hook", "pending"]}
+        group = {"matcher": "Bash", "hooks": [custom]}
+        original = {"model": "éxample", "hooks": {"PreToolUse": [group], "OtherEvent": [{"untouched": True}]}}
+        self.write_settings(original)
+        report = setup.Report()
+        setup.sync_claude_sandbox_hooks(config, report)
+        self.assertFalse(report.failed)
+        data = self.settings()
+        self.assertEqual(data["hooks"]["PreToolUse"][0], group)
+        backups = list(self.claude_dir.glob("settings.json.csa-backup-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(json.loads(backups[0].read_text(encoding="utf-8")), original)
+        before = (self.claude_dir / "settings.json").read_bytes()
+        setup.sync_claude_sandbox_hooks(config, setup.Report())
+        self.assertEqual((self.claude_dir / "settings.json").read_bytes(), before)
+        self.assertEqual(len(list(self.claude_dir.glob("settings.json.csa-backup-*"))), 1)
+        # A user can put another command in the managed group: keep it and its matcher.
+        data["hooks"]["SessionStart"][0]["hooks"].append(custom)
+        self.write_settings(data)
+        config.sandbox.claude.mode = "off"
+        setup.sync_claude_sandbox_hooks(config, setup.Report())
+        expected = {**original, "hooks": {**original["hooks"], "SessionStart": [{"hooks": [custom]}]}}
+        self.assertEqual(self.settings(), expected)
+        # Fast consecutive writes must not overwrite the original backup.
+        self.assertEqual(len(list(self.claude_dir.glob("settings.json.csa-backup-*"))), 2)
+        self.assertEqual(json.loads(backups[0].read_text(encoding="utf-8")), original)
+        setup.sync_claude_sandbox_hooks(config, setup.Report())
+        self.assertEqual(len(list(self.claude_dir.glob("settings.json.csa-backup-*"))), 2)
+
+    def test_modified_or_duplicate_managed_hooks_are_repaired(self):
+        config = self.set_mode("block-bash")
+        hooks = setup.claude_sandbox_hooks()
+        hooks["PreToolUse"][0]["hooks"][0]["onFailure"] = "ignore"
+        hooks["SessionStart"] *= 2
+        self.write_settings({"hooks": hooks})
+        status, matches = setup.claude_sandbox_hook_status(config)
+        self.assertFalse(matches)
+        self.assertIn("partially installed or modified", status)
+        setup.sync_claude_sandbox_hooks(config, setup.Report())
+        self.assertEqual(self.settings()["hooks"], setup.claude_sandbox_hooks())
+        self.assertTrue(setup.claude_sandbox_hook_status(config)[1])
+
+    def test_dry_run_enable_and_disable_leave_files_and_backups_alone(self):
+        self.set_mode("powershell")
+        code, out = self.run_cli("--host", "claude", "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("would install csa's sandbox hooks", out)
+        self.assertFalse((self.claude_dir / "settings.json").exists())
+        self.write_settings({"hooks": setup.claude_sandbox_hooks()})
+        self.set_mode("off")
+        before = (self.claude_dir / "settings.json").read_bytes()
+        code, out = self.run_cli("--host", "claude", "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("would remove csa's sandbox hooks", out)
+        self.assertEqual((self.claude_dir / "settings.json").read_bytes(), before)
+        self.assertEqual(list(self.claude_dir.glob("settings.json.csa-backup-*")), [])
+
+    def test_update_installs_and_removes_hooks_including_dry_run(self):
+        self.run_cli("--host", "claude", "--claude-route", "settings")
+        for mode in ("block-bash", "off"):
+            config = self.set_mode(mode)
+            before = (self.claude_dir / "settings.json").read_bytes()
+            code, report = setup.run_update(config, ["claude"], package=False, dry_run=True, sandbox=False)
+            self.assertEqual(code, 0, setup.format_report(report))
+            self.assertIn("would install" if mode != "off" else "would remove", setup.format_report(report))
+            self.assertEqual((self.claude_dir / "settings.json").read_bytes(), before)
+            # Cover the update route where Claude has no command and is declared in settings.
+            with patch.object(ClaudeRuntime, "find_binary", return_value=None):
+                code, report = setup.run_update(config, ["claude"], package=False, sandbox=False)
+            self.assertEqual(code, 0, setup.format_report(report))
+            self.assertEqual(self.settings().get("hooks", {}), setup.claude_sandbox_hooks() if mode != "off" else {})
+
+    def test_setup_and_update_respect_selected_hosts(self):
+        config = self.set_mode("powershell")
+        self.run_cli("--host", "codex")
+        setup.run_update(config, ["codex"], package=False, sandbox=False)
+        self.assertFalse((self.claude_dir / "settings.json").exists())
+
+    def test_invalid_settings_are_reported_without_changes(self):
+        config = self.set_mode("powershell")
+        path = self.claude_dir / "settings.json"
+        for value in ("not json", "[]", '{"hooks": []}', '{"hooks": {"PreToolUse": {}}}',
+                      '{"hooks": {"SessionStart": [{}]}}'):
+            with self.subTest(value=value):
+                path.write_text(value, encoding="utf-8")
+                report = setup.Report()
+                setup.sync_claude_sandbox_hooks(config, report)
+                self.assertTrue(report.failed)
+                self.assertEqual(path.read_text(encoding="utf-8"), value)
+                self.assertFalse(setup.claude_sandbox_hook_status(config)[1])
+        self.assertEqual(list(self.claude_dir.glob("settings.json.csa-backup-*")), [])
+
+    def test_doctor_reports_missing_installed_and_stale_hooks(self):
+        for mode, installed, matches in (("off", False, True), ("powershell", False, False),
+                                         ("block-bash", True, True), ("off", True, False)):
+            with self.subTest(mode=mode, installed=installed):
+                self.set_mode(mode)
+                self.write_settings({"hooks": setup.claude_sandbox_hooks()} if installed else {})
+                accounts = {"runtime": "claude", "binary": "fake", "accounts": [
+                    {"name": "primary", "auth": {"loggedIn": True}}]}
+                sandbox = {"state": "off", "reason": "fixture", "problems": [], "claude_mode": mode}
+                out = io.StringIO()
+                before = (self.claude_dir / "settings.json").read_bytes()
+                with patch.object(cli.tools, "account_report", return_value=accounts), \
+                     patch("cli_subagents.sandbox.install.status", return_value=sandbox), redirect_stdout(out):
+                    code = cli.main(["doctor"])
+                self.assertEqual(code, 0 if matches else 1, out.getvalue())
+                self.assertIn("sandbox hooks: installed" if installed else "sandbox hooks: not installed", out.getvalue())
+                self.assertIn(f"{'matches' if matches else 'does not match'} mode {mode}", out.getvalue())
+                if not matches:
+                    self.assertIn("Run `csa setup` or `csa update`, then restart Claude Code", out.getvalue())
+                self.assertEqual((self.claude_dir / "settings.json").read_bytes(), before)
 
 
 class AccountTests(SetupBase):

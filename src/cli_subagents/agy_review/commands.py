@@ -29,6 +29,9 @@ SIMPLE_READERS = {
 VERSION_ONLY = {"python", "python3", "node"}
 VERSION_FLAGS = {"--version"}
 
+# cmd.exe's default PATHEXT: every one of these can run a same-named file in the working folder.
+PATHEXT_DEFAULT = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+
 # Each entry is (flags, options requiring one value). Unknown options go to
 # review, including GNU abbreviations. Values are checked as paths as well as
 # operands, so -fFILE/--option=FILE cannot hide an unchecked input path.
@@ -552,4 +555,6 @@ def _shadowed(word: str, cwd: str) -> bool:
     except OSError:
         return False
     stem = base.lower()
-    return any(candidate in names for candidate in (stem, *(stem + ext for ext in (".exe", ".cmd", ".bat", ".com", ".ps1"))))
+    extensions = {item.lower() for item in os.environ.get("PATHEXT", PATHEXT_DEFAULT).split(";") if item}
+    extensions.add(".ps1")  # PowerShell finds scripts in the folder too
+    return any(candidate in names for candidate in (stem, *(stem + ext for ext in extensions)))

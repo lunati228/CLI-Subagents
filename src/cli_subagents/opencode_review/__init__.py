@@ -18,12 +18,14 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import time
 from typing import Any, Callable
 
 from cli_subagents.agy_review import hook, paths, rules
 from cli_subagents.agy_review.context import load_context
 from cli_subagents.agy_review import store
+from cli_subagents.fsutil import no_window_kwargs
 from cli_subagents.opencode_review import build
 
 
@@ -51,9 +53,40 @@ IMPORT_ROOT = PACKAGE_DIR.parent  # a sibling stdlib-name module could shadow im
 # without checking read permission per file (v2.1.4 core/src/ripgrep.ts,
 # tool/plugin/grep.ts). Folder searches are walked first and refused when a
 # searched file could hold secrets.
-GREP_SKIP_DIRS = {".git", "node_modules"}
+GREP_SKIP_DIRS = {".git"}  # rg leaves .git out of every search
+GREP_IGNORED_DIRS = ("node_modules",)  # rg searches it unless git ignores it
+GREP_GIT_TIMEOUT = 5
 GREP_FILE_LIMIT = 5000
 COMPLEX_GLOB = re.compile(r"[\[\]{}!\\]")
+
+
+def _git_ignores(folder: Path, name: str) -> bool:
+    """Whether git ignores `name` in `folder`. Git missing or failing also counts as no."""
+
+    try:
+        result = subprocess.run(["git", "check-ignore", "-q", "--", name], cwd=str(folder), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=GREP_GIT_TIMEOUT,
+                                **no_window_kwargs())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def _skipped_dir(root: str, name: str, cache: dict[str, bool]) -> bool:
+    """Whether rg's search leaves this folder out: `.git` always, `node_modules` only when git ignores it.
+
+    rg follows .gitignore, so a node_modules that isn't in it gets searched. The
+    answer is cached per folder for this walk.
+    """
+
+    if name in GREP_SKIP_DIRS:
+        return True
+    if name not in GREP_IGNORED_DIRS:
+        return False
+    folder = os.path.join(root, name)
+    if folder not in cache:
+        cache[folder] = _git_ignores(Path(root), name)
+    return cache[folder]
 
 
 def _include_matches(name: str, include: str | None) -> bool:
@@ -72,8 +105,9 @@ def _check_folder_grep(folder: Path, include: str | None, context: dict[str, Any
 
     homes = [str(context.get("user_home") or "")]
     seen = 0
+    skipped: dict[str, bool] = {}
     for root, dirs, files in os.walk(folder):
-        dirs[:] = [item for item in dirs if item not in GREP_SKIP_DIRS]
+        dirs[:] = [item for item in dirs if not _skipped_dir(root, item, skipped)]
         for name in files:
             if not _include_matches(name, include):
                 continue

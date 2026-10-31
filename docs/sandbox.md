@@ -26,7 +26,9 @@ To add a backend, implement its capability check and policy translation, registe
 it, and test that unsupported policy classes fail closed. To add an integration,
 translate its hook input into the shared policy/command interfaces and register
 the hook before the agent can act. It must authorize every invocation, validate
-its cwd, and keep gate state outside command grants. Neither addition changes
+its cwd without opening network paths, run `launcher.recover` on its request
+folder before each authorization, and keep gate state outside command grants.
+Neither addition changes
 another backend or integration. Claude Code's opt-in main-session PowerShell
 hook uses the same interfaces; Codex keeps its own sandbox.
 
@@ -89,6 +91,10 @@ to contained commands. Host timeout cleanup uses absolute Windows system tools.
 
 Loopback can reach services on this PC. A command-text rule cannot inspect test
 code, but auto-approved test code still has its egress blocked by the OS policy.
+The OS policy can't see past loopback, though: a local HTTP proxy (a VPN or
+debugging proxy listening on 127.0.0.1) or a browser's remote-debugging port
+forwards whatever a command sends it, so on a PC that runs one, loopback-only
+commands can still reach the internet.
 Package downloads and other changing commands need review. Files outside the
 writable workspaces remain unwritable after reviewer approval.
 Reviewer command verdicts are never cached because workspace scripts and package

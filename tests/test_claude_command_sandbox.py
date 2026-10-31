@@ -64,6 +64,19 @@ class ClaudeCommandSandboxTests(TempHome):
         self.assertIsNone(claude.handle(event, "claude-sandbox"))
         self.assertIsNone(claude.handle({"tool_name": "Read"}, "claude-sandbox"))
 
+    def test_block_bash_also_blocks_monitor_commands(self):
+        from cli_subagents import setup
+
+        # Monitor runs its command in Bash's shell, so block-bash must cover it.
+        self.assertIn("Monitor", setup.claude_sandbox_hooks()["PreToolUse"][0]["matcher"].split("|"))
+        command = {**self.event, "tool_name": "Monitor", "tool_input": {"command": "whoami", "description": "x"}}
+        socket = {**self.event, "tool_name": "Monitor", "tool_input": {"ws": {"url": "wss://example.test"}}}
+        self.assertEqual(claude.handle(command, "claude-sandbox")["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIsNone(claude.handle(socket, "claude-sandbox"))
+        self.config.sandbox.claude.mode = "powershell"
+        self.assertIsNone(claude.handle(command, "claude-sandbox"))
+        self.assertEqual(self.requests(), [])
+
     def test_network_cwd_is_refused_before_it_is_opened(self):
         if os.name != "nt":
             self.skipTest("UNC paths are Windows paths")

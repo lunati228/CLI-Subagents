@@ -331,7 +331,7 @@ class JobTests(TempHome):
             self.assertIn(f"PowerShell({prefix}:*)", allowed)
         settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
         guard = settings["hooks"]["PreToolUse"][-1]
-        self.assertEqual(guard["matcher"], "Bash|PowerShell")
+        self.assertEqual(guard["matcher"], "Bash|PowerShell|Monitor")
         self.assertIn("claude_read_hook.py", guard["hooks"][0]["command"])
         self.assertEqual(guard["hooks"][0]["onFailure"], "block")
 

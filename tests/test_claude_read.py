@@ -87,6 +87,15 @@ class ValidatorTests(unittest.TestCase):
     def test_unrelated_tool_has_no_decision(self):
         self.assertIsNone(claude_read_hook.validate(self.payload("anything", "Read")))
 
+    def test_monitor_commands_are_denied_but_websocket_sources_are_not(self):
+        # Monitor runs its command in Bash's shell, which would skip the read-only check.
+        for tool_input in ({"command": "cat README.md", "description": "x"}, {"description": "x"}, "bad"):
+            with self.subTest(tool_input=tool_input):
+                result = claude_read_hook.validate({**self.payload("", "Monitor"), "tool_input": tool_input})
+                self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIsNone(claude_read_hook.validate(
+            {**self.payload("", "Monitor"), "tool_input": {"ws": {"url": "wss://example.test"}, "description": "x"}}))
+
     def test_bad_payload_or_validator_failure_denies(self):
         for value in ("not json", "[]", json.dumps(self.payload(None))):
             with self.subTest(value=value), contextlib.redirect_stdout(io.StringIO()) as output:

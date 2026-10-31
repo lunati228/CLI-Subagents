@@ -25,9 +25,14 @@ def deny(reason: str) -> dict[str, Any]:
 def validate(payload: dict[str, Any]) -> dict[str, Any] | None:
     from cli_subagents.agy_review import commands, paths
 
+    tool_input = payload.get("tool_input")
+    if payload.get("tool_name") == "Monitor":
+        # Monitor runs its command in Bash's shell; only a WebSocket source runs nothing.
+        if isinstance(tool_input, dict) and tool_input.get("command") is None and tool_input.get("ws") is not None:
+            return None
+        return deny("Monitor runs shell commands, which this guard can't check; use Bash or PowerShell")
     if payload.get("tool_name") not in ("Bash", "PowerShell"):
         return None
-    tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str) or not command.strip():
         return deny("the shell command is missing")

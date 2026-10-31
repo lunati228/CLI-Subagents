@@ -403,7 +403,8 @@ def claude_sandbox_hooks() -> dict[str, list[dict[str, Any]]]:
             hook["onFailure"] = "block"
         group: dict[str, Any] = {"hooks": [hook]}
         if event == "PreToolUse":
-            group["matcher"] = "Bash|PowerShell"
+            # Monitor runs a shell command too (in Bash's shell), so block-bash must see it.
+            group["matcher"] = "Bash|PowerShell|Monitor"
         definitions[event] = [group]
     return definitions
 

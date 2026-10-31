@@ -45,7 +45,7 @@ no OS containment for their file reads.
 | OpenCode `full` | No gate or csa command sandbox; requires the user's explicit request. |
 | Codex | Keeps its own Windows sandbox and approval modes. |
 | Antigravity | Keeps `agy --sandbox` for edit jobs. |
-| Claude Code main session | Opt-in PowerShell command containment; `block-bash` also denies the Bash tool. csa workers keep their existing behavior. |
+| Claude Code main session | Opt-in PowerShell command containment; `block-bash` also denies the Bash tool and Monitor commands. csa workers keep their existing behavior. |
 
 Windows 11 24H2 build 26100.9278, 25H2 build 26200.9278 and later supported
 releases can run the backend; the capability probe is authoritative. Linux and
@@ -221,7 +221,9 @@ the configured mode. To disable them, set `mode = "off"`, run `csa setup` or
 
 `powershell` contains PowerShell tool commands. Bash keeps running normally, and
 `csa doctor` warns that Bash is outside the sandbox. `block-bash` also denies the
-Bash tool so the agent uses PowerShell. Git Bash cannot start inside MXC, so it
+Bash tool so the agent uses PowerShell, and Monitor commands, which run in Bash's
+shell (a Monitor WebSocket source still works). Hooks installed before 0.2.26 don't
+cover Monitor; run `csa update` once. Git Bash cannot start inside MXC, so it
 cannot be translated transparently. If `[sandbox] enabled = false` conflicts with
 an enabled Claude mode, PowerShell calls are denied until you fix the settings.
 An unsupported host or broken backend also denies PowerShell. Bash still follows

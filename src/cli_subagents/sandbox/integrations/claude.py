@@ -44,10 +44,17 @@ def handle(event: dict[str, Any], action: str) -> dict[str, Any] | None:
     # Worker jobs keep their existing permissions and hooks.
     if config.mode == "off" or os.environ.get("CLI_SUBAGENTS_DEPTH", "0") != "0":
         return None
-    if action == "claude-sandbox" and event.get("tool_name") not in ("Bash", "PowerShell"):
+    if action == "claude-sandbox" and event.get("tool_name") not in ("Bash", "PowerShell", "Monitor"):
         return None
     if action == "claude-sandbox" and event.get("tool_name") == "Bash":
         return _deny("Bash is disabled in block-bash mode; use the PowerShell tool") if config.mode == "block-bash" else None
+    if action == "claude-sandbox" and event.get("tool_name") == "Monitor":
+        # Monitor runs its command in Bash's shell, outside the sandbox; a WebSocket source runs nothing.
+        tool = event.get("tool_input")
+        runs_command = not isinstance(tool, dict) or tool.get("command") is not None or tool.get("ws") is None
+        if config.mode == "block-bash" and runs_command:
+            return _deny("Monitor commands run in Bash, which block-bash mode disables; use the PowerShell tool")
+        return None
     if settings.enabled is False:
         raise PolicyError("Claude sandbox mode is enabled but [sandbox] enabled = false")
     if not supported_windows():

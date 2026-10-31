@@ -342,4 +342,5 @@ def worker_read_hook() -> dict[str, Any]:
     script = Path(__file__).resolve().with_name("claude_read_hook.py")
     entry = shell_command([sys.executable, "-I", str(script)])
     entry.update(timeout=15, onFailure="block")
-    return {"matcher": "Bash|PowerShell", "hooks": [entry]}
+    # Monitor runs a shell command too, outside the prefix rules the guard backs up.
+    return {"matcher": "Bash|PowerShell|Monitor", "hooks": [entry]}

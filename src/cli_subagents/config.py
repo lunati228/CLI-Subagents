@@ -553,8 +553,8 @@ def load_config(path: Path | None = None) -> Config:
     path = path or config_path()
     data: dict[str, Any] = {}
     if path.exists():
-        with path.open("rb") as handle:
-            data = tomllib.load(handle)
+        # PowerShell 5.1 and some editors save UTF-8 with a byte order mark, which TOML doesn't allow.
+        data = tomllib.loads(path.read_bytes().removeprefix(b"\xef\xbb\xbf").decode("utf-8"))
     runtimes = {name: _runtime_from(name, data.get(name, {}) or {}) for name in RUNTIMES}
     review = data.get("review", {}) or {}
     if not isinstance(review, dict) or set(review) - {"reviewers"}:

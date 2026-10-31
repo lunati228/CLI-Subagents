@@ -324,7 +324,7 @@ def _read_claude_settings(primary: Path) -> dict[str, Any]:
     path = primary / "settings.json"
     if not path.exists():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    data = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
     if not isinstance(data, dict):
         raise ValueError(f"{path} isn't a JSON object")
     return data
@@ -797,7 +797,7 @@ def _update_steps(host: str, state: dict[str, Any]) -> list[list[str]]:
 
 def _settings_declare_plugin(primary: Path) -> bool:
     try:
-        data = json.loads((primary / "settings.json").read_text(encoding="utf-8"))
+        data = json.loads((primary / "settings.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return False
     return isinstance(data, dict) and isinstance(data.get("enabledPlugins"), dict) and PLUGIN_ID in data["enabledPlugins"]

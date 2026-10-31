@@ -692,6 +692,17 @@ class ReviewerCallTests(TempCase):
         with self.assertRaises(ReviewError):
             reviewer.ask_agy({"kind": "agy", "command": [str(self.root / "no-such-program")]}, "prompt")
 
+    @unittest.skipUnless(os.name == "nt", "cmd.exe runs .cmd files on Windows")
+    def test_agy_batch_file_never_gets_the_prompt_on_its_command_line(self) -> None:
+        # The prompt quotes the command under review; cmd.exe would run `& calc` in it.
+        marker = self.root / "injected"
+        shim = self.root / "agy.cmd"
+        shim.write_text("@echo off\r\n", encoding="utf-8")
+        with mock.patch.object(reviewer, "_run", side_effect=AssertionError("started the batch file")), \
+                self.assertRaisesRegex(ReviewError, "agy.exe"):
+            reviewer.ask_agy({"kind": "agy", "command": [str(shim)]}, f'x" & type nul > "{marker}" & "')
+        self.assertFalse(marker.exists())
+
     def test_agy_timeout_is_fast(self) -> None:
         config = {**self.fake_reviewer(FAKE_SLEEP=30), "timeout": 2}
         started = time.monotonic()

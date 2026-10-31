@@ -162,6 +162,10 @@ def ask_agy(config: dict[str, Any], prompt: str) -> str:
     command = list(config.get("command") or [])
     if not command:
         raise ReviewError("no agy command configured for the reviewer")
+    if os.name == "nt" and Path(str(command[0])).suffix.lower() in (".cmd", ".bat"):
+        # agy takes the prompt (which quotes the command under review) on its command
+        # line, and cmd.exe would read & | < > in it as commands of its own.
+        raise ReviewError("the agy reviewer is a .cmd or .bat file; point it at agy.exe")
     argv = [*command, "--mode", "plan", "--output-format", "stream-json"]
     if config.get("model"):
         argv += ["--model", str(config["model"])]

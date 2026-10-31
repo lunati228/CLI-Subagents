@@ -73,6 +73,7 @@ class Scope:
         self.user_home = str(context.get("user_home") or "")
         self.homes = [home for home in (self.agent_home, self.user_home) if home]
         self.protected = [os.path.normpath(str(item)) for item in context.get("protected_paths") or [] if item]
+        self.write_protected = [os.path.normpath(str(item)) for item in context.get("write_protected_paths") or [] if item]
         self.secrets = [os.path.normpath(paths.resolve(str(item))) for item in context.get("secret_paths") or [] if item]
         self.access = str(context.get("access") or "read")
         self.sandbox = bool(context.get("sandbox"))
@@ -198,6 +199,8 @@ def _write(name: str, args: dict[str, Any], scope: Scope) -> Verdict:
         protection = paths.write_protection(resolved) or paths.write_protection(paths.normalize(value, scope.base))
         if protection:
             return deny(f"edits here are not allowed: {protection}")
+        if any(paths.inside_any(form, scope.write_protected) for form in (resolved, paths.normalize(value, scope.base))):
+            return deny("edits here are not allowed: it is code CLI Subagents or its tools run on your machine")
         if scope.access != "edit":
             return deny("this is a read-only job; it may not change files")
         if not scope.writable(resolved):

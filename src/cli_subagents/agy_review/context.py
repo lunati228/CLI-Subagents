@@ -12,6 +12,7 @@ environment. Keys:
     workspaces           folders the job works in (reads and edits allowed)
     read_paths           extra files and folders it may read (instruction files, skills)
     protected_paths      folders it may never touch (beyond the built-in list)
+    write_protected_paths  folders it may read but never change (code the host runs later)
     agent_home           the HOME agy runs with
     user_home            the user's real home folder
     trusted_mcp_servers  MCP servers whose tools need no review
@@ -54,7 +55,7 @@ def validate(data: Any) -> dict[str, Any]:
         raise ContextError("access must be read or edit")
     if not _strings(data.get("workspaces"), "workspaces"):
         raise ContextError("workspaces is empty")
-    for key in ("read_paths", "protected_paths", "secret_paths", "trusted_mcp_servers"):
+    for key in ("read_paths", "protected_paths", "write_protected_paths", "secret_paths", "trusted_mcp_servers"):
         _strings(data.get(key), key)
     reviewer = data.get("reviewer") or {"kind": "off"}
     if "reviewers" in data:

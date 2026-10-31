@@ -390,6 +390,17 @@ class RulesTests(TempCase):
         self.assertEqual(self.decide("view_file", {"AbsolutePath": str(jobs)}).action, "deny")
         self.assertEqual(self.decide("write_to_file", {"TargetFile": str(jobs), "CodeContent": "x"}).action, "deny")
 
+    def test_write_protected_host_code_stays_readable(self) -> None:
+        # csa's own package from an editable install lies in the workspace: readable, never editable.
+        package = self.ws / "src" / "cli_subagents"
+        source = package / "opencode_review" / "__init__.py"
+        over = {"write_protected_paths": [str(package)]}
+        self.assertEqual(self.decide("view_file", {"AbsolutePath": str(source)}, **over).action, "approve")
+        self.assertEqual(self.decide("write_to_file", {"TargetFile": str(source), "CodeContent": "x"}, **over).action,
+                         "deny")
+        self.assertEqual(self.decide("write_to_file", {"TargetFile": str(self.ws / "app.py"), "CodeContent": "x"},
+                                     **over).action, "approve")
+
     def _agent_home_checks(self) -> None:
         skill = self.agent_home / ".gemini" / "antigravity-cli" / "skills" / "x" / "SKILL.md"
         read_skill = self.decide("view_file", {"AbsolutePath": str(skill)})

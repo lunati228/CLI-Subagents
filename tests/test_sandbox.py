@@ -314,7 +314,8 @@ class OpenCodeLaunchTests(OpenCodeHome):
         _, settings = self.plugin_settings(launch)
         context = read_json(Path(settings["context"]))
         self.assertIn(str(folder), context["command_sandbox"]["policy"]["pinned"])
-        self.assertIn(str(folder), context["protected_paths"])
+        self.assertIn(str(folder), context["write_protected_paths"])
+        self.assertNotIn(str(folder), context["protected_paths"])
 
     def test_host_path_excludes_writable_workspace_tools(self):
         tools = self.project / ".venv" / "Scripts"

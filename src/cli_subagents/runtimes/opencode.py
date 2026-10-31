@@ -386,7 +386,7 @@ class OpenCodeRuntime:
                 "read_paths": [*(parent.get("instructions") or []), *(parent.get("skills") or [])],
                 # opencode_review refuses edits to csa's own package (with an editable
                 # install it is the gate's source) but still lets jobs read it.
-                "protected_paths": [str(home()), *host_paths],
+                "protected_paths": [str(home())], "write_protected_paths": host_paths,
                 "secret_paths": [
                     str(Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "opencode" / "auth.json"),
                     str(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode" / "service.json"),

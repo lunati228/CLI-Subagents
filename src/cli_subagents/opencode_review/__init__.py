@@ -58,21 +58,51 @@ GREP_IGNORED_DIRS = ("node_modules",)  # rg searches it unless git ignores it
 GREP_GIT_TIMEOUT = 5
 GREP_FILE_LIMIT = 5000
 COMPLEX_GLOB = re.compile(r"[\[\]{}!\\]")
+# The gate asks git on the host, in a folder the worker chose. The worker can write
+# a folder git takes for a repository (HEAD, config, objects/, refs/ need no .git in
+# the path), and that config's core.fsmonitor would run as a command. Command-line
+# config wins over every config file; bare-repository discovery is refused.
+GIT_SAFE_CONFIG = ("-c", "core.fsmonitor=false", "-c", "safe.bareRepository=explicit")
 
 
-def _git_ignores(folder: Path, name: str) -> bool:
+def _host_git(workspaces: list[str]) -> str | None:
+    """git from an absolute PATH folder outside every workspace, or None.
+
+    A bare name is unsafe here: Windows looks in the current folder first (the
+    hook's, which is the workspace) unless NoDefaultCurrentDirectoryInExePath is
+    set, and PATH can hold workspace folders such as an activated venv.
+    """
+
+    roots = [form for root in workspaces if root for form in (os.path.normpath(root), paths.resolve(root))]
+    names = ("git.exe",) if os.name == "nt" else ("git",)
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        folder = entry.strip().strip('"')
+        if not folder or not os.path.isabs(folder):
+            continue
+        if any(paths.inside_any(form, roots) for form in (os.path.normpath(folder), paths.resolve(folder))):
+            continue
+        for name in names:
+            candidate = os.path.join(folder, name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def _git_ignores(folder: Path, name: str, git: str | None) -> bool:
     """Whether git ignores `name` in `folder`. Git missing or failing also counts as no."""
 
+    if not git:
+        return False
     try:
-        result = subprocess.run(["git", "check-ignore", "-q", "--", name], cwd=str(folder), stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=GREP_GIT_TIMEOUT,
-                                **no_window_kwargs())
+        result = subprocess.run([git, *GIT_SAFE_CONFIG, "check-ignore", "-q", "--", name], cwd=str(folder),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=GREP_GIT_TIMEOUT, **no_window_kwargs())
     except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
 
 
-def _skipped_dir(root: str, name: str, cache: dict[str, bool]) -> bool:
+def _skipped_dir(root: str, name: str, cache: dict[str, bool], git: str | None) -> bool:
     """Whether rg's search leaves this folder out: `.git` always, `node_modules` only when git ignores it.
 
     rg follows .gitignore, so a node_modules that isn't in it gets searched. The
@@ -85,7 +115,7 @@ def _skipped_dir(root: str, name: str, cache: dict[str, bool]) -> bool:
         return False
     folder = os.path.join(root, name)
     if folder not in cache:
-        cache[folder] = _git_ignores(Path(root), name)
+        cache[folder] = _git_ignores(Path(root), name, git)
     return cache[folder]
 
 
@@ -106,8 +136,9 @@ def _check_folder_grep(folder: Path, include: str | None, context: dict[str, Any
     homes = [str(context.get("user_home") or "")]
     seen = 0
     skipped: dict[str, bool] = {}
+    git = _host_git([str(item) for item in context.get("workspaces") or []])
     for root, dirs, files in os.walk(folder):
-        dirs[:] = [item for item in dirs if not _skipped_dir(root, item, skipped)]
+        dirs[:] = [item for item in dirs if not _skipped_dir(root, item, skipped, git)]
         for name in files:
             if not _include_matches(name, include):
                 continue

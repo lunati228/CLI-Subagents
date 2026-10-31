@@ -463,6 +463,48 @@ class ReviewTests(OpenCodeHome):
         (self.project / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
         self.assertEqual(self.review("grep", {"pattern": "API_KEY"})["decision"], "auto_approve")
 
+    def test_folder_grep_never_runs_git_config_from_the_workspace(self):
+        # The edit tool may write HEAD, config, objects/ and refs/ anywhere in the workspace (no .git
+        # in the path). git takes such a folder for a repository, and its core.fsmonitor would run
+        # on the host, outside the sandbox, when the folder grep asks git about node_modules.
+        if not shutil.which("git"):
+            self.skipTest("git is needed to show that the gate's git call ignores workspace git config")
+        marker = self.root / "fsmonitor-ran"
+        payload = f"\tfsmonitor = \"touch '{marker.as_posix()}'; echo\"\n"
+        crafted = self.project / "crafted"
+        nested = self.project / "nested"
+        for folder in (crafted / "objects", crafted / "refs", crafted / "node_modules", nested / ".git" / "objects",
+                       nested / ".git" / "refs", nested / "node_modules"):
+            folder.mkdir(parents=True)
+        (crafted / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (crafted / "config").write_text("[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n" + payload,
+                                        encoding="utf-8")
+        (nested / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (nested / ".git" / "config").write_text("[core]\n\trepositoryformatversion = 0\n\tbare = false\n" + payload,
+                                                encoding="utf-8")
+        for folder in (crafted, nested):
+            (folder / "node_modules" / "lib.js").write_text("module.exports = 1\n", encoding="utf-8")
+            marker.unlink(missing_ok=True)
+            with self.subTest(folder=folder.name):
+                self.assertEqual(self.review("grep", {"pattern": "exports", "path": str(folder)})["decision"], "auto_approve")
+                self.assertFalse(marker.exists(), "the gate's git call ran core.fsmonitor from the workspace")
+
+    def test_host_git_is_never_taken_from_the_workspace_or_a_relative_path_entry(self):
+        name = "git.exe" if os.name == "nt" else "git"
+        planted = self.project / ".venv" / "bin"
+        trusted = self.root / "tools"
+        for folder in (planted, trusted):
+            folder.mkdir(parents=True)
+            (folder / name).write_text("", encoding="utf-8")
+            (folder / name).chmod(0o755)
+        (self.project / name).write_text("", encoding="utf-8")
+        search = os.pathsep.join([".", "", str(planted), str(trusted)])
+        with patch.dict(os.environ, {"PATH": search}):
+            found = opencode_review._host_git([str(self.project)])
+        self.assertEqual(Path(found).resolve(), (trusted / name).resolve())
+        with patch.dict(os.environ, {"PATH": os.pathsep.join([".", str(planted)])}):
+            self.assertIsNone(opencode_review._host_git([str(self.project)]))
+
     def test_csa_package_can_be_read_but_not_edited(self):
         package = opencode_review.PACKAGE_DIR
         self.context_data.update(workspaces=[str(package.parent)])

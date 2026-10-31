@@ -24,7 +24,8 @@ else:  # pragma: no cover - exercised on POSIX only
 
 def read_json(path: Path, default: Any = None) -> Any:
     try:
-        return json.loads(read_text(path))
+        # Editors and PowerShell 5.1 can save user files such as settings.json with a byte order mark.
+        return json.loads(read_text(path).removeprefix("﻿"))
     except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
         return default
 

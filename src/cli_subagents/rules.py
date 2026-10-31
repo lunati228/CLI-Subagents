@@ -113,8 +113,10 @@ def _span(data: bytes) -> tuple[int, int] | None:
 
 def update_file(path: Path, block: str | None, dry_run: bool = False) -> str:
     """Change only marker bytes. Preserve all existing bytes outside them."""
-    existed = path.exists()
-    original = path.read_bytes() if existed else b""
+    # A symlinked instruction file (a dotfiles repository, say) is written through, not replaced by a copy.
+    target = path.resolve() if path.is_symlink() else path
+    existed = target.exists()
+    original = target.read_bytes() if existed else b""
     if original.startswith((b"\xff\xfe", b"\xfe\xff")):
         raise ValueError("The instruction file is UTF-16. Save it as UTF-8 first.")
     span = _span(original)
@@ -140,7 +142,7 @@ def update_file(path: Path, block: str | None, dry_run: bool = False) -> str:
     if dry_run:
         verb = {"Installed": "install", "Replaced": "replace", "Removed": "remove"}[action]
         return f"Would {verb} delegation rules in {path}; no files written."
-    backup = path.with_name(f"{path.name}.csa-rules-backup")
+    backup = target.with_name(f"{target.name}.csa-rules-backup")
     backup_created = False
     if existed:
         try:
@@ -149,7 +151,7 @@ def update_file(path: Path, block: str | None, dry_run: bool = False) -> str:
             backup_created = True
         except FileExistsError:
             pass
-    write_private(path, updated)
+    write_private(target, updated)
     note = f" Backup: {backup}." if backup_created else ""
     return f"{action} delegation rules in {path}.{note}"
 

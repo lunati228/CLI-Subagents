@@ -109,6 +109,7 @@ def build_or_test(line: str, *, cwd: str, path_ok: Callable[[str], bool], sandbo
 
     if not line.strip() or any(char in commands.UNSAFE_CHARS for char in line):
         return False
+    path_ok = commands.each_part(path_ok)  # PowerShell passes `a,b` as two arguments
     # The same caution as the read-only parser: quoting that sh, cmd and PowerShell read differently.
     if "'" in line or '\\"' in line or (os.name != "nt" and "\\" in line):
         return False

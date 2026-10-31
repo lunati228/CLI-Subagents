@@ -562,6 +562,9 @@ class SandboxTests(GateBase):
         self.assertTrue(build.build_or_test("npm test", cwd=str(self.project), path_ok=inside))
         self.assertFalse(build.build_or_test("npm test -- ../x", cwd=str(self.project), path_ok=inside))
         self.assertFalse(build.build_or_test("", cwd=str(self.project), path_ok=inside))
+        # PowerShell passes `a,b` as two arguments: each part must be inside the workspace.
+        self.assertFalse(build.build_or_test("pytest tests,../other", cwd=str(self.project), path_ok=inside))
+        self.assertEqual(self.shell("pytest tests,../other")["decision"], "deny")
 
 
 @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the generated JS plugin")

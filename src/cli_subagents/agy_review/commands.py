@@ -452,6 +452,26 @@ def _git_ok(words: list[str], path_ok: Callable[[str], bool]) -> bool:
     return True
 
 
+def each_part(path_ok: Callable[[str], bool]) -> Callable[[str], bool]:
+    """`path_ok` for a word and for every path PowerShell may read in it.
+
+    PowerShell reads `a,b` in an argument as two values (an array), so
+    `Get-Content README.md,C:/elsewhere/x` reads both files, and a
+    provider-qualified `FileSystem::C:/elsewhere/x` names C:/elsewhere/x.
+    A grep pattern such as `std::vector` just adds a harmless relative name.
+    """
+
+    def check(value: str) -> bool:
+        parts = [value]
+        for part in value.split(","):
+            parts.append(part)
+            if "::" in part:
+                parts.append(part.split("::", 1)[1])
+        return all(path_ok(part) for part in dict.fromkeys(parts) if part)
+
+    return check
+
+
 def read_only(command: str, *, cwd: str, path_ok: Callable[[str], bool]) -> bool:
     """True when the command is plainly read-only and every path it names passes `path_ok`.
 
@@ -460,6 +480,7 @@ def read_only(command: str, *, cwd: str, path_ok: Callable[[str], bool]) -> bool
 
     if not command.strip() or any(char in UNSAFE_CHARS for char in command):
         return False
+    path_ok = each_part(path_ok)
     # This grammar is shared by sh, cmd and PowerShell. Single quotes do not
     # group arguments in cmd, and backslash escapes in sh can turn a supposed
     # operand into an option (sort \\-oFILE). Do not prove safety using a

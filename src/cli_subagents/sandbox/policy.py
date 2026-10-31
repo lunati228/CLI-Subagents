@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shutil
 import stat
 from typing import Iterable
 
+from cli_subagents.fsutil import find_program
 from cli_subagents.sandbox.model import Policy, PolicyError
 
 # Inside writable workspaces these stay read-only when they exist and can't be
@@ -266,7 +266,7 @@ def resolve_program(argv: list[str], env: dict[str, str]) -> list[str]:
     program = argv[0]
     if not os.path.isabs(program):
         path = next((value for key, value in env.items() if key.upper() == "PATH"), None)
-        found = shutil.which(program, path=path)
+        found = find_program(program, path)
         if not found:
             raise PolicyError(f"could not find {program} for the sandbox")
         program = found
@@ -342,4 +342,9 @@ def host_environment(env: dict[str, str], workspaces: list[str]) -> dict[str, st
                     continue
                 entries.append(entry)
             result[key] = os.pathsep.join(entries)
+    if os.name == "nt":
+        # CreateProcess and many tools' own lookups otherwise try the current
+        # folder (the workspace) before PATH for a bare program name.
+        result = {key: value for key, value in result.items() if key.upper() != "NODEFAULTCURRENTDIRECTORYINEXEPATH"}
+        result["NoDefaultCurrentDirectoryInExePath"] = "1"
     return result

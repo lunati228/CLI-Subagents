@@ -32,6 +32,7 @@ from cli_subagents.hosts import parent_note
 from cli_subagents.config import Account, RuntimeConfig, cache_dir, home, jobs_dir, state_dir
 from cli_subagents.fsutil import (
     file_lock,
+    find_program,
     is_link,
     link_target,
     make_dir_link,
@@ -306,9 +307,9 @@ class ClaudeRuntime:
         if override:
             return list(json.loads(override))
         if config.binary:
-            found = shutil.which(config.binary) or (config.binary if Path(config.binary).is_file() else None)
+            found = find_program(config.binary) or (config.binary if Path(config.binary).is_file() else None)
             return [found] if found else None
-        found = shutil.which("claude")
+        found = find_program("claude")
         if found:
             return [found]
         candidates: list[str] = []

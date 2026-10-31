@@ -15,11 +15,11 @@ from cli_subagents.runtimes.base import AttemptResult, USAGE_LIMIT
 
 class OpenCodeRegistrationTests(TempHome):
     def test_discovery_is_dynamic_and_the_off_switch_round_trips(self):
-        with patch("cli_subagents.runtimes.opencode.shutil.which", return_value=None), patch.dict(
+        with patch("cli_subagents.runtimes.opencode.find_program", return_value=None), patch.dict(
             os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}
         ):
             self.assertNotIn("opencode", offered_runtimes())
-            with patch("cli_subagents.runtimes.opencode.shutil.which", return_value="opencode.exe"):
+            with patch("cli_subagents.runtimes.opencode.find_program", return_value="opencode.exe"):
                 self.assertIn("opencode", offered_runtimes())
                 (self.home / "config.toml").write_text("[opencode]\nenabled = false\n", encoding="utf-8")
                 config = load_config()

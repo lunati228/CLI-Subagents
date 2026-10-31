@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import subprocess
 import time
 from typing import Any
@@ -25,7 +24,7 @@ from typing import Any
 from cli_subagents import mcp_translate, opencode_review
 from cli_subagents.agy_review import write_context
 from cli_subagents.config import Account, RuntimeConfig, home, jobs_dir, state_dir
-from cli_subagents.fsutil import make_private_dir, no_window_kwargs, python_executable, write_text
+from cli_subagents.fsutil import find_program, make_private_dir, no_window_kwargs, python_executable, write_text
 from cli_subagents.runtimes.base import (
     AUTH, ERROR, PARENT_SERVER, SUCCESS, USAGE_LIMIT, WORKER_TOOLS_NOTE,
     AttemptResult, JobSpec, Launch, clean_environment, parent_server,
@@ -265,7 +264,7 @@ class OpenCodeRuntime:
         override = os.environ.get("CLI_SUBAGENTS_OPENCODE_COMMAND")
         if override:
             return list(json.loads(override))
-        found = (shutil.which(config.binary) or (config.binary if Path(config.binary).is_file() else None)) if config.binary else shutil.which("opencode")
+        found = (find_program(config.binary) or (config.binary if Path(config.binary).is_file() else None)) if config.binary else find_program("opencode")
         if not found:
             return None
         path = Path(found)
@@ -278,7 +277,7 @@ class OpenCodeRuntime:
             for relative in ("node_modules/@opencode/cli/bin/opencode.cjs", "node_modules/opencode-ai/bin/opencode"):
                 launcher = path.parent / relative
                 node = path.parent / "node.exe"
-                node_path = str(node) if node.is_file() else shutil.which("node")
+                node_path = str(node) if node.is_file() else find_program("node")
                 if launcher.is_file() and node_path:
                     return [node_path, str(launcher)]
         return [found]

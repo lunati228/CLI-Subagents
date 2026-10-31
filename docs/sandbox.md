@@ -73,6 +73,10 @@ installed inside a workspace. The host file-tool gate protects them too, so a
 command cannot replace code that a later host launch will run.
 OpenCode's host PATH excludes workspace directories and relative or empty
 entries, so a command cannot plant a tool that a later host grep or glob runs.
+Windows would also try the current folder (the workspace) first for a bare
+program name: OpenCode's host environment sets `NoDefaultCurrentDirectoryInExePath`,
+and csa looks up `claude`, `codex`, `agy`, `opencode`, `node` and `taskkill` only
+in absolute PATH folders or the system folder.
 The original tool PATH, including an activated workspace venv, is available only
 to contained commands. Host timeout cleanup uses absolute Windows system tools.
 

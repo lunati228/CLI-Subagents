@@ -367,12 +367,48 @@ def recorded_process_alive(pid: Any, started: Any) -> bool:
         return False
 
 
+def find_program(name: str, path: str | None = None) -> str | None:
+    """shutil.which() without the current folder or relative PATH entries.
+
+    On Windows shutil.which() searches the current folder first, even with an
+    explicit `path`, unless NoDefaultCurrentDirectoryInExePath is set. csa's
+    own processes often run in a project a sandboxed command can write, so a
+    planted claude.cmd or opencode.cmd there would run on the host. A name with
+    a folder part is checked as given.
+    """
+
+    if os.path.dirname(name):
+        return shutil.which(name)
+    if os.name == "nt":
+        extensions = [ext for ext in (os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if ext]
+        has_extension = os.path.splitext(name)[1].lower() in {ext.lower() for ext in extensions}
+        candidates = ([name] if has_extension else []) + [name + ext for ext in extensions]
+    else:
+        candidates = [name]
+    for entry in (os.environ.get("PATH", "") if path is None else path).split(os.pathsep):
+        folder = entry.strip().strip('"')
+        if not folder or not os.path.isabs(folder):
+            continue
+        for candidate in candidates:
+            full = os.path.join(folder, candidate)
+            if os.path.isfile(full) and os.access(full, os.X_OK):
+                return full
+    return None
+
+
+def system_tool(name: str) -> str:
+    """A Windows system program by absolute path (never one found in the current folder)."""
+
+    root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or r"C:\Windows"
+    return str(Path(root) / "System32" / name)
+
+
 def kill_tree(pid: int) -> None:
     """Terminate a process and all of its children."""
 
     if os.name == "nt":
         subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            [system_tool("taskkill.exe"), "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             check=False,
             timeout=30,

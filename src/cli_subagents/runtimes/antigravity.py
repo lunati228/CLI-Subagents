@@ -34,7 +34,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 from typing import Any
 
@@ -44,6 +43,7 @@ from cli_subagents.config import Account, RuntimeConfig, home as csa_home, homes
 from cli_subagents.fsutil import (
     copy_exclusive,
     file_lock,
+    find_program,
     is_link,
     link_target,
     make_private_dir,
@@ -402,7 +402,7 @@ class AntigravityRuntime:
         candidates = [config.binary, os.environ.get("AGY_CMD"), "agy"]
         for candidate in candidates:
             if candidate:
-                found = shutil.which(candidate) or (candidate if Path(candidate).is_file() else None)
+                found = find_program(candidate) or (candidate if Path(candidate).is_file() else None)
                 if found:
                     return [found]
         local = os.environ.get("LOCALAPPDATA")

@@ -156,7 +156,7 @@ class LaunchTests(OpenCodeHome):
         self.config.enabled = False
         self.assertIsNone(self.runtime.find_binary(self.config))
         self.config.enabled = True
-        with patch.dict(os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}), patch("cli_subagents.runtimes.opencode.shutil.which", return_value=None):
+        with patch.dict(os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}), patch("cli_subagents.runtimes.opencode.find_program", return_value=None):
             self.assertIsNone(self.runtime.find_binary(self.config))
 
     def test_windows_npm_shim_uses_node_directly(self):
@@ -167,7 +167,7 @@ class LaunchTests(OpenCodeHome):
         shim.write_text("fake", encoding="utf-8")
         node = shim.parent / "node.exe"
         node.write_text("fake", encoding="utf-8")
-        with patch.dict(os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}), patch("cli_subagents.runtimes.opencode.shutil.which", return_value=str(shim)):
+        with patch.dict(os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}), patch("cli_subagents.runtimes.opencode.find_program", return_value=str(shim)):
             self.assertEqual(self.runtime.find_binary(self.config), [str(node), str(launcher)])
 
     def test_windows_npm_shim_prefers_the_published_native_binary(self):
@@ -177,7 +177,7 @@ class LaunchTests(OpenCodeHome):
         native.write_text("fake", encoding="utf-8")
         (native.parent / "opencode.cjs").write_text("fake", encoding="utf-8")
         shim.write_text("fake", encoding="utf-8")
-        with patch.dict(os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}), patch("cli_subagents.runtimes.opencode.shutil.which", return_value=str(shim)):
+        with patch.dict(os.environ, {"CLI_SUBAGENTS_OPENCODE_COMMAND": ""}), patch("cli_subagents.runtimes.opencode.find_program", return_value=str(shim)):
             self.assertEqual(self.runtime.find_binary(self.config), [str(native)])
 
     def test_real_v2_version_output_is_accepted(self):

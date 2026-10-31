@@ -23,7 +23,8 @@ import time
 from typing import Any
 
 from cli_subagents.config import NAME_RE, Account, Config, save_config
-from cli_subagents.fsutil import copy_exclusive, is_link, no_window_kwargs, same_path, write_json, write_private
+from cli_subagents.fsutil import (copy_exclusive, find_program, is_link, no_window_kwargs, same_path, write_json,
+                                  write_private)
 from cli_subagents.runtimes import get_runtime
 from cli_subagents.runtimes.base import JobSpec, clean_environment
 
@@ -623,7 +624,7 @@ def _check_primary_login(config: Config, host: str, report: Report) -> None:
 
 
 def _check_csa_on_path(report: Report) -> None:
-    if shutil.which("csa"):
+    if find_program("csa"):
         return
     scripts = sysconfig.get_path("scripts")
     report.add_todo(
@@ -722,9 +723,9 @@ def detect_install(prefix: str, location: str | None, direct_url: str | None, us
         return "editable", None
     parts = [part.lower() for part in Path(prefix).parts]
     if "venvs" in parts and any("pipx" in part for part in parts):
-        return "pipx", [shutil.which("pipx") or "pipx", "install", "--force", PACKAGE_SOURCE]
+        return "pipx", [find_program("pipx") or "pipx", "install", "--force", PACKAGE_SOURCE]
     if "uv" in parts and "tools" in parts:
-        return "uv", [shutil.which("uv") or "uv", "tool", "install", "--force", PACKAGE_SOURCE]
+        return "uv", [find_program("uv") or "uv", "tool", "install", "--force", PACKAGE_SOURCE]
     if user_site and Path(location).resolve().is_relative_to(Path(user_site).resolve()):
         return "pip-user", [executable, "-m", "pip", "install", "--user", "--force-reinstall", "--no-deps", PACKAGE_SOURCE]
     return "pip", [executable, "-m", "pip", "install", "--force-reinstall", "--no-deps", PACKAGE_SOURCE]

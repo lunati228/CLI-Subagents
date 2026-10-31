@@ -1,6 +1,7 @@
 """Host-side program lookups never use the current folder (a workspace a sandboxed command can write)."""
 
 import os
+from dataclasses import replace
 from pathlib import Path
 import stat
 import subprocess
@@ -50,6 +51,11 @@ class HostProgramLookupTests(TempHome):
         for name, variable in (("opencode", "CLI_SUBAGENTS_OPENCODE_COMMAND"), ("claude", "CLI_SUBAGENTS_CLAUDE_COMMAND"),
                                ("codex", "CLI_SUBAGENTS_CODEX_COMMAND"), ("agy", "CLI_SUBAGENTS_AGY_COMMAND")):
             plant(self.project, name)
+            # plant() writes the bare name on POSIX; on Windows the same file stands in
+            # for it, so the old Path(candidate).is_file() fallback is covered here too.
+            bare = self.project / name
+            bare.write_text("#!/bin/sh\necho planted\n", encoding="utf-8")
+            bare.chmod(bare.stat().st_mode | stat.S_IXUSR)
             os.environ.pop(variable, None)
         os.environ["PATH"] = str(self.root / "empty")
         os.environ.pop("AGY_CMD", None)
@@ -61,6 +67,49 @@ class HostProgramLookupTests(TempHome):
                 with self.subTest(runtime=runtime):
                     found = get_runtime(runtime).find_binary(config.runtime(runtime))
                     self.assertFalse(found and any(str(self.project) in str(Path(item).resolve()) for item in found), found)
+
+    def test_a_bare_name_is_only_looked_up_on_path(self):
+        os.environ["PATH"] = os.pathsep.join([".", "relative-tools", str(self.root / "empty")])
+        for name in ("csa-fixture-bare", "claude"):
+            planted = self.project / name  # no extension, as plant() writes on POSIX
+            planted.write_text("#!/bin/sh\necho planted\n", encoding="utf-8")
+            planted.chmod(planted.stat().st_mode | stat.S_IXUSR)
+            with self.subTest(name=name):
+                self.assertIsNone(fsutil.find_program(name))
+                self.assertIsNone(fsutil.locate_program(name))
+
+    def test_locate_program_answers_with_an_absolute_path(self):
+        tools = self.root / "tools"
+        tools.mkdir()
+        expected = plant(tools, "csa-fixture-located")
+        os.environ["PATH"] = os.pathsep.join([".", "relative-tools", f'"{tools}"'])
+        found = fsutil.locate_program("csa-fixture-located")
+        self.assertTrue(os.path.isabs(found), found)
+        self.assertEqual(Path(found), expected)
+        # A configured path with a folder part is taken as given, but stays absolute.
+        local = self.project / "bin"
+        local.mkdir()
+        copied = plant(local, "csa-fixture-relative")
+        found = fsutil.locate_program(str(Path("bin") / copied.name))
+        self.assertTrue(os.path.isabs(found), found)
+        self.assertEqual(Path(found), copied)
+
+    def test_a_configured_relative_binary_is_returned_absolute(self):
+        local = self.project / "bin"
+        local.mkdir()
+        os.environ["PATH"] = str(self.root / "empty")
+        for variable in ("CLI_SUBAGENTS_OPENCODE_COMMAND", "CLI_SUBAGENTS_CLAUDE_COMMAND",
+                         "CLI_SUBAGENTS_CODEX_COMMAND", "CLI_SUBAGENTS_AGY_COMMAND", "AGY_CMD"):
+            os.environ.pop(variable, None)
+        for name, runtime in (("opencode", "opencode"), ("claude", "claude"), ("codex", "codex"),
+                              ("agy", "antigravity")):
+            planted = plant(local, name)
+            with self.subTest(runtime=runtime):
+                config = load_config()
+                settings = replace(config.runtime(runtime), binary=str(Path("bin") / planted.name))
+                found = get_runtime(runtime).find_binary(settings)
+                self.assertTrue(found and all(os.path.isabs(item) for item in found), found)
+                self.assertEqual(Path(found[0]), planted)
 
     @unittest.skipUnless(os.name == "nt", "Windows process lookup")
     def test_kill_tree_runs_the_system_taskkill(self):

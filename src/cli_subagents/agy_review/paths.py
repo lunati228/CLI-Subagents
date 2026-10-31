@@ -208,10 +208,16 @@ def network_path(path: str) -> bool:
     Opening one (resolving, stat, listing) looks up the server and connects to it
     over SMB with the user's Windows login, from the host, outside any sandbox.
     Win32 passes a \\??\\ path to the NT namespace as it is, so \\??\\UNC\\server
-    reaches a server too.
+    reaches a server too, and so does \\??\\ followed by \\\\server\\share.
+
+    Only the string is read: slashes are folded and case ignored, and nothing here
+    opens the path. ntpath must stay out of it, because isabs()/splitroot() changed
+    in Python 3.13 (a \\??\\ path is no longer absolute there), so a path normalized
+    first can come out looking like an ordinary drive path.
     """
 
-    return IS_WINDOWS and os.path.normpath(path).startswith(("\\\\", "\\??\\"))
+    text = str(path).strip().strip("\"'").replace("/", "\\").casefold()
+    return IS_WINDOWS and text.startswith(("\\\\", "\\??\\"))
 
 
 NETWORK_REASON = "it is a network or device path, which the gate doesn't open"
@@ -227,8 +233,15 @@ def check(value: str, *, base: str | None, homes: Iterable[str],
 
     home_list = [home for home in homes if home]
     normal = normalize(value, base, home_list[0] if home_list else None)
-    if network_path(normal) and not inside_any(normal, [item for item in (base, *trusted) if item]):
-        return normal, normal, NETWORK_REASON
+    roots = [item for item in (base, *trusted) if item]
+    # The path as the caller wrote it decides too: on Python 3.13 normalizing a
+    # \\??\\ path joins it to `base` and hides its prefix (see network_path). Each
+    # form is allowed only if that form itself lies inside an allowed root: the
+    # joined form is inside `base` by construction and proves nothing.
+    written = str(value).strip().strip("\"'")
+    for form in (written, normal):
+        if network_path(form) and not inside_any(form, roots):
+            return normal, normal, NETWORK_REASON
     resolved = resolve(normal)
     reason = (secret_reason(normal, home_list, trusted=base)
               or secret_reason(resolved, home_list, trusted=resolve(base) if base else None))

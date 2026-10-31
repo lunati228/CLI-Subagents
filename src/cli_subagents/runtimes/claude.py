@@ -35,6 +35,7 @@ from cli_subagents.fsutil import (
     find_program,
     is_link,
     link_target,
+    locate_program,
     make_dir_link,
     no_window_kwargs,
     read_json,
@@ -307,7 +308,7 @@ class ClaudeRuntime:
         if override:
             return list(json.loads(override))
         if config.binary:
-            found = find_program(config.binary) or (config.binary if Path(config.binary).is_file() else None)
+            found = locate_program(config.binary)
             return [found] if found else None
         found = find_program("claude")
         if found:

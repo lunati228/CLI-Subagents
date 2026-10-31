@@ -284,6 +284,12 @@ def pid_alive(pid: int | None) -> bool:
             return code.value == 259  # STILL_ACTIVE
         finally:
             ctypes.windll.kernel32.CloseHandle(process)
+    return _posix_alive(int(pid))
+
+
+def _posix_alive(pid: int) -> bool:
+    """pid_alive() for POSIX, where an unreaped zombie still answers kill(pid, 0)."""
+
     for process in _SPAWNED:  # pragma: no cover - POSIX zombie reaping
         if process.pid == pid and process.poll() is not None:
             return False
@@ -297,9 +303,53 @@ def pid_alive(pid: int | None) -> bool:
         return False
     try:  # pragma: no cover
         os.kill(pid, 0)
-        return True
     except OSError:
         return False
+    # A process killed while its parent hasn't reaped it stays a zombie: kill()
+    # still succeeds, but it runs no code, so a launcher can't check itself any more.
+    return process_state(pid) not in ("Z", "X")
+
+
+# macOS has no /proc, so the state comes from ps. The sandbox launcher asks every
+# 50 ms whether its parent still runs, so keep a moment's answer per PID instead
+# of starting a process 20 times a second.
+_PS_STATE_TTL = 1.0
+_PS_STATES: dict[int, tuple[float, str | None]] = {}
+
+
+def process_state(pid: int | None) -> str | None:
+    """The single-letter state of a POSIX process ('R', 'S', 'Z', ...), or None when unreadable.
+
+    Linux reads field 3 of /proc/<pid>/stat; macOS and other Unixes ask
+    `ps -o stat=`. A zombie ('Z') has exited and only waits to be reaped.
+    """
+
+    if not pid:
+        return None
+    try:
+        raw = Path(f"/proc/{int(pid)}/stat").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        raw = ""
+    if raw:
+        # Field 2 (the command name) may contain spaces or ')': split after the last ')'.
+        fields = raw[raw.rindex(")") + 2:].split()
+        return fields[0] if fields else None
+    if os.name == "nt":
+        return None
+    cached = _PS_STATES.get(int(pid))
+    if cached is not None and time.monotonic() - cached[0] < _PS_STATE_TTL:
+        return cached[1]
+    try:  # macOS and other Unixes without /proc
+        done = subprocess.run(["ps", "-o", "stat=", "-p", str(int(pid))],
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    state = done.stdout.strip()
+    state = state[:1].upper() if done.returncode == 0 and state else None
+    if len(_PS_STATES) > 128:
+        _PS_STATES.clear()
+    _PS_STATES[int(pid)] = (time.monotonic(), state)
+    return state
 
 
 def process_start_time(pid: int | None) -> int | None:
@@ -393,6 +443,27 @@ def find_program(name: str, path: str | None = None) -> str | None:
             full = os.path.join(folder, candidate)
             if os.path.isfile(full) and os.access(full, os.X_OK):
                 return full
+    return None
+
+
+def locate_program(candidate: str | None) -> str | None:
+    """Absolute path of a configured program, or None when it isn't found.
+
+    A bare name is looked up on PATH only, never in the current folder (a
+    workspace a sandboxed command can write). A name with a folder part is
+    checked as given. The answer is always absolute, so callers never run a
+    program relative to their own folder.
+    """
+
+    if not candidate:
+        return None
+    found = find_program(candidate)
+    if found:
+        return os.path.abspath(found)
+    if os.path.dirname(candidate):
+        path = os.path.abspath(candidate)
+        if os.path.isfile(path):
+            return path
     return None
 
 

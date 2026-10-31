@@ -27,7 +27,7 @@ from cli_subagents import accounts as pool, sync
 from cli_subagents.hosts import parent_note
 from cli_subagents.config import Account, RuntimeConfig, state_dir
 from cli_subagents import mcp_translate
-from cli_subagents.fsutil import copy_exclusive, file_lock, find_program, is_link, no_window_kwargs, same_path, write_text
+from cli_subagents.fsutil import copy_exclusive, file_lock, find_program, is_link, locate_program, no_window_kwargs, same_path, write_text
 from cli_subagents.runtimes.base import (
     WORKER_TOOLS_NOTE,
     parent_server,
@@ -516,7 +516,7 @@ class CodexRuntime:
             return list(json.loads(override))
         found = None
         if config.binary:
-            found = find_program(config.binary) or (config.binary if Path(config.binary).is_file() else None)
+            found = locate_program(config.binary)
         else:
             found = find_program("codex")
         if not found:

@@ -15,13 +15,13 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fake_wxc import split_windows
 from helpers import TempHome
 from test_opencode import OpenCodeHome
 
-from cli_subagents import jobs, messages, sandbox
+from cli_subagents import fsutil, jobs, messages, sandbox
 from cli_subagents.config import SandboxSettings, dump_config, load_config
 from cli_subagents.fsutil import read_json
 from cli_subagents.sandbox import mxc, policy
@@ -300,6 +300,84 @@ class TaskkillTests(unittest.TestCase):
         finally:
             if parent.poll() is None:
                 parent.kill()
+
+
+class PosixProcessStateTests(unittest.TestCase):
+    """A zombie has exited but still answers kill(); a POSIX launcher must see it as gone."""
+
+    def setUp(self):
+        fsutil._PS_STATES.clear()
+        self.addCleanup(fsutil._PS_STATES.clear)
+
+    def posix_calls(self):
+        """The POSIX-only pieces of _posix_alive(), so the test can run on Windows too."""
+
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(fsutil.os, "WNOHANG", 1, create=True))
+        return stack
+
+    def posix_alive(self, state):
+        with self.posix_calls(), patch.object(fsutil.os, "waitpid", side_effect=ChildProcessError), \
+                patch.object(fsutil.os, "kill"), \
+                patch.object(fsutil, "process_state", return_value=state):
+            return fsutil._posix_alive(4321)
+
+    def test_a_zombie_parent_is_not_alive(self):
+        self.assertFalse(self.posix_alive("Z"))
+
+    def test_a_running_parent_is_alive(self):
+        self.assertTrue(self.posix_alive("S"))
+
+    def test_a_gone_process_is_not_alive(self):
+        with self.posix_calls(), patch.object(fsutil.os, "waitpid", side_effect=ChildProcessError), \
+                patch.object(fsutil.os, "kill", side_effect=ProcessLookupError):
+            self.assertFalse(fsutil._posix_alive(4321))
+
+    def test_a_child_the_kernel_reports_finished_is_not_alive(self):
+        with self.posix_calls(), patch.object(fsutil.os, "waitpid", return_value=(4321, 0)), \
+                patch.object(fsutil.os, "kill") as kill, \
+                patch.object(fsutil, "process_state", return_value="S"):
+            self.assertFalse(fsutil._posix_alive(4321))
+        kill.assert_not_called()
+
+    def test_a_spawned_child_that_finished_is_not_alive(self):
+        process = Mock(pid=4321)
+        process.poll.return_value = 0
+        with patch.object(fsutil, "_SPAWNED", [process]), \
+                patch.object(fsutil.os, "kill") as kill:
+            self.assertFalse(fsutil._posix_alive(4321))
+        kill.assert_not_called()
+
+    def test_pid_alive_asks_the_posix_helper_outside_windows(self):
+        with patch.object(fsutil.os, "name", "posix"), \
+                patch.object(fsutil, "_posix_alive", return_value=False) as helper:
+            self.assertFalse(fsutil.pid_alive(4321))
+        helper.assert_called_once_with(4321)
+
+    def test_windows_keeps_its_own_check(self):
+        kernel = Mock()
+        kernel.OpenProcess.return_value = 0  # no process with this PID
+        with patch.object(fsutil.os, "name", "nt"), \
+                patch.object(fsutil, "_posix_alive", side_effect=AssertionError("Windows must not use it")), \
+                patch("ctypes.windll", kernel, create=True):
+            self.assertFalse(fsutil.pid_alive(4321))
+
+    def test_linux_reads_the_state_after_the_command_name(self):
+        stat = Mock()
+        stat.read_text.return_value = "4321 (odd ) name) Z 1 2 3 4 5 6\n"
+        with patch.object(fsutil, "Path", return_value=stat):
+            self.assertEqual(fsutil.process_state(4321), "Z")
+
+    def test_macos_asks_ps_once_a_second(self):
+        done = Mock(returncode=0, stdout="Z+\n")
+        with patch.object(fsutil, "Path", side_effect=OSError("no /proc")), \
+                patch.object(fsutil.os, "name", "posix"), \
+                patch.object(fsutil.subprocess, "run", return_value=done) as run:
+            self.assertEqual(fsutil.process_state(4321), "Z")
+            self.assertEqual(fsutil.process_state(4321), "Z")
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["ps", "-o", "stat=", "-p", "4321"])
 
 
 class OpenCodeLaunchTests(OpenCodeHome):

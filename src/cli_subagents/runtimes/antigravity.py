@@ -43,9 +43,9 @@ from cli_subagents.config import Account, RuntimeConfig, home as csa_home, homes
 from cli_subagents.fsutil import (
     copy_exclusive,
     file_lock,
-    find_program,
     is_link,
     link_target,
+    locate_program,
     make_private_dir,
     no_window_kwargs,
     python_executable,
@@ -399,12 +399,11 @@ class AntigravityRuntime:
         override = os.environ.get("CLI_SUBAGENTS_AGY_COMMAND")
         if override:
             return list(json.loads(override))
-        candidates = [config.binary, os.environ.get("AGY_CMD"), "agy"]
-        for candidate in candidates:
-            if candidate:
-                found = find_program(candidate) or (candidate if Path(candidate).is_file() else None)
-                if found:
-                    return [found]
+        # locate_program never resolves a bare name against the current folder.
+        for candidate in (config.binary, os.environ.get("AGY_CMD"), "agy"):
+            found = locate_program(candidate)
+            if found:
+                return [found]
         local = os.environ.get("LOCALAPPDATA")
         if local and (Path(local) / "agy" / "bin" / "agy.exe").is_file():
             return [str(Path(local) / "agy" / "bin" / "agy.exe")]

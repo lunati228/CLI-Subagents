@@ -193,15 +193,20 @@ def patch_targets(patch: str) -> list[str] | None:
     return targets
 
 
-def _refuse_network(target: Path, context: dict[str, Any]) -> None:
+def _refuse_network(value: str, context: dict[str, Any], target: str | None = None) -> None:
     """Raise Denied for a network or device path outside the job's own folders, before anything opens it.
 
     Opening \\\\server\\share on Windows connects to that server from the host (paths.network_path).
+    `value` is the path as the tool wrote it and `target` the joined form: Python 3.13's
+    ntpath doesn't call a \\??\\ path absolute, so joining it to the base folder hides its prefix.
     """
 
     trusted = [str(item) for item in [*(context.get("workspaces") or []), *(context.get("read_paths") or [])] if item]
-    if paths.network_path(str(target)) and not paths.inside_any(str(target), trusted):
-        raise Denied(f"CLI Subagents review: denied, {paths.NETWORK_REASON}.")
+    # Every form is allowed only if that form itself lies inside a trusted folder:
+    # the joined form is inside the workspace by construction and proves nothing.
+    for form in (value, *(item for item in (target,) if item)):
+        if paths.network_path(form) and not paths.inside_any(form, trusted):
+            raise Denied(f"CLI Subagents review: denied, {paths.NETWORK_REASON}.")
 
 
 def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -229,7 +234,7 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
         target = Path(str(path or ""))
         if not target.is_absolute():
             target = Path(base) / target
-        _refuse_network(target, context)
+        _refuse_network(str(path), context, str(target))
         tool = "list_dir" if target.is_dir() else "view_file"
         return [_call(tool, {"AbsolutePath": str(target)})]
     if name == "glob":
@@ -242,7 +247,7 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
         target = Path(str(path or base))
         if not target.is_absolute():
             target = Path(base) / target
-        _refuse_network(target, context)
+        _refuse_network(str(path or base), context, str(target))
         # A folder search is allowed inside the workspace when no searched file can hold secrets.
         if target.is_dir():
             include = args.get("include")
@@ -330,10 +335,11 @@ def run(raw: bytes, context_path: Path, *, on_record: Callable[[dict[str, Any]],
         for payload in payloads:
             call = payload["toolCall"]
             if call["name"] == "write_to_file":
-                target = Path(str(call["args"].get("TargetFile") or ""))
+                written = str(call["args"].get("TargetFile") or "")
+                target = Path(written)
                 target = target if target.is_absolute() else base / target
                 try:
-                    _refuse_network(target, context)
+                    _refuse_network(written, context, str(target))
                 except Denied:
                     return {"decision": "deny", "reason": "CLI Subagents review: writes outside the workspaces are denied."}
                 target = target.resolve()

@@ -236,18 +236,22 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
             _check_folder_grep(target, include if isinstance(include, str) and include.strip() else None, context)
             return [_call("find_by_name", {**args, "SearchDirectory": str(target)})]
         return [_call("grep_search", {**args, "SearchPath": str(target)})]
+    # What an edit writes goes along as CodeContent (a content key the path rules skip): a
+    # reviewer judges the change itself, and a cached verdict covers only the same content.
     if name in ("edit", "write", "multiedit"):
         if not isinstance(path, str) or not path.strip():
             raise Denied("CLI Subagents review: denied, this edit names no file.")
-        return [_call("write_to_file", {"TargetFile": path})]
+        content = {key: value for key, value in args.items() if key not in ("path", "filePath")}
+        return [_call("write_to_file", {"TargetFile": path, "CodeContent": content})]
     if name in ("patch", "apply_patch"):
-        targets = patch_targets(str(args.get("patchText") or args.get("patch") or ""))
+        text = str(args.get("patchText") or args.get("patch") or "")
+        targets = patch_targets(text)
         if targets is None:
             raise Denied("CLI Subagents review: denied, this patch has unusual line breaks, so the files it changes "
                          "can't be read reliably. Use plain \\n or \\r\\n line breaks.")
         if not targets:
             raise Denied("CLI Subagents review: denied, this patch names no file to change.")
-        return [_call("write_to_file", {"TargetFile": value}) for value in targets]
+        return [_call("write_to_file", {"TargetFile": value, "CodeContent": text}) for value in targets]
     if name in ("todo", "todoread", "todowrite", "skill", "question"):
         return [_call("manage_task" if name != "question" else "ask_question", args)]
     # v2 sanitizes the server namespace, then joins it to the tool with '_'.

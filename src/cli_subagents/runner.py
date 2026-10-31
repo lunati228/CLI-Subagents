@@ -596,7 +596,9 @@ class Runner:
                 self._handle_line(raw, parser, account)
             elif process.poll() is not None:
                 # A descendant can inherit stdout after the CLI exits. Do not wait
-                # for it to close the pipe before the process-group cleanup runs.
+                # for it to close the pipe before the process-group cleanup runs,
+                # but parse what the reader thread is still passing on (bounded).
+                self._drain(lines, [], parser, account, events)
                 return None
             if time.monotonic() - last_status > STATUS_INTERVAL:
                 last_status = time.monotonic()

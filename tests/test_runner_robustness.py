@@ -1,5 +1,6 @@
 """Runner regressions: process trees, continuations, caps, budgets and live events."""
 
+import io
 import json
 import os
 from pathlib import Path
@@ -340,6 +341,31 @@ class LiveEventTests(RobustnessBase):
             gate.touch()
             final = jobs.wait_for(status["job_id"], 20)
         self.assertEqual(final["outcome"], SUCCESS, final)
+
+    def test_output_read_just_after_the_worker_exited_still_reaches_the_parser(self):
+        # The reader thread can still be putting the CLI's last line when the main loop
+        # sees the process gone: that line holds the final answer and must not be dropped.
+        class LateStdout:
+            def __iter__(self):
+                time.sleep(0.8)  # longer than one queue wait
+                yield b'{"type":"item.completed","item":{"type":"agent_message","text":"final answer"}}\n'
+
+        class ExitedProcess:
+            pid = 0
+            stdin = io.BytesIO()
+            stdout = LateStdout()
+
+            def poll(self):
+                return 0
+
+        from cli_subagents.runtimes.codex import CodexParser
+
+        runner = self.runner()
+        parser = CodexParser()
+        events = io.BytesIO()
+        account = load_config().runtime("codex").find("a1")
+        self.assertIsNone(runner._pump(ExitedProcess(), "task", parser, account, events, time_limit=30))
+        self.assertEqual(parser.last_text, "final answer")
 
 
 class ParentApprovalTests(RobustnessBase):

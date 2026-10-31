@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from cli_subagents import setup
-from cli_subagents.config import load_config
+from cli_subagents.config import load_config, save_config
 from cli_subagents.fsutil import read_json
 
 BOM = b"\xef\xbb\xbf"
@@ -45,6 +45,31 @@ class ByteOrderMarkTests(TempFolder):
         self.assertEqual(data["model"], "opus")
         self.assertIs(data["enabledPlugins"][setup.PLUGIN_ID], True)
         self.assertTrue(setup._settings_declare_plugin(primary))
+
+
+class SaveConfigTests(TempFolder):
+    def test_paths_and_names_outside_the_basic_plane_survive_a_save(self):
+        # json.dumps escapes U+1F600 as a pair of surrogate escapes and leaves U+007F raw; TOML rejects both.
+        path = self.root / "config.toml"
+        home = str(self.root / "Jörg 😀" / "max-2")
+        quote = lambda text: json.dumps(text, ensure_ascii=False)
+        path.write_text(
+            "[sandbox.claude]\nmode = \"powershell\"\n"
+            f"additional_dirs = [{quote(str(self.root / 'проект 😀'))}]\n\n"
+            "[claude]\n"
+            f"primary = {quote(str(self.root / 'claude 😀'))}\n"
+            'primary_models = ["model\\u007F\\U00020000"]\n\n'
+            "[[claude.accounts]]\nname = \"max-2\"\n"
+            f"home = {quote(home)}\n",
+            encoding="utf-8",
+        )
+        model = "model\x7f\U00020000"
+        config = load_config(path)
+        save_config(config, path)
+        again = load_config(path)
+        self.assertEqual(again, config)
+        self.assertEqual(str(again.runtime("claude").accounts[0].home), home)
+        self.assertEqual(again.runtime("claude").primary_models, [model])
 
 
 if __name__ == "__main__":

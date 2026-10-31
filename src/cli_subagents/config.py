@@ -572,12 +572,31 @@ def load_config(path: Path | None = None) -> Config:
     )
 
 
+def _toml_string(text: str) -> str:
+    """A TOML basic string. json.dumps won't do: it escapes characters above U+FFFF as
+    surrogate pairs and leaves U+007F raw, and TOML rejects both."""
+
+    escaped = []
+    for char in text:
+        if char in '"\\':
+            escaped.append("\\" + char)
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            escaped.append(f"\\u{ord(char):04X}")
+        else:
+            escaped.append(char)
+    return '"' + "".join(escaped) + '"'
+
+
+def _toml_strings(items: Any) -> str:
+    return "[" + ", ".join(_toml_string(str(item)) for item in items) + "]"
+
+
 def _toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    return json.dumps(str(value))
+    return _toml_string(str(value))
 
 
 def _reviewer_lines(section: str, entries: list[ReviewerEntry]) -> list[str]:
@@ -609,7 +628,7 @@ def dump_config(config: Config) -> str:
     claude = config.sandbox.claude
     if claude != ClaudeSandboxSettings():
         lines += ["", "[sandbox.claude]", f"mode = {_toml_value(claude.mode)}",
-                  f"additional_dirs = {json.dumps([str(p) for p in claude.additional_dirs])}",
+                  f"additional_dirs = {_toml_strings(claude.additional_dirs)}",
                   f"timeout_seconds = {claude.timeout_seconds}"]
     if config.reviewers is not None:
         lines += ["", "[review]"] + (["reviewers = []"] if not config.reviewers else [])
@@ -659,11 +678,11 @@ def dump_config(config: Config) -> str:
             if value is not None:
                 lines.append(f"{key} = {_toml_value(value)}")
         if runtime.primary_models:
-            lines.append(f"primary_models = {json.dumps(runtime.primary_models)}")
+            lines.append(f"primary_models = {_toml_strings(runtime.primary_models)}")
         if runtime.usage_ceiling != 0.95:
             lines.append(f"usage_ceiling = {runtime.usage_ceiling}")
         if runtime.usage_ceiling_windows:
-            lines.append(f"usage_ceiling_windows = {json.dumps(list(runtime.usage_ceiling_windows))}")
+            lines.append(f"usage_ceiling_windows = {_toml_strings(runtime.usage_ceiling_windows)}")
         if runtime.when_full != "refuse":
             lines.append(f"when_full = {_toml_value(runtime.when_full)}")
         if runtime.max_jobs_by_room:
@@ -674,7 +693,7 @@ def dump_config(config: Config) -> str:
             lines.append("network_access = false")
         lines += _reviewer_lines(name, runtime.reviewers or [])
         for pool in runtime.pools:
-            lines += ["", f"[[{name}.pools]]", f"name = {_toml_value(pool.name)}", f"models = {json.dumps(pool.models)}"]
+            lines += ["", f"[[{name}.pools]]", f"name = {_toml_value(pool.name)}", f"models = {_toml_strings(pool.models)}"]
             for key in ("per_account", "total", "weekly_jobs", "cooldown_minutes"):
                 value = getattr(pool, key)
                 if value is not None:
@@ -707,7 +726,7 @@ def dump_config(config: Config) -> str:
                 if value is not None:
                     lines.append(f"{key} = {_toml_value(value)}")
             if account.models:
-                lines.append(f"models = {json.dumps(account.models)}")
+                lines.append(f"models = {_toml_strings(account.models)}")
     return "\n".join(lines) + "\n"
 
 

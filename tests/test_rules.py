@@ -196,6 +196,24 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(self.backup().read_bytes(), original)
         self.assertEqual(len(list(self.root.glob("*.csa-rules-backup"))), 1)
 
+    def test_symlinked_file_is_written_through(self):
+        dotfiles = self.root / "dotfiles"
+        dotfiles.mkdir()
+        real = dotfiles / "CLAUDE.md"
+        real.write_bytes(b"Own text\n")
+        try:
+            os.symlink(real, self.path)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"no symlinks here: {exc}")
+        rules.update_file(self.path, rules.render(self.args()))
+        self.assertTrue(self.path.is_symlink())
+        self.assertTrue(real.read_bytes().startswith(b"Own text\n"))
+        self.assertIn(rules.START.encode(), real.read_bytes())
+        self.assertEqual(self.backup(real).read_bytes(), b"Own text\n")
+        rules.update_file(self.path, None)
+        self.assertTrue(self.path.is_symlink())
+        self.assertNotIn(rules.START.encode(), real.read_bytes())
+
     def test_reinstall_same_values_is_unchanged(self):
         block = rules.render(self.args())
         rules.update_file(self.path, block)

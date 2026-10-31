@@ -128,6 +128,7 @@ Edits inside it are replaced on the next install.
 Your own text outside those markers is never changed, including its bytes and line endings.
 Appending a new block adds spacing after your text. Removing a block leaves surrounding spacing intact.
 
+When the instruction file is a symlink (into a dotfiles repository, say), the command changes the file it points to and keeps the link.
 Before the first change to an existing file, the command saves `<filename>.csa-rules-backup` next to it.
 It keeps that backup on later installs and removals. A new file needs no backup.
 Repeated installs with the same values make no change.

@@ -14,7 +14,7 @@ from cli_subagents.config import ClaudeSandboxSettings, SandboxSettings, dump_co
 from cli_subagents.sandbox.install import describe
 from cli_subagents.sandbox.integrations import claude
 from cli_subagents.sandbox.launcher import consume
-from cli_subagents.sandbox.model import BackendInfo, PolicyError
+from cli_subagents.sandbox.model import BackendInfo, Policy, PolicyError
 
 FAKE = Path(__file__).with_name("fake_wxc.py")
 
@@ -145,16 +145,40 @@ class ClaudeCommandSandboxTests(TempHome):
             self.start()
         self.assertFalse((claude._folder(self.event) / "session.json").exists())
 
-    def test_killed_launcher_baseline_is_checked_before_next_command_and_at_end(self):
-        for action in ("claude-sandbox", "claude-sandbox-end"):
-            self.start()
-            planted = self.project / ".claude"
-            planted.mkdir()
-            (planted / "fixture").touch()
-            with self.assertRaisesRegex(Exception, "quarantine"):
-                claude.handle(self.event, action)
-            self.assertFalse(planted.exists())
+    def leave_killed_launcher_record(self):
+        from test_command_sandbox import leave_recovery_record
+
+        state = json.loads((claude._folder(self.event) / "session.json").read_text(encoding="utf-8"))
+        return leave_recovery_record(claude._folder(self.event), Policy.from_dict(state["policy"]))
+
+    def test_killed_launcher_record_is_checked_before_next_command_at_end_and_on_resume(self):
+        for action in ("claude-sandbox", "claude-sandbox-end", "claude-sandbox-start"):
+            with self.subTest(action=action):
+                self.start()
+                record = self.leave_killed_launcher_record()
+                planted = self.project / ".claude"
+                planted.mkdir()
+                (planted / "fixture").touch()
+                with self.assertRaisesRegex(Exception, "quarantine"):
+                    claude.handle(self.event, action)
+                self.assertFalse(planted.exists())
+                self.assertFalse(record.exists())
         self.assertEqual(self.requests(), [])
+
+    def test_project_changes_between_commands_are_not_quarantined(self):
+        # Claude Code itself writes .claude/settings.local.json ("don't ask again"),
+        # and the user may run git init: neither comes from a contained command.
+        self.start()
+        settings = self.project / ".claude" / "settings.local.json"
+        settings.parent.mkdir()
+        settings.write_text("{}", encoding="utf-8")
+        (self.project / "vendor" / "lib" / ".git").mkdir(parents=True)
+        claude.handle(self.event, "claude-sandbox")
+        self.start()
+        claude.handle(self.event, "claude-sandbox-end")
+        self.assertEqual(settings.read_text(encoding="utf-8"), "{}")
+        self.assertTrue((self.project / "vendor" / "lib" / ".git").is_dir())
+        self.assertEqual(list(self.project.rglob("*.csa-quarantine-*")), [])
 
     def test_hook_entry_denies_validation_errors_without_notification_swallow(self):
         with patch("sys.stdin", io.StringIO("{}")), patch("sys.stdout", new_callable=io.StringIO) as output:
@@ -171,6 +195,7 @@ class ClaudeCommandSandboxTests(TempHome):
                  folder / "policy-fixture.json"]
         for path in paths:
             path.write_text("fixture", encoding="utf-8")
+        self.leave_killed_launcher_record()
         (self.project / ".claude").mkdir()
         with self.assertRaisesRegex(Exception, "quarantine"):
             claude.handle(self.event, "claude-sandbox-end")

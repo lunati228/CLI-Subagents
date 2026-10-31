@@ -54,7 +54,27 @@ def main():
     if scenario in errors:
         emit("error", session, error=errors[scenario])
         return 1
-    if scenario == "sandbox_command":
+    if scenario == "plant_protected_pause":
+        # What a command launcher killed before its own check leaves behind: its
+        # recovery record (a pre-command snapshot), then the item it planted.
+        import subprocess
+        config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
+        source = (Path(config["plugins"][-1]) / "server.js").read_text(encoding="utf-8")
+        settings = json.loads(source.split("const settings = ", 1)[1].split(";\n", 1)[0])
+        sys.path.insert(0, str(Path(settings["sandboxScript"]).resolve().parents[3]))
+        from cli_subagents.sandbox.launcher import snapshot
+        from cli_subagents.sandbox.model import Policy
+        context = Path(settings["context"])
+        value = Policy.from_dict(json.loads(context.read_text(encoding="utf-8"))["command_sandbox"]["policy"])
+        gone = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+        (context.parent / "sandbox").mkdir(exist_ok=True)
+        (context.parent / "sandbox" / "recovery-fixture.json").write_text(json.dumps(
+            {"version": 1, "policy": value.to_dict(), "baseline": snapshot(value), "pid": int(gone.stdout),
+             "started": 1}), encoding="utf-8")
+        planted = Path.cwd() / ".claude"
+        planted.mkdir()
+        (planted / "settings.json").write_text("fixture", encoding="utf-8")
+    if scenario in ("sandbox_command", "launcher_plant_pause"):
         import subprocess
         config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
         source = (Path(config["plugins"][-1]) / "server.js").read_text(encoding="utf-8")
@@ -68,9 +88,14 @@ def main():
             return 1
         prepared = json.loads(checked.stdout)
         args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] if os.name == "nt" else ["-c"]
-        done = subprocess.run([prepared["shell"], *args, prepared["command"]])
-        if done.returncode:
-            return done.returncode
+        if scenario == "launcher_plant_pause":
+            # The project's test plants a protected name and sleeps; the job's
+            # cancel then stops the launcher with the rest of the worker tree.
+            subprocess.Popen([prepared["shell"], *args, prepared["command"]])
+        else:
+            done = subprocess.run([prepared["shell"], *args, prepared["command"]])
+            if done.returncode:
+                return done.returncode
     if scenario == "denied_command":
         # Exercise the exact Python entrypoint that the generated JS hook calls.
         import subprocess
@@ -94,12 +119,7 @@ def main():
     emit("text", session, part={"id": "answer", "text": text})
     emit("step_finish", session, part={"id": "finish", "reason": "stop", "cost": 0,
                                      "tokens": {"input": 10, "output": 2, "reasoning": 1, "cache": {"read": 3, "write": 0}}})
-    if scenario == "plant_protected_pause":
-        # Simulate a killed command launcher whose finally never ran.
-        planted = Path.cwd() / ".claude"
-        planted.mkdir()
-        (planted / "settings.json").write_text("fixture", encoding="utf-8")
-    if scenario in ("pause", "plant_protected_pause"):
+    if scenario in ("pause", "plant_protected_pause", "launcher_plant_pause"):
         time.sleep(120)
     if scenario == "success_exit_1":
         sys.stderr.write("late CLI failure\n")

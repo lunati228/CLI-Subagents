@@ -13,10 +13,24 @@ import tempfile
 import time
 from typing import Any
 
-from cli_subagents.fsutil import make_private_dir, process_start_time, same_process, worker_process, write_text
+from cli_subagents.fsutil import (make_private_dir, process_start_time, recorded_process_alive, same_process,
+                                  worker_process, write_json, write_text)
 from cli_subagents.sandbox.backends import get_backend
 from cli_subagents.sandbox.model import Command, Policy, SandboxError
 from cli_subagents.sandbox.policy import PROTECTED_NAMES, _inside, _key, _real, _unique, host_paths
+
+# A launcher's own pre-command snapshot, kept beside its private request until its
+# post-command check has run. A launcher killed before that leaves the record behind.
+RECOVERY_PREFIX = "recovery-"
+RECOVERY_LIMIT = 16 * 1024 * 1024
+
+
+class QuarantineError(SandboxError):
+    """A new protected path appeared; `unresolved` when one of them could not be moved aside."""
+
+    def __init__(self, message: str, unresolved: bool) -> None:
+        super().__init__(message)
+        self.unresolved = unresolved
 
 # Opportunistic nested-repository detection. Bounds apply independently before
 # and after a command; unvisited existing subtrees are never treated as new.
@@ -134,6 +148,7 @@ def _quarantine_new_paths(missing: list[tuple[Path, Path]]) -> None:
     """Move newly planted entries aside after all contained processes stop."""
 
     findings = []
+    unresolved = False
     for path, root in missing:
         try:
             if not _entry_exists(path):
@@ -151,20 +166,22 @@ def _quarantine_new_paths(missing: list[tuple[Path, Path]]) -> None:
             path.rename(destination)
             findings.append(f"moved {path} to quarantine {destination}")
         except (OSError, RuntimeError) as exc:
+            unresolved = True
             findings.append(f"could not quarantine {path}: {exc}; move it aside before using git or agents")
     if findings:
-        raise SandboxError("a new protected path appeared during the sandboxed command: " + "; ".join(findings))
+        raise QuarantineError("a new protected path appeared during the sandboxed command: " + "; ".join(findings),
+                              unresolved)
 
 
 def snapshot(policy: Policy) -> dict[str, Any]:
-    """Job-lifetime baseline kept on the host, beyond any one launcher's lifetime."""
+    """Absent protected entries and nested-repository listings, taken right before a command starts."""
 
     return {"missing": [[str(path), str(root)] for path, root in _missing_protected_paths(policy)],
             "nested": _nested_folders(policy)}
 
 
 def check_snapshot(policy: Policy, baseline: Any) -> None:
-    """Recover after a launcher was killed outright; malformed baselines fail closed."""
+    """Quarantine protected entries that appeared since `baseline`; malformed baselines fail closed."""
 
     nested = None
     if isinstance(baseline, dict) and set(baseline) == {"missing", "nested"}:
@@ -216,12 +233,20 @@ def execute(policy: Policy, command: Command, backend: dict[str, Any], folder: P
     if not isinstance(argv, list) or not argv or not all(isinstance(v, str) and v for v in argv):
         raise SandboxError("no backend executable configured")
     make_private_dir(folder)
-    path = folder / f"policy-{secrets.token_hex(12)}.json"
+    token = secrets.token_hex(12)
+    path = folder / f"policy-{token}.json"
+    record = folder / f"{RECOVERY_PREFIX}{token}.json"
     try:
         # Only the launcher can read this folder; the container receives neither
         # its policy nor its authorization request as a filesystem grant.
         protected = replace(policy, pinned=_unique([*policy.pinned, *host_paths(argv)]))
         baseline = snapshot(protected)
+        # The check below compares against this command's own start, so entries the
+        # host creates between commands (an approved edit, the user's git init) are
+        # never mistaken for planted ones. If this launcher is killed before the
+        # check, recover() runs it from this record.
+        write_json(record, {"version": 1, "policy": protected.to_dict(), "baseline": baseline,
+                            "pid": os.getpid(), "started": process_start_time(os.getpid())})
         prepared = adapter.prepare(protected, command, argv, path)
         write_text(path, prepared.policy_text)
         started = time.monotonic()
@@ -238,9 +263,56 @@ def execute(policy: Policy, command: Command, backend: dict[str, Any], folder: P
         finally:
             # worker_process has stopped the whole tree, including on early
             # returns and exceptions, before we inspect or rename anything.
-            check_snapshot(protected, baseline)
+            settled = False
+            try:
+                check_snapshot(protected, baseline)
+                settled = True
+            except QuarantineError as exc:
+                # Keep the record while a planted item could not be moved: later
+                # authorizations retry the move and keep failing closed until then.
+                settled = not exc.unresolved
+                raise
+            finally:
+                if settled:
+                    record.unlink(missing_ok=True)
     finally:
         path.unlink(missing_ok=True)
+
+
+def recover(folder: Path) -> None:
+    """Run the post-command check of every launcher in `folder` that was killed before its own.
+
+    A record whose launcher still runs is left to that launcher. Unreadable or
+    malformed records, and check errors, fail closed and keep the record; every
+    record is still tried before the first error is raised.
+    """
+
+    errors: list[SandboxError] = []
+    for record in sorted(folder.glob(f"{RECOVERY_PREFIX}*.json")) if folder.is_dir() else []:
+        try:
+            try:
+                if record.stat().st_size > RECOVERY_LIMIT:
+                    raise SandboxError(f"sandbox recovery record {record.name} is too large")
+                data = json.loads(record.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                continue  # its launcher finished meanwhile
+            except (OSError, ValueError) as exc:
+                raise SandboxError(f"cannot read sandbox recovery record {record.name}: {exc}") from exc
+            if not isinstance(data, dict) or data.get("version") != 1:
+                raise SandboxError(f"invalid sandbox recovery record {record.name}")
+            if recorded_process_alive(data.get("pid"), data.get("started")) or not record.exists():
+                continue
+            try:
+                check_snapshot(Policy.from_dict(data.get("policy")), data.get("baseline"))
+            except QuarantineError as exc:
+                if not exc.unresolved:
+                    record.unlink(missing_ok=True)  # reported now; everything was moved aside
+                raise
+            record.unlink(missing_ok=True)
+        except SandboxError as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0] if len(errors) == 1 else SandboxError("; ".join(str(exc) for exc in errors))
 
 
 def consume(path: Path, *, parent_pid: int | None = None) -> int:

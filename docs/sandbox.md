@@ -115,14 +115,24 @@ or agents; it still tries to quarantine the other new entries.
 The launcher checks after normal exit, command failure, its own timeout,
 executor termination and parent-shell death while the launcher stays alive.
 OpenCode's shell timeout or a runner timeout/cancel can forcibly kill the
-launcher before its cleanup runs. A separate job-start snapshot is therefore
-checked before each command authorization and in the runner after its worker
-tree stops, including timeout and cancel. Check errors fail closed. If the
+launcher before its cleanup runs. Each launcher therefore writes its pre-command
+snapshot to a private recovery record before the command starts and removes it
+after its own check. A record left by a killed launcher is checked before the
+next command authorization, and by the runner after its worker tree stops,
+including timeout and cancel. Records of launchers that still run are left to
+them. Check errors fail closed and keep the record; so does an entry that could
+not be moved aside, so later commands keep failing until you move it. If the
 runner and launcher both die, or the host stops, cleanup cannot run. These
 checks also cannot prevent a concurrent host process from using
-a planted path while the command is still running. Avoid concurrent host changes
-to protected names: any newly appearing entry is treated as planted by the
-command. A bounded additional scan catches new nested `.git` markers down to
+a planted path while the command is still running.
+
+Each check covers only its command's own run. Protected entries the host creates
+between commands, such as a reviewed and approved edit that creates `.vscode`, a
+`git init` you run yourself, or Claude Code writing `.claude/settings.local.json`,
+are left alone. An entry that appears while a command runs is treated as planted
+by it, so avoid host changes to protected names during a command. After a killed
+launcher, its record dates from that command's start, and entries created since
+then are treated the same way. A bounded additional scan catches new nested `.git` markers down to
 three directory levels below each writable root, including entirely new folders.
 Each pass visits at most 1,024 directories and 20,000 entries, with a 48 KiB
 snapshot budget so it fits alongside the gate policy. Complete prior
@@ -236,9 +246,11 @@ Background tool calls retain that lifetime and timeout; detached children do not
 survive the command. Tool state is redirected to container temp. Profiles and
 PowerShell state do not persist between commands. A forcibly killed launcher may
 miss its immediate quarantine check; the next command, resumed SessionStart or
-SessionEnd checks the stored baseline again. If Claude and the host both stop,
-cleanup waits until the session is resumed. SessionEnd removes unused requests;
-the baseline is retained for resume under csa's private `claude-sandbox` folder.
+SessionEnd runs it from the launcher's recovery record. Changes Claude, its file
+tools or you make between commands are never quarantined. If Claude and the host
+both stop, cleanup waits until the session is resumed. SessionEnd removes unused
+requests; the session's roots and any unsettled record are retained for resume
+under csa's private `claude-sandbox` folder.
 Preparation itself has a 60-second hook deadline; startup errors or timeouts
 block calls on a supported Claude version.
 

@@ -361,6 +361,10 @@ class LauncherTests(TempHome):
         self.assertIn("outside the writable root", got.stderr)
         self.assertTrue((protected / "original").exists())
         self.assertEqual(list(outside.glob("*.csa-quarantine-*")), [])
+        # The unsettled record keeps later commands failing until the link is removed.
+        self.assertEqual([path.name.split("-")[0] for path in self.folder.iterdir()], ["recovery"])
+        os.rmdir(link) if os.name == "nt" else link.unlink()
+        launcher.recover(self.folder)
         self.assertEqual(list(self.folder.iterdir()), [])
 
     def test_snapshot_errors_fail_before_starting_the_command(self):
@@ -391,7 +395,17 @@ class LauncherTests(TempHome):
         self.assertEqual((targets[0] / "payload").read_text(), "preserved")
         self.assertIn("fixture locked path", str(error.exception))
         self.assertIn("move it aside", str(error.exception))
+        # The launcher keeps its record while an item stays, so later checks keep failing closed.
+        [record] = self.folder.glob("recovery-*.json")
+        record.unlink()
         self.assert_quarantined(targets[1], subprocess.CompletedProcess([], 125, "", str(error.exception)))
+        record.write_text(json.dumps({"version": 1, "policy": Policy([str(self.project)]).to_dict(),
+                                      "baseline": {"missing": [[str(targets[0]), str(self.project)]], "nested": []},
+                                      "pid": 0, "started": None}), encoding="utf-8")
+        with self.assertRaisesRegex(SandboxError, "quarantine"):
+            launcher.recover(self.folder)
+        self.assertFalse(targets[0].exists())
+        self.assertEqual(list(self.folder.iterdir()), [])
 
     def test_new_protected_paths_are_quarantined_on_timeout(self):
         target = self.project / ".codex"
@@ -474,18 +488,29 @@ class LauncherTests(TempHome):
                 process.kill(); process.communicate(timeout=10)
 
 
+def leave_recovery_record(folder, value, *, pid=None, started=1):
+    """The record a launcher killed before its own post-command check leaves behind."""
+
+    if pid is None:  # a process that has already exited
+        pid = int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                                 capture_output=True, text=True, check=True).stdout)
+    folder.mkdir(parents=True, exist_ok=True)
+    record = folder / "recovery-fixture.json"
+    record.write_text(json.dumps({"version": 1, "policy": value.to_dict(), "baseline": launcher.snapshot(value),
+                                  "pid": pid, "started": started}), encoding="utf-8")
+    return record
+
+
 class IntegrationTests(GateBase):
     def setUp(self):
         super().setUp()
         value = Policy([str(self.project)], denied=[str(self.home)])
         self.write(sandbox=True, sandbox_network=False, sandbox_mode="command", review_network="egress",
-                   command_sandbox={"policy": value.to_dict(), "missing_protected": launcher.snapshot(value),
+                   command_sandbox={"policy": value.to_dict(),
                                     "backend": {"name": "mxc", "command": [sys.executable, str(FAKE)]}})
 
-    def test_job_snapshot_recovers_a_hard_killed_launcher_before_next_authorization(self):
-        value = Policy.from_dict(self.data["command_sandbox"]["policy"])
-        self.data["command_sandbox"]["missing_protected"] = launcher.snapshot(value)
-        self.write()
+    def test_killed_launcher_record_is_checked_before_next_authorization(self):
+        record = leave_recovery_record(self.root / "sandbox", Policy.from_dict(self.data["command_sandbox"]["policy"]))
         target = self.project / ".claude"
         target.mkdir()
         (target / "settings.json").write_text("fixture", encoding="utf-8")
@@ -493,14 +518,41 @@ class IntegrationTests(GateBase):
                 self.assertRaisesRegex(SandboxError, "quarantine"):
             self.issue("npm test")
         self.assertFalse(target.exists())
+        self.assertFalse(record.exists())
         self.assertEqual(list((self.root / "sandbox").glob("command-*.json")), [])
 
-    def test_snapshot_check_errors_fail_closed_before_review(self):
+    def test_entries_the_host_creates_between_commands_are_not_quarantined(self):
+        # A reviewed and approved host edit can create .vscode (or .husky, .devcontainer)
+        # after the job started; only a command's own window counts as planting.
+        target = self.project / ".vscode"
+        target.mkdir()
+        (target / "launch.json").write_text("approved", encoding="utf-8")
+        self.issue("npm test")
+        self.assertEqual((target / "launch.json").read_text(encoding="utf-8"), "approved")
+        self.assertEqual(list(self.project.glob("*.csa-quarantine-*")), [])
+
+    def test_record_of_a_running_launcher_is_left_to_it(self):
         value = Policy.from_dict(self.data["command_sandbox"]["policy"])
-        self.data["command_sandbox"]["missing_protected"] = launcher.snapshot(value)
-        self.write()
+        from cli_subagents.fsutil import process_start_time
+        record = leave_recovery_record(self.root / "sandbox", value, pid=os.getpid(),
+                                       started=process_start_time(os.getpid()))
+        (self.project / ".claude").mkdir()
+        self.issue("npm test")
+        self.assertTrue((self.project / ".claude").exists())
+        self.assertTrue(record.exists())
+
+    def test_snapshot_check_errors_fail_closed_before_review(self):
+        record = leave_recovery_record(self.root / "sandbox", Policy.from_dict(self.data["command_sandbox"]["policy"]))
         with patch.object(launcher, "_entry_exists", side_effect=PermissionError("fixture")), \
                 self.assertRaisesRegex(SandboxError, "could not quarantine|cannot scan nested"):
+            self.issue("npm test")
+        self.assertTrue(record.exists())
+
+    def test_unreadable_recovery_record_fails_closed(self):
+        folder = self.root / "sandbox"
+        folder.mkdir()
+        (folder / "recovery-broken.json").write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(SandboxError, "recovery record"):
             self.issue("npm test")
 
     @unittest.skipUnless(os.name == "nt", "Windows command-line limit")

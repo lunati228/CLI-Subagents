@@ -18,7 +18,7 @@ from cli_subagents import opencode_review
 from cli_subagents.agy_review.context import load_context
 from cli_subagents.fsutil import make_private_dir, python_executable, write_json
 from cli_subagents.sandbox import add_shims, policy
-from cli_subagents.sandbox.launcher import check_snapshot
+from cli_subagents.sandbox.launcher import recover
 from cli_subagents.sandbox.model import Command, Network, Policy, PolicyError
 
 from cli_subagents.sandbox.integrations.command import ENV_NAMES, literal, powershell, powershell_command
@@ -30,7 +30,9 @@ def prepare(event: dict[str, Any], context_path: Path) -> dict[str, str]:
     if not isinstance(settings, dict) or context.get("sandbox") is not True:
         raise PolicyError("no command sandbox configured")
     base_policy = Policy.from_dict(settings.get("policy"))
-    check_snapshot(base_policy, settings.get("missing_protected"))
+    folder = context_path.parent / "sandbox"
+    # A launcher OpenCode killed on a shell timeout never ran its own check.
+    recover(folder)
     line, cwd = event.get("command"), event.get("cwd")
     if not isinstance(line, str) or not line.strip() or not isinstance(cwd, str):
         raise PolicyError("shell invocation needs a command and cwd")
@@ -55,7 +57,6 @@ def prepare(event: dict[str, Any], context_path: Path) -> dict[str, str]:
     if isinstance(settings.get("command_path"), str):
         env = {k: v for k, v in env.items() if k.upper() != "PATH"}
         env["PATH"] = settings["command_path"]
-    folder = context_path.parent / "sandbox"
     make_private_dir(folder)
     # Redirect tool state to command-scoped container temp; it cannot change
     # the user's settings. MXC supplies its own private TEMP/TMP/LOCALAPPDATA.

@@ -367,7 +367,6 @@ class OpenCodeRuntime:
             host_paths: list[str] = []
             if spec.sandbox:
                 from cli_subagents.sandbox import add_shims, policy
-                from cli_subagents.sandbox.launcher import snapshot
                 env = add_shims(dict(os.environ), job)
                 grants = policy.command_policy([spec.cwd, *spec.add_dirs], env)
                 grants.readonly.append(str(job / "sandbox-bin"))
@@ -378,7 +377,7 @@ class OpenCodeRuntime:
                 ])
                 grants = replace(grants, pinned=policy._unique([*grants.pinned, *host_paths]))
                 command_sandbox = {"backend": spec.sandbox_backend or {"name": "mxc", "command": []},
-                                   "policy": grants.to_dict(), "missing_protected": snapshot(grants),
+                                   "policy": grants.to_dict(),
                                    "command_path": next((value for key, value in env.items() if key.upper() == "PATH"), "")}
             context = write_context(job / "review-context.json", {
                 "version": 1, "job": spec.job_id, "access": spec.access, "sandbox": bool(spec.sandbox),

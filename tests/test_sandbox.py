@@ -332,8 +332,7 @@ class OpenCodeLaunchTests(OpenCodeHome):
         [request] = Path(settings["context"]).parent.joinpath("sandbox").glob("command-*.json")
         command_env = read_json(request)["command"]["env"]
         self.assertIn(str(tools), command_env["PATH"].split(os.pathsep))
-        self.assertIn(str(self.project / ".claude"),
-                      [path for path, root in context["command_sandbox"]["missing_protected"]["missing"]])
+        self.assertNotIn("missing_protected", context["command_sandbox"])
 
     def test_disabled_sandbox_does_not_scan_or_stat_tool_paths(self):
         with patch.object(policy, "command_policy", side_effect=AssertionError("sandbox is off")), \
@@ -500,6 +499,32 @@ class RunnerTests(OpenCodeHome):
             follower.review_lines()
         self.assertTrue(any(line.startswith("review: denied") for line in lines), lines)
 
+    def test_launcher_stopped_with_the_worker_never_leaves_a_planted_name(self):
+        # Through the real launcher: whether it notices its shell ending and checks
+        # itself, or is killed first and the runner checks its record, the planted
+        # item ends up in quarantine and no record is left.
+        (self.project / "test_plant.py").write_text(
+            "import time, unittest\nfrom pathlib import Path\n"
+            "class Plant(unittest.TestCase):\n"
+            " def test_plant(self):\n"
+            "  staging = Path('staging'); staging.mkdir()\n"
+            "  (staging / 'settings.json').write_text('fixture'); staging.rename('.claude'); time.sleep(60)\n",
+            encoding="utf-8")
+        os.environ["FAKE_OPENCODE_SCENARIO"] = "launcher_plant_pause"
+        status = jobs.create_job(runtime="opencode", prompt="fixture", cwd=str(self.project), access="edit")
+        target = self.project / ".claude"
+        deadline = time.monotonic() + 20
+        while not target.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertTrue(target.exists())
+        jobs.cancel(status["job_id"])
+        status = jobs.wait_for(status["job_id"], 45)
+        self.assertEqual(status["state"], "done", status)
+        self.assertFalse(target.exists())
+        [saved] = self.project.glob(".claude.csa-quarantine-*")
+        self.assertEqual((saved / "item" / "settings.json").read_text(encoding="utf-8"), "fixture")
+        self.assertEqual(list((self.home / "jobs" / status["job_id"] / "sandbox").glob("*.json*")), [])
+
     def test_protected_name_is_quarantined_after_job_timeout_or_cancel(self):
         for stop in ("timeout", "cancel"):
             with self.subTest(stop=stop):
@@ -518,6 +543,8 @@ class RunnerTests(OpenCodeHome):
                 self.assertEqual(status["outcome"], "error", status)
                 self.assertIn("quarantine", status["message"])
                 self.assertFalse(target.exists())
+                folder = self.home / "jobs" / status["job_id"] / "sandbox"
+                self.assertEqual(list(folder.glob("recovery-*.json")), [])
 
 
 class DocumentationTests(unittest.TestCase):

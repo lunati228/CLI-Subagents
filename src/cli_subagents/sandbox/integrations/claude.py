@@ -16,7 +16,7 @@ from cli_subagents.fsutil import make_private_dir, python_executable, read_json,
 from cli_subagents.sandbox import SHIMS, add_shims, policy
 from cli_subagents.sandbox.backends import get_backend
 from cli_subagents.sandbox.integrations.command import ENV_NAMES, literal, powershell_command
-from cli_subagents.sandbox.launcher import check_snapshot, snapshot
+from cli_subagents.sandbox.launcher import recover
 from cli_subagents.sandbox.model import Network, Policy, PolicyError
 
 
@@ -69,10 +69,16 @@ def handle(event: dict[str, Any], action: str) -> dict[str, Any] | None:
             filesystem = policy.command_policy(roots, dict(os.environ))
             backend = get_backend("mxc").ready(settings)
             make_private_dir(folder)
-            write_json(state_path, {"policy": filesystem.to_dict(), "baseline": snapshot(filesystem),
+            write_json(state_path, {"policy": filesystem.to_dict(),
                                     "backend": {"name": backend.name, "command": backend.command}})
         else:
-            check_snapshot(Policy.from_dict(state.get("policy")), state.get("baseline"))
+            if not isinstance(state, dict):
+                raise PolicyError("the session baseline is invalid; start a new Claude session")
+            Policy.from_dict(state.get("policy"))
+            # Claude, its file tools and the user change the project between commands
+            # (.claude/settings.local.json, git init), so only a killed launcher's
+            # own record says what a command may have planted.
+            recover(folder)
         return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
                 f"csa command sandbox ({config.mode}): PowerShell uses MXC with loopback-only networking. "
                 "Writable roots are the initial project cwd and [sandbox.claude] additional_dirs. "
@@ -83,15 +89,16 @@ def handle(event: dict[str, Any], action: str) -> dict[str, Any] | None:
         raise PolicyError("no SessionStart baseline; restart Claude after enabling its sandbox")
     filesystem = Policy.from_dict(state.get("policy"))
     if action == "claude-sandbox-end":
-        # Baseline is retained for --resume, including recovery after a killed launcher.
+        # The session state is retained for --resume; a record that can't be
+        # settled now stays for the resumed session's next check.
         try:
-            check_snapshot(filesystem, state.get("baseline"))
+            recover(folder)
         finally:
             for pattern in ("command-*.json*", "policy-*.json"):
                 for request in folder.glob(pattern):
                     request.unlink(missing_ok=True)
         return None
-    check_snapshot(filesystem, state.get("baseline"))
+    recover(folder)
     tool = event.get("tool_input")
     if not isinstance(tool, dict) or not isinstance(tool.get("command"), str) or not tool["command"].strip():
         raise PolicyError("missing PowerShell command")

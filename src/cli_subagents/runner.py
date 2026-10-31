@@ -420,14 +420,7 @@ class Runner:
             for message in setup.get(key) or []:
                 if message not in self.warnings:
                     self.warnings.append(message)
-        protected_policy = protected_baseline = None
         try:
-            if box is not None:
-                from cli_subagents.sandbox.launcher import snapshot
-                from cli_subagents.sandbox.model import Policy
-                from cli_subagents.sandbox.policy import check_workspace
-                protected_policy = Policy([check_workspace(root) for root in [spec.cwd, *spec.add_dirs]])
-                protected_baseline = snapshot(protected_policy)
             launch = self.runtime.launch(self.runtime_config, account, spec, prompt, setup)
         except Exception as exc:
             result = AttemptResult(ERROR, message=f"could not start the worker: {exc}", session_id=session, before_start=True)
@@ -478,12 +471,14 @@ class Runner:
                 return result
             finally:
                 self.status(child_pid=None, child_started=None)
+                # The worker tree is stopped: run the post-command check of every
+                # launcher it killed (a timeout or cancel), from its own record.
                 # Requests left by a hard-killed launcher contain command data.
                 # The integration owns this folder; never leave per-command policies behind.
                 if box is not None:
                     try:
-                        from cli_subagents.sandbox.launcher import check_snapshot
-                        check_snapshot(protected_policy, protected_baseline)
+                        from cli_subagents.sandbox.launcher import recover
+                        recover(self.folder / "sandbox")
                     except Exception as exc:
                         sandbox_failure = f"sandbox: {exc}"
                     for pattern in ("policy-*.json", "command-*.json*"):

@@ -171,6 +171,16 @@ class PathsTests(TempCase):
         self.assertTrue(paths.needs_review_for_write(str(self.ws / ".github" / "workflows" / "ci.yml")))
         self.assertIsNone(paths.needs_review_for_write(str(self.ws / "src" / "a.py")))
 
+    def test_project_mcp_config_needs_review(self) -> None:
+        # Claude Code trusts .mcp.json servers by name: a changed command for an approved name runs next session.
+        target = str(self.ws / ".mcp.json")
+        self.assertIsNotNone(paths.needs_review_for_write(target))
+        self.assertEqual(self.decide("write_to_file", {"TargetFile": target, "CodeContent": "{}"}).action, "review")
+        self.assertTrue(commands.touches_protected("Set-Content .mcp.json x"))
+        line = "Set-Content .mcp.json x"
+        self.assertEqual(self.decide("run_command", {"CommandLine": line, "Cwd": str(self.ws)}, sandbox=True).action,
+                         "review")
+
     def test_inside(self) -> None:
         self.assertTrue(paths.inside(str(self.ws / "a" / "b"), str(self.ws)))
         self.assertTrue(paths.inside(str(self.ws), str(self.ws)))

@@ -46,7 +46,8 @@ SECRET_NAME_RE = re.compile(
 # Files whose edits change how agents or git behave: always denied for writes.
 WRITE_PROTECTED_DIRS = {".git"} | AGENT_DIRS
 # Edits a reviewer should look at even inside the workspace.
-REVIEW_WRITE_NAMES = {"agents.md", "claude.md", "gemini.md", "claude.local.md", "hooks.json", "settings.json"}
+# .mcp.json: Claude Code trusts project MCP servers by name, so a changed command runs in the next session.
+REVIEW_WRITE_NAMES = {"agents.md", "claude.md", "gemini.md", "claude.local.md", "hooks.json", "settings.json", ".mcp.json"}
 REVIEW_WRITE_DIRS = {".vscode", ".husky", ".devcontainer"}
 
 

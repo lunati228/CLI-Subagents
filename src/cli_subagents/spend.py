@@ -156,8 +156,8 @@ def _import_attempts(runtime: RuntimeConfig | str, ledger: dict[str, Any], now: 
                 before_start=attempt.get("before_start") is True,
             )
             if not ended:
-                entry.update(runner_pid=status.get("runner_pid"), worker_pid=status.get("child_pid"),
-                             worker_started=status.get("child_started"))
+                entry.update(runner_pid=status.get("runner_pid"), runner_started=status.get("runner_started"),
+                             worker_pid=status.get("child_pid"), worker_started=status.get("child_started"))
             ledger["attempts"][key] = entry
             changed = True
     return changed

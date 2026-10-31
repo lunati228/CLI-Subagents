@@ -357,6 +357,15 @@ def same_process(pid: int | None, started: int | None) -> bool:
     return current is None or current == int(started)
 
 
+def recorded_process_alive(pid: Any, started: Any) -> bool:
+    """same_process() for a PID and start stamp read from a record; malformed values count as gone."""
+
+    try:
+        return same_process(int(pid), int(started) if started is not None else None) if pid else False
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def kill_tree(pid: int) -> None:
     """Terminate a process and all of its children."""
 

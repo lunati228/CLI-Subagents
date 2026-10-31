@@ -71,6 +71,7 @@ def handoff_prompt(original: str, previous: AttemptResult, account: str) -> str:
 class Runner:
     def __init__(self, job_id: str) -> None:
         self.job_id = job_id
+        self.started = process_start_time(os.getpid())
         self.folder = job_dir(job_id)
         self.spec: JobSpec = read_spec(job_id)
         self.config = load_config()
@@ -90,7 +91,9 @@ class Runner:
         return (self.folder / "cancel").exists()
 
     def _write_status(self, **fields: Any) -> None:
-        update_status(self.job_id, runner_pid=os.getpid(), attempts=self.attempts, warnings=self.warnings, **fields)
+        # The start time tells this runner from a later process that reuses its PID.
+        update_status(self.job_id, runner_pid=os.getpid(), runner_started=self.started, attempts=self.attempts,
+                      warnings=self.warnings, **fields)
 
     def status(self, **fields: Any) -> bool:
         """Best-effort heartbeat or progress write: a locked or busy status file must not end the job."""

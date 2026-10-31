@@ -29,10 +29,10 @@ from cli_subagents.fsutil import (
     file_lock,
     kill_tree,
     make_private_dir,
-    pid_alive,
     python_executable,
     read_json,
     read_text,
+    recorded_process_alive,
     same_process,
     spawn_detached,
     write_json,
@@ -230,7 +230,7 @@ def read_status(job_id: str) -> dict[str, Any]:
     if status.get("state") in ACTIVE_STATES:
         pid = status.get("runner_pid") or _runner_pid(folder)
         stale = time.time() - float(status.get("updated_at") or 0) > 15
-        if pid and stale and not pid_alive(int(pid)):
+        if pid and stale and not _runner_alive(status, pid):
             status.update(state="done", outcome=LOST, message="the runner process stopped unexpectedly")
             _stop_orphan(status)
     return status
@@ -246,6 +246,14 @@ def _stop_orphan(status: dict[str, Any]) -> None:
             kill_tree(int(pid))
     except (TypeError, ValueError, OSError, subprocess.SubprocessError):
         pass
+
+
+def _runner_alive(status: dict[str, Any], pid: Any) -> bool:
+    """The job's runner still runs. A PID another process took over (after a crash
+    or a reboot) doesn't count: the runner records its start time beside its PID."""
+
+    started = status.get("runner_started") if pid == status.get("runner_pid") else None
+    return recorded_process_alive(pid, started)
 
 
 def _runner_pid(folder: Path) -> int | None:
@@ -364,7 +372,7 @@ def cancel(job_id: str) -> dict[str, Any]:
     # The runner didn't react; stop everything ourselves.
     _stop_orphan(status)
     runner_pid = status.get("runner_pid") or _runner_pid(folder)
-    if runner_pid and pid_alive(int(runner_pid)):
+    if runner_pid and _runner_alive(status, runner_pid):
         kill_tree(int(runner_pid))
     return update_status(job_id, state="done", outcome=CANCELLED, message="cancelled", finished_at=time.time())
 

@@ -1,6 +1,6 @@
 # Configuration
 
-CLI Subagents keeps everything under `~/.cli-subagents/` (or `CLI_SUBAGENTS_HOME`). `csa accounts add` writes the config for you; edit it by hand for the other options.
+CLI Subagents keeps everything under `~/.cli-subagents/` (or `CLI_SUBAGENTS_HOME`). `csa accounts add` writes the config for you; edit it by hand for the other options. When csa saves the file (`csa accounts add`, `remove`, `enable` or `disable`, and `csa setup --account`), it writes it again from the settings it knows, so comments and keys it doesn't recognize are dropped.
 
 ## Model capacity retries
 
@@ -363,8 +363,8 @@ Job records and generated files contain your prompts, results and MCP server set
 |---|---|
 | `CLI_SUBAGENTS_HOME` | Use a different root folder (`csa --home <folder>` sets it for one command) |
 | `CLI_SUBAGENTS_DEPTH` | Set by CLI Subagents in workers; used to refuse nested delegation |
-| `CLAUDE_CONFIG_DIR` | Default for `[claude] primary` when the config doesn't set it |
-| `CODEX_HOME` | Default for `[codex] primary` when the config doesn't set it |
+| `CLAUDE_CONFIG_DIR` | Default for `[claude] primary` when the config doesn't set it. A save by csa writes the primary in use at that time into the config |
+| `CODEX_HOME` | Default for `[codex] primary` when the config doesn't set it, with the same note |
 | `CLI_SUBAGENTS_SANDBOX_COMMAND` | For tests: a JSON list (`["python", "fake_wxc.py"]`) that stands in for `wxc-exec.exe` and counts as a supported system |
 
 Workers start from a cleaned environment. Variables that identify or authenticate the host session (`ANTHROPIC_*`, `CLAUDE*`, `CODEX_COMPANION_*` and similar) are removed, so a worker can only use its own account's login. Put environment settings you want workers to have into the `env` block of your primary `settings.json`; it is passed on, minus login-related keys.

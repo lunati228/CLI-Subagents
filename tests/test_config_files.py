@@ -74,3 +74,27 @@ class SaveConfigTests(TempFolder):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FlagTests(TempFolder):
+    def test_quoted_booleans_are_refused_instead_of_meaning_true(self):
+        # bool("false") is True: a quoted value used to keep a disabled account in use.
+        for section, line in (("[[claude.accounts]]\nname = \"a1\"\n", 'enabled = "false"'),
+                              ("[[claude.accounts]]\nname = \"a1\"\n", 'fallback = "false"'),
+                              ("[claude]\n", 'share_parent_mcp = "false"'),
+                              ("[codex]\n", 'include_primary = "false"'),
+                              ("[antigravity]\n", 'sandbox = "false"')):
+            with self.subTest(line=line):
+                path = self.root / "config.toml"
+                path.write_text(section + line + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "true or false"):
+                    load_config(path)
+
+    def test_real_booleans_still_load(self):
+        path = self.root / "config.toml"
+        path.write_text('[claude]\nshare_parent_mcp = false\n\n[[claude.accounts]]\nname = "a1"\nenabled = false\n'
+                        'fallback = true\n', encoding="utf-8")
+        config = load_config(path)
+        [account] = config.runtime("claude").accounts
+        self.assertEqual((account.enabled, account.fallback), (False, True))
+        self.assertFalse(config.runtime("claude").share_parent_mcp)

@@ -421,8 +421,8 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
             Account(
                 name=account_name,
                 home=_path(item.get("home"), homes_dir() / name / account_name),
-                enabled=bool(item.get("enabled", True)),
-                fallback=bool(item.get("fallback", False)),
+                enabled=_flag(item.get("enabled", True), f"[{name}] account '{account_name}' enabled"),
+                fallback=_flag(item.get("fallback", False), f"[{name}] account '{account_name}' fallback"),
                 plan=_opt_text(item.get("plan")),
                 max_jobs=_opt_int(item.get("max_jobs")),
                 max_effort=_opt_text(item.get("max_effort")),
@@ -485,7 +485,7 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
         primary=_path(data.get("primary"), default_primary(name)),
         binary=data.get("binary") or None,
         # These runtimes rotate through the primary account too, unless told otherwise.
-        include_primary=bool(data.get("include_primary", opt_in)),
+        include_primary=_flag(data.get("include_primary", opt_in), f"[{name}] include_primary"),
         failover=failover,
         max_jobs_per_account=max(1, int(data.get("max_jobs_per_account", 1))),
         connectors=connectors,
@@ -496,12 +496,12 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
         capacity_retry_seconds=capacity_retry_seconds,
         windows_sandbox=windows_sandbox,
         reasoning_summary=reasoning_summary,
-        share_parent_mcp=bool(data.get("share_parent_mcp", True)),
+        share_parent_mcp=_flag(data.get("share_parent_mcp", True), f"[{name}] share_parent_mcp"),
         reviewers=reviewers,
         reviewer=reviewer,
         reviewer_model=str(data.get("reviewer_model") or "").strip() or None,
         reviewer_account=str(data.get("reviewer_account") or "").strip() or None,
-        sandbox=bool(data.get("sandbox", True)),
+        sandbox=_flag(data.get("sandbox", True), f"[{name}] sandbox"),
         plan=_opt_text(data.get("plan")),
         primary_max_jobs=_opt_int(data.get("primary_max_jobs")),
         primary_max_effort=_opt_text(data.get("primary_max_effort")),
@@ -570,6 +570,14 @@ def load_config(path: Path | None = None) -> Config:
         sandbox=_sandbox_from(data.get("sandbox")),
         reviewers=shared,
     )
+
+
+def _flag(value: Any, where: str) -> bool:
+    """A TOML boolean. bool("false") is True, so a quoted value would silently mean the opposite."""
+
+    if not isinstance(value, bool):
+        raise ValueError(f"{where} must be true or false (without quotes)")
+    return value
 
 
 def _toml_string(text: str) -> str:

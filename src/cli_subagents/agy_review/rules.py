@@ -82,7 +82,8 @@ class Scope:
     def check(self, value: str, base: str | None = None) -> tuple[str, str | None]:
         """(resolved path, secret reason or None)."""
 
-        normal, resolved, reason = paths.check(value, base=base or self.base, homes=self.homes)
+        normal, resolved, reason = paths.check(value, base=base or self.base, homes=self.homes,
+                                               trusted=[*self.workspaces, *self.artifacts, *self.read_paths])
         if reason is None and any(paths.inside_any(form, self.secrets) for form in (normal, resolved)):
             reason = "it is an agent login or service credential"
         if reason is None:
@@ -142,13 +143,15 @@ def decide(tool_call: dict[str, Any], payload: dict[str, Any], context: dict[str
         return _write(name, args, scope)
     if name in COMMAND_TOOLS:
         return _command(args, scope)
+    # A `why` reaches the reviewer among the gate's trusted facts, so it never quotes a name the
+    # agent chose (an MCP server name or tool name could carry instructions); the action shows them.
     if name == "send_command_input":
         return review("it sends input to a running command")
     if name == "call_mcp_tool":
         server = str(args.get("ServerName") or "")
         if server in scope.trusted_mcp:
             return approve(f"{server} is CLI Subagents' own channel to the main session")
-        return review(f"it calls a tool of the MCP server {server or '(unnamed)'}")
+        return review("it calls a tool of an MCP server that isn't CLI Subagents' own (server and tool named in the action)")
     if name == "read_resource":
         server = str(args.get("ServerName") or args.get("Server") or "")
         if server in scope.trusted_mcp:
@@ -161,7 +164,7 @@ def decide(tool_call: dict[str, Any], payload: dict[str, Any], context: dict[str
         if scope.access == "read" and name in ("execute_browser_javascript",):
             return deny("read-only job: no browser scripts")
         return review("it drives a browser")
-    return review(f"the gate has no fixed rule for the tool {name or '(unnamed)'}")
+    return review("the gate has no fixed rule for this tool (named in the action)")
 
 
 def _read(name: str, args: dict[str, Any], scope: Scope) -> Verdict:
@@ -237,7 +240,9 @@ def _command(args: dict[str, Any], scope: Scope) -> Verdict:
 
     if not scope.readable(cwd):
         return review("the command runs outside the workspace")
-    if scope.access == "read":
+    # Outside agy's sandbox (OpenCode's gate, or sandbox = false) nothing else would stop a
+    # recursive search from printing the secrets files the rules refuse to show one by one.
+    if scope.access == "read" or not scope.sandbox:
         broad_read = commands.content_read_review(line, cwd)
         if broad_read:
             return review(broad_read)

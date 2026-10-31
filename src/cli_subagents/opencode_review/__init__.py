@@ -58,21 +58,51 @@ GREP_IGNORED_DIRS = ("node_modules",)  # rg searches it unless git ignores it
 GREP_GIT_TIMEOUT = 5
 GREP_FILE_LIMIT = 5000
 COMPLEX_GLOB = re.compile(r"[\[\]{}!\\]")
+# The gate asks git on the host, in a folder the worker chose. The worker can write
+# a folder git takes for a repository (HEAD, config, objects/, refs/ need no .git in
+# the path), and that config's core.fsmonitor would run as a command. Command-line
+# config wins over every config file; bare-repository discovery is refused.
+GIT_SAFE_CONFIG = ("-c", "core.fsmonitor=false", "-c", "safe.bareRepository=explicit")
 
 
-def _git_ignores(folder: Path, name: str) -> bool:
+def _host_git(workspaces: list[str]) -> str | None:
+    """git from an absolute PATH folder outside every workspace, or None.
+
+    A bare name is unsafe here: Windows looks in the current folder first (the
+    hook's, which is the workspace) unless NoDefaultCurrentDirectoryInExePath is
+    set, and PATH can hold workspace folders such as an activated venv.
+    """
+
+    roots = [form for root in workspaces if root for form in (os.path.normpath(root), paths.resolve(root))]
+    names = ("git.exe",) if os.name == "nt" else ("git",)
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        folder = entry.strip().strip('"')
+        if not folder or not os.path.isabs(folder):
+            continue
+        if any(paths.inside_any(form, roots) for form in (os.path.normpath(folder), paths.resolve(folder))):
+            continue
+        for name in names:
+            candidate = os.path.join(folder, name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def _git_ignores(folder: Path, name: str, git: str | None) -> bool:
     """Whether git ignores `name` in `folder`. Git missing or failing also counts as no."""
 
+    if not git:
+        return False
     try:
-        result = subprocess.run(["git", "check-ignore", "-q", "--", name], cwd=str(folder), stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=GREP_GIT_TIMEOUT,
-                                **no_window_kwargs())
+        result = subprocess.run([git, *GIT_SAFE_CONFIG, "check-ignore", "-q", "--", name], cwd=str(folder),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=GREP_GIT_TIMEOUT, **no_window_kwargs())
     except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
 
 
-def _skipped_dir(root: str, name: str, cache: dict[str, bool]) -> bool:
+def _skipped_dir(root: str, name: str, cache: dict[str, bool], git: str | None) -> bool:
     """Whether rg's search leaves this folder out: `.git` always, `node_modules` only when git ignores it.
 
     rg follows .gitignore, so a node_modules that isn't in it gets searched. The
@@ -85,7 +115,7 @@ def _skipped_dir(root: str, name: str, cache: dict[str, bool]) -> bool:
         return False
     folder = os.path.join(root, name)
     if folder not in cache:
-        cache[folder] = _git_ignores(Path(root), name)
+        cache[folder] = _git_ignores(Path(root), name, git)
     return cache[folder]
 
 
@@ -106,8 +136,9 @@ def _check_folder_grep(folder: Path, include: str | None, context: dict[str, Any
     homes = [str(context.get("user_home") or "")]
     seen = 0
     skipped: dict[str, bool] = {}
+    git = _host_git([str(item) for item in context.get("workspaces") or []])
     for root, dirs, files in os.walk(folder):
-        dirs[:] = [item for item in dirs if not _skipped_dir(root, item, skipped)]
+        dirs[:] = [item for item in dirs if not _skipped_dir(root, item, skipped, git)]
         for name in files:
             if not _include_matches(name, include):
                 continue
@@ -162,6 +193,17 @@ def patch_targets(patch: str) -> list[str] | None:
     return targets
 
 
+def _refuse_network(target: Path, context: dict[str, Any]) -> None:
+    """Raise Denied for a network or device path outside the job's own folders, before anything opens it.
+
+    Opening \\\\server\\share on Windows connects to that server from the host (paths.network_path).
+    """
+
+    trusted = [str(item) for item in [*(context.get("workspaces") or []), *(context.get("read_paths") or [])] if item]
+    if paths.network_path(str(target)) and not paths.inside_any(str(target), trusted):
+        raise Denied(f"CLI Subagents review: denied, {paths.NETWORK_REASON}.")
+
+
 def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
     """Translate v2 tool names/inputs into the gate's existing tool vocabulary.
 
@@ -187,6 +229,7 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
         target = Path(str(path or ""))
         if not target.is_absolute():
             target = Path(base) / target
+        _refuse_network(target, context)
         tool = "list_dir" if target.is_dir() else "view_file"
         return [_call(tool, {"AbsolutePath": str(target)})]
     if name == "glob":
@@ -199,24 +242,29 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
         target = Path(str(path or base))
         if not target.is_absolute():
             target = Path(base) / target
+        _refuse_network(target, context)
         # A folder search is allowed inside the workspace when no searched file can hold secrets.
         if target.is_dir():
             include = args.get("include")
             _check_folder_grep(target, include if isinstance(include, str) and include.strip() else None, context)
             return [_call("find_by_name", {**args, "SearchDirectory": str(target)})]
         return [_call("grep_search", {**args, "SearchPath": str(target)})]
+    # What an edit writes goes along as CodeContent (a content key the path rules skip): a
+    # reviewer judges the change itself, and a cached verdict covers only the same content.
     if name in ("edit", "write", "multiedit"):
         if not isinstance(path, str) or not path.strip():
             raise Denied("CLI Subagents review: denied, this edit names no file.")
-        return [_call("write_to_file", {"TargetFile": path})]
+        content = {key: value for key, value in args.items() if key not in ("path", "filePath")}
+        return [_call("write_to_file", {"TargetFile": path, "CodeContent": content})]
     if name in ("patch", "apply_patch"):
-        targets = patch_targets(str(args.get("patchText") or args.get("patch") or ""))
+        text = str(args.get("patchText") or args.get("patch") or "")
+        targets = patch_targets(text)
         if targets is None:
             raise Denied("CLI Subagents review: denied, this patch has unusual line breaks, so the files it changes "
                          "can't be read reliably. Use plain \\n or \\r\\n line breaks.")
         if not targets:
             raise Denied("CLI Subagents review: denied, this patch names no file to change.")
-        return [_call("write_to_file", {"TargetFile": value}) for value in targets]
+        return [_call("write_to_file", {"TargetFile": value, "CodeContent": text}) for value in targets]
     if name in ("todo", "todoread", "todowrite", "skill", "question"):
         return [_call("manage_task" if name != "question" else "ask_question", args)]
     # v2 sanitizes the server namespace, then joins it to the tool with '_'.
@@ -283,7 +331,12 @@ def run(raw: bytes, context_path: Path, *, on_record: Callable[[dict[str, Any]],
             call = payload["toolCall"]
             if call["name"] == "write_to_file":
                 target = Path(str(call["args"].get("TargetFile") or ""))
-                target = (target if target.is_absolute() else base / target).resolve()
+                target = target if target.is_absolute() else base / target
+                try:
+                    _refuse_network(target, context)
+                except Denied:
+                    return {"decision": "deny", "reason": "CLI Subagents review: writes outside the workspaces are denied."}
+                target = target.resolve()
                 if not any(target == Path(root).resolve() or Path(root).resolve() in target.parents
                            for root in context["workspaces"]):
                     return {"decision": "deny", "reason": "CLI Subagents review: writes outside the workspaces are denied."}

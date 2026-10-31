@@ -58,7 +58,11 @@ def build_prompt(request: dict[str, Any], policy: str | None = None) -> str:
 
     policy = policy if policy is not None else POLICY_PATH.read_text(encoding="utf-8")
     args = {key: value for key, value in (request.get("args") or {}).items() if key.lower() not in LABEL_ARGS}
-    action = json.dumps({"tool": request.get("tool"), "args": _clip(args)}, ensure_ascii=False, indent=1)
+    clipped = _clip(args)
+    action = json.dumps({"tool": request.get("tool"), "args": clipped}, ensure_ascii=False, indent=1)
+    # Said by the gate, so the agent can't fake or hide it: the hidden rest of a
+    # long edit or command was never reviewed.
+    shortened = clipped != args or len(action) > MAX_ACTION_CHARS
     if len(action) > MAX_ACTION_CHARS:
         action = action[:MAX_ACTION_CHARS] + "\n... [cut]"
     action = action.replace("</", "<\\/")  # still valid JSON; the action can't close the tag around it
@@ -71,6 +75,7 @@ def build_prompt(request: dict[str, Any], policy: str | None = None) -> str:
         **({"readable git configuration (may contain tokens)": request["readable_git_configs"]}
            if "readable_git_configs" in request else {}),
         "why the fixed rules sent this to you": request.get("why"),
+        "the action was shortened for length (its hidden part is not shown)": shortened,
     }
     return (
         "You are a security reviewer for an AI coding agent that runs without a human watching. "

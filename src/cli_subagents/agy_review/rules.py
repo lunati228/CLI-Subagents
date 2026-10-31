@@ -82,7 +82,8 @@ class Scope:
     def check(self, value: str, base: str | None = None) -> tuple[str, str | None]:
         """(resolved path, secret reason or None)."""
 
-        normal, resolved, reason = paths.check(value, base=base or self.base, homes=self.homes)
+        normal, resolved, reason = paths.check(value, base=base or self.base, homes=self.homes,
+                                               trusted=[*self.workspaces, *self.artifacts, *self.read_paths])
         if reason is None and any(paths.inside_any(form, self.secrets) for form in (normal, resolved)):
             reason = "it is an agent login or service credential"
         if reason is None:

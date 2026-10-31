@@ -193,6 +193,17 @@ def patch_targets(patch: str) -> list[str] | None:
     return targets
 
 
+def _refuse_network(target: Path, context: dict[str, Any]) -> None:
+    """Raise Denied for a network or device path outside the job's own folders, before anything opens it.
+
+    Opening \\\\server\\share on Windows connects to that server from the host (paths.network_path).
+    """
+
+    trusted = [str(item) for item in [*(context.get("workspaces") or []), *(context.get("read_paths") or [])] if item]
+    if paths.network_path(str(target)) and not paths.inside_any(str(target), trusted):
+        raise Denied(f"CLI Subagents review: denied, {paths.NETWORK_REASON}.")
+
+
 def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
     """Translate v2 tool names/inputs into the gate's existing tool vocabulary.
 
@@ -218,6 +229,7 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
         target = Path(str(path or ""))
         if not target.is_absolute():
             target = Path(base) / target
+        _refuse_network(target, context)
         tool = "list_dir" if target.is_dir() else "view_file"
         return [_call(tool, {"AbsolutePath": str(target)})]
     if name == "glob":
@@ -230,6 +242,7 @@ def translate(event: dict[str, Any], context: dict[str, Any]) -> list[dict[str, 
         target = Path(str(path or base))
         if not target.is_absolute():
             target = Path(base) / target
+        _refuse_network(target, context)
         # A folder search is allowed inside the workspace when no searched file can hold secrets.
         if target.is_dir():
             include = args.get("include")
@@ -318,7 +331,12 @@ def run(raw: bytes, context_path: Path, *, on_record: Callable[[dict[str, Any]],
             call = payload["toolCall"]
             if call["name"] == "write_to_file":
                 target = Path(str(call["args"].get("TargetFile") or ""))
-                target = (target if target.is_absolute() else base / target).resolve()
+                target = target if target.is_absolute() else base / target
+                try:
+                    _refuse_network(target, context)
+                except Denied:
+                    return {"decision": "deny", "reason": "CLI Subagents review: writes outside the workspaces are denied."}
+                target = target.resolve()
                 if not any(target == Path(root).resolve() or Path(root).resolve() in target.parents
                            for root in context["workspaces"]):
                     return {"decision": "deny", "reason": "CLI Subagents review: writes outside the workspaces are denied."}

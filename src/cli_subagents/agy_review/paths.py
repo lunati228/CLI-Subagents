@@ -201,11 +201,32 @@ def needs_review_for_write(path: str) -> str | None:
     return None
 
 
-def check(value: str, *, base: str | None, homes: Iterable[str]) -> tuple[str, str, str | None]:
-    """(normalized, resolved, secret reason or None) for one path argument."""
+def network_path(path: str) -> bool:
+    """A UNC or device path (\\\\server\\share, //server/share, \\\\?\\..., \\\\.\\...) on Windows.
+
+    Opening one (resolving, stat, listing) looks up the server and connects to it
+    over SMB with the user's Windows login, from the host, outside any sandbox.
+    """
+
+    return IS_WINDOWS and os.path.normpath(path).startswith("\\\\")
+
+
+NETWORK_REASON = "it is a network or device path, which the gate doesn't open"
+
+
+def check(value: str, *, base: str | None, homes: Iterable[str],
+          trusted: Iterable[str] = ()) -> tuple[str, str, str | None]:
+    """(normalized, resolved, secret reason or None) for one path argument.
+
+    A network or device path outside `base` and the `trusted` folders (the job's
+    own workspaces and read paths) is refused before anything opens it.
+    """
 
     home_list = [home for home in homes if home]
-    normal, resolved = forms(value, base, home_list[0] if home_list else None)
+    normal = normalize(value, base, home_list[0] if home_list else None)
+    if network_path(normal) and not inside_any(normal, [item for item in (base, *trusted) if item]):
+        return normal, normal, NETWORK_REASON
+    resolved = resolve(normal)
     reason = (secret_reason(normal, home_list, trusted=base)
               or secret_reason(resolved, home_list, trusted=resolve(base) if base else None))
     return normal, resolved, reason

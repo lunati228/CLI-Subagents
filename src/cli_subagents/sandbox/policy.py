@@ -21,7 +21,14 @@ from cli_subagents.sandbox.model import Policy, PolicyError
 PROTECTED_NAMES = (
     ".git", ".agents", ".agent", ".claude", ".codex", ".cursor", ".gemini", ".opencode", ".windsurf",
     ".devcontainer", ".husky", ".vscode", "opencode.json", "opencode.jsonc",
+    # Claude Code remembers approved project MCP servers by name, so a changed
+    # command would run in the owner's next session.
+    ".mcp.json",
 )
+# Public CA bundles that HTTP clients read at run time (certifi and pip's copy of
+# it, botocore, conda's OpenSSL). Their .pem suffix would otherwise deny them as
+# keys, and HTTPS in an approved command would fail without them.
+PUBLIC_CA_BUNDLES = {"cacert.pem"}
 # Credential folders in the home folder: denied, so their file names stay
 # hidden even with enumerate-only access to the drive.
 HIDDEN_HOME_DIRS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".password-store")
@@ -314,7 +321,9 @@ def command_policy(workspaces: list[str], env: dict[str, str]) -> Policy:
                 path = str(marker)
                 if _key(name) == ".git":
                     git_paths += [path, *git_dirs_of_worktree(marker)]
-                if secret_reason(path, [str(Path.home())], trusted=root):
+                if secret_reason(path, [str(Path.home())], trusted=root) and (
+                        name.lower() not in PUBLIC_CA_BUNDLES
+                        or secret_reason(folder, [str(Path.home())], trusted=root)):
                     denied.append(path)
     return Policy(roots, readonly=_unique([*toolchain_dirs(env), *python_dirs(), *git_config_paths(),
                                           *enclosing_git_dir(roots[0])]),

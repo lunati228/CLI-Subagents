@@ -161,6 +161,32 @@ class ModelAndBackendTests(TempHome):
         for relative in relatives:
             self.assertIsNotNone(paths.secret_reason(str(self.root / relative), [str(self.root)]))
 
+    def test_public_ca_bundles_stay_readable_but_keys_beside_them_do_not(self):
+        # requests/certifi in a workspace venv read cacert.pem for every HTTPS call.
+        bundle = self.project / ".venv" / "Lib" / "site-packages" / "certifi" / "cacert.pem"
+        bundle.parent.mkdir(parents=True)
+        bundle.write_text("fixture")
+        key = bundle.with_name("server.key")
+        key.write_text("fixture")
+        hidden = self.project / ".ssh" / "cacert.pem"
+        hidden.parent.mkdir()
+        hidden.write_text("fixture")
+        value = policy.command_policy([str(self.project)], {})
+        self.assertNotIn(str(bundle), value.denied)
+        self.assertIn(str(key), value.denied)
+        self.assertIn(str(hidden), value.denied)
+
+    def test_project_mcp_config_is_protected_like_agent_settings(self):
+        # Claude Code trusts approved project MCP servers by name; a changed command would run later.
+        self.assertIn(".mcp.json", policy.PROTECTED_NAMES)
+        target = self.project / ".mcp.json"
+        command = Command([sys.executable], str(self.project), {})
+        data = get_backend("mxc").request(policy.command_policy([str(self.project)], {}), command)
+        self.assertIn(str(target), data["filesystem"]["deniedPaths"])
+        target.write_text("{}")
+        data = get_backend("mxc").request(policy.command_policy([str(self.project)], {}), command)
+        self.assertIn(str(target), data["filesystem"]["readonlyPaths"])
+
     def test_missing_secret_parents_are_denied_at_the_first_missing_component(self):
         value = Policy([str(self.project)], denied=[str(self.root / "missing" / "nested" / "auth.json")])
         data = get_backend("mxc").request(value, Command([sys.executable], str(self.project), {}))

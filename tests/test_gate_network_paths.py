@@ -109,6 +109,7 @@ class NormalizeJoinTests(TempCase):
 
         return mock.patch.object(os.path, "isabs", isabs)
 
+    @unittest.skipUnless(os.name == "nt", "network_path applies only on Windows")
     def test_check_denies_it_after_the_join(self) -> None:
         with mock.patch.object(paths, "IS_WINDOWS", True), self.isabs_313():
             normal, _resolved, reason = paths.check(self.VALUE, base=str(self.ws), homes=[])

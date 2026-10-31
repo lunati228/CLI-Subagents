@@ -355,6 +355,7 @@ class PosixProcessStateTests(unittest.TestCase):
             self.assertFalse(fsutil.pid_alive(4321))
         helper.assert_called_once_with(4321)
 
+    @unittest.skipUnless(os.name == "nt", "Needs the real Windows ctypes API")
     def test_windows_keeps_its_own_check(self):
         kernel = Mock()
         kernel.OpenProcess.return_value = 0  # no process with this PID
@@ -578,6 +579,7 @@ class RunnerTests(OpenCodeHome):
             follower.review_lines()
         self.assertTrue(any(line.startswith("review: denied") for line in lines), lines)
 
+    @unittest.skipUnless(os.name == "nt", "The real launcher's kill and parent-death handling is only validated on Windows; the sandbox has no POSIX backend yet")
     def test_launcher_stopped_with_the_worker_never_leaves_a_planted_name(self):
         # Through the real launcher: whether it notices its shell ending and checks
         # itself, or is killed first and the runner checks its record, the planted

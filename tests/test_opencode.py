@@ -404,6 +404,14 @@ class ReviewTests(OpenCodeHome):
         self.assertEqual(self.review("shell", {"command": "git status"})["decision"], "auto_approve")
         self.assertEqual(self.review("shell", {"command": "git status", "workdir": str(self.root)})["decision"], "deny")
 
+    def test_shell_searches_cannot_read_what_the_grep_tool_refuses(self):
+        # The grep tool refuses folder searches that reach .env; a shell search in an edit job must not print it either.
+        (self.project / ".env").write_text("API_KEY=secret\n", encoding="utf-8")
+        for command in ("grep -r API_KEY .", "rg --hidden --no-ignore API_KEY", "Get-ChildItem -Recurse | Get-Content"):
+            with self.subTest(command=command):
+                self.assertEqual(self.review("shell", {"command": command})["decision"], "deny")
+        self.assertEqual(self.review("shell", {"command": "grep print source.py"})["decision"], "auto_approve")
+
     def test_read_edit_patch_and_external_paths(self):
         self.assertEqual(self.review("read", {"path": str(self.file)})["decision"], "auto_approve")
         self.assertEqual(self.review("edit", {"path": str(self.file)})["decision"], "auto_approve")

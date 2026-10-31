@@ -240,7 +240,9 @@ def _command(args: dict[str, Any], scope: Scope) -> Verdict:
 
     if not scope.readable(cwd):
         return review("the command runs outside the workspace")
-    if scope.access == "read":
+    # Outside agy's sandbox (OpenCode's gate, or sandbox = false) nothing else would stop a
+    # recursive search from printing the secrets files the rules refuse to show one by one.
+    if scope.access == "read" or not scope.sandbox:
         broad_read = commands.content_read_review(line, cwd)
         if broad_read:
             return review(broad_read)

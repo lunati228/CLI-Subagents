@@ -477,6 +477,20 @@ class GapTests(TempCase):
                 with self.subTest(line=line, sandbox=sandbox):
                     self.assertEqual(self.run_cmd(line, access="read", sandbox=sandbox).action, "review")
 
+    def test_recursive_content_reads_outside_a_sandbox_require_review_in_edit_jobs_too(self) -> None:
+        # Without agy's sandbox (OpenCode's gate, or sandbox = false) nothing else confines these
+        # reads: `grep -r KEY .` would print .env and key files the gate refuses to show one by one.
+        (self.ws / "README.md").write_text("public", encoding="utf-8")
+        for line in ("grep -r KEY .", "rg --hidden --no-ignore KEY", "rg KEY", "Get-ChildItem -Recurse | Get-Content",
+                     "findstr /s KEY README.md"):
+            with self.subTest(line=line):
+                self.assertEqual(self.run_cmd(line, access="edit", sandbox=False).action, "review")
+                # agy's own sandbox already lets edit jobs run any workspace code; nothing changes there.
+                self.assertEqual(self.run_cmd(line, access="edit", sandbox=True).action, "approve")
+        for line in ("rg -n public README.md", "grep public README.md", "git status", "Get-Content README.md"):
+            with self.subTest(line=line):
+                self.assertEqual(self.run_cmd(line, access="edit", sandbox=False).action, "approve")
+
     def test_native_broad_content_reads_require_review(self) -> None:
         readme = self.ws / "README.md"
         readme.write_text("public", encoding="utf-8")

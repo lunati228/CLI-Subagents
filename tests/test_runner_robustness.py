@@ -1,5 +1,6 @@
 """Runner regressions: process trees, continuations, caps, budgets and live events."""
 
+import io
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ from cli_subagents import accounts, jobs, limits, messages, quota, tools
 from cli_subagents.config import Account, QuotaPool, load_config, save_config
 from cli_subagents.fsutil import kill_tree, process_start_time, same_process
 from cli_subagents.runner import Runner
-from cli_subagents.runtimes.base import AUTH, SUCCESS, AttemptResult, JobSpec
+from cli_subagents.runtimes.base import AUTH, SUCCESS, USAGE_LIMIT, AttemptResult, JobSpec
 from cli_subagents.runtimes.codex import CodexRuntime
 
 HERE = Path(__file__).resolve().parent
@@ -164,6 +165,33 @@ class ContinuationAccountTests(RobustnessBase):
                 with patch.object(runner, "_attempt", side_effect=attempt), patch.object(accounts, "acquire", side_effect=acquire):
                     self.assertEqual(runner.run(), 0)
                 self.assertEqual(calls, [("a1", None, None), ("a1", "session-a1", "a1")])
+
+    def test_follow_up_survives_a_usage_limit_failover(self):
+        # The follow-up was taken from the inbox for its own turn; when that turn hits a
+        # usage limit, the restart on the next account must still carry it.
+        for runtime in ("codex", "claude"):
+            with self.subTest(runtime=runtime):
+                runner = self.runner(runtime=runtime)
+                calls = []
+
+                def attempt(lease, prompt, session, owner, fallback):
+                    calls.append((lease.account.name, prompt, fallback))
+                    if len(calls) == 1:
+                        messages.post_to_worker(runner.job_id, "also update the changelog")
+                        return AttemptResult(SUCCESS, text="first answer", session_id="s1")
+                    if len(calls) == 2:
+                        return AttemptResult(USAGE_LIMIT, message="usage limit reached", session_id="s1")
+                    return AttemptResult(SUCCESS, text="done")
+
+                with patch.object(runner, "_attempt", side_effect=attempt):
+                    self.assertEqual(runner.run(), 0)
+                self.assertEqual([call[0] for call in calls], ["a1", "a1", "a2"], calls)
+                self.assertIn("also update the changelog", calls[1][1])
+                # Codex can't move the session, so the restart gets the task again, follow-up included;
+                # Claude continues the session and needs the follow-up only if the move fails.
+                restart = calls[2][1] if runtime == "codex" else calls[2][2]
+                self.assertIn("task", restart)
+                self.assertIn("also update the changelog", restart)
 
 
 class InboxFinalizationTests(RobustnessBase):
@@ -340,6 +368,31 @@ class LiveEventTests(RobustnessBase):
             gate.touch()
             final = jobs.wait_for(status["job_id"], 20)
         self.assertEqual(final["outcome"], SUCCESS, final)
+
+    def test_output_read_just_after_the_worker_exited_still_reaches_the_parser(self):
+        # The reader thread can still be putting the CLI's last line when the main loop
+        # sees the process gone: that line holds the final answer and must not be dropped.
+        class LateStdout:
+            def __iter__(self):
+                time.sleep(0.8)  # longer than one queue wait
+                yield b'{"type":"item.completed","item":{"type":"agent_message","text":"final answer"}}\n'
+
+        class ExitedProcess:
+            pid = 0
+            stdin = io.BytesIO()
+            stdout = LateStdout()
+
+            def poll(self):
+                return 0
+
+        from cli_subagents.runtimes.codex import CodexParser
+
+        runner = self.runner()
+        parser = CodexParser()
+        events = io.BytesIO()
+        account = load_config().runtime("codex").find("a1")
+        self.assertIsNone(runner._pump(ExitedProcess(), "task", parser, account, events, time_limit=30))
+        self.assertEqual(parser.last_text, "final answer")
 
 
 class ParentApprovalTests(RobustnessBase):

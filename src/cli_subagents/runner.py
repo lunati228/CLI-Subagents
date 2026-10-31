@@ -71,6 +71,7 @@ def handoff_prompt(original: str, previous: AttemptResult, account: str) -> str:
 class Runner:
     def __init__(self, job_id: str) -> None:
         self.job_id = job_id
+        self.started = process_start_time(os.getpid())
         self.folder = job_dir(job_id)
         self.spec: JobSpec = read_spec(job_id)
         self.config = load_config()
@@ -90,7 +91,9 @@ class Runner:
         return (self.folder / "cancel").exists()
 
     def _write_status(self, **fields: Any) -> None:
-        update_status(self.job_id, runner_pid=os.getpid(), attempts=self.attempts, warnings=self.warnings, **fields)
+        # The start time tells this runner from a later process that reuses its PID.
+        update_status(self.job_id, runner_pid=os.getpid(), runner_started=self.started, attempts=self.attempts,
+                      warnings=self.warnings, **fields)
 
     def status(self, **fields: Any) -> bool:
         """Best-effort heartbeat or progress write: a locked or busy status file must not end the job."""
@@ -141,6 +144,9 @@ class Runner:
     def run(self) -> int:
         self.status(state="starting", started_at=time.time())
         prompt = self.spec.prompt
+        # The task as a fresh start must see it: the prompt plus every follow-up already
+        # taken from the inbox, so a restart on another account doesn't drop them.
+        task = self.spec.prompt
         excluded: set[str] = set()
         last: AttemptResult | None = None
         failover = self.runtime_config.failover == "on-limit" and not self.spec.account
@@ -163,7 +169,7 @@ class Runner:
                     return self.finish(last.outcome, last.message, last)
                 return self.finish(NO_ACCOUNT, self._no_account_message(excluded))
             try:
-                fallback = handoff_prompt(self.spec.prompt, last, owner or "another account") if last else self.spec.prompt
+                fallback = handoff_prompt(task, last, owner or "another account") if last else self.spec.prompt
                 last = self._attempt_with_capacity_retries(lease, prompt, session, owner, fallback)
             finally:
                 lease.release()
@@ -177,11 +183,12 @@ class Runner:
                     # Follow-ups sent while the worker was busy: continue the same conversation.
                     follow_ups += 1
                     session, owner = last.session_id, lease.account.name
+                    follow_up = "\n\n".join(item["text"] for item in pending)
                     prompt = (
                         "Follow-up from the main session (you may already have seen it during your run; "
-                        "if you already handled it, just confirm briefly):\n\n"
-                        + "\n\n".join(item["text"] for item in pending)
+                        "if you already handled it, just confirm briefly):\n\n" + follow_up
                     )
+                    task += "\n\nFollow-up from the main session:\n\n" + follow_up
                     self.status(follow_up_turns=follow_ups)
                     continue
             if last.outcome == AUTH and failover and last.before_start:
@@ -214,7 +221,7 @@ class Runner:
                 session, owner, prompt = last.session_id, lease.account.name, CONTINUE_NOTE
             else:
                 session, owner = None, None
-                prompt = handoff_prompt(self.spec.prompt, last, lease.account.name)
+                prompt = handoff_prompt(task, last, lease.account.name)
             self.warnings.append(f"{lease.account.name} hit its usage limit; continuing on another account")
 
     def _attempt_with_capacity_retries(
@@ -596,7 +603,9 @@ class Runner:
                 self._handle_line(raw, parser, account)
             elif process.poll() is not None:
                 # A descendant can inherit stdout after the CLI exits. Do not wait
-                # for it to close the pipe before the process-group cleanup runs.
+                # for it to close the pipe before the process-group cleanup runs,
+                # but parse what the reader thread is still passing on (bounded).
+                self._drain(lines, [], parser, account, events)
                 return None
             if time.monotonic() - last_status > STATUS_INTERVAL:
                 last_status = time.monotonic()

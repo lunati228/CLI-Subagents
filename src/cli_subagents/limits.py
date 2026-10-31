@@ -15,7 +15,7 @@ from typing import Any
 
 from cli_subagents import accounts, quota, spend
 from cli_subagents.config import Config, RUNTIMES, jobs_dir, state_dir
-from cli_subagents.fsutil import pid_alive, read_json, unlock
+from cli_subagents.fsutil import read_json, recorded_process_alive, unlock
 from cli_subagents.plans import Limits, account_limits, cap_effort, model_allowed
 
 ACTIVE_STATES = ("queued", "starting", "running")
@@ -81,8 +81,9 @@ def count_active(now: float | None = None) -> Counts:
             pid = int(_read_text(path / "runner.pid"))
         except ValueError:
             continue  # never started (start=False): no runner, no worker
-        if now - float(status.get("updated_at") or 0) > STALE_RUNNER_SECONDS and not pid_alive(pid):
-            continue
+        started = status.get("runner_started") if status.get("runner_pid") == pid else None
+        if now - float(status.get("updated_at") or 0) > STALE_RUNNER_SECONDS and not recorded_process_alive(pid, started):
+            continue  # the runner died; its PID may belong to another process by now
         runtime = str(status.get("runtime") or "")
         counts.total += 1
         counts.by_runtime[runtime] = counts.by_runtime.get(runtime, 0) + 1

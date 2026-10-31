@@ -357,6 +357,15 @@ def same_process(pid: int | None, started: int | None) -> bool:
     return current is None or current == int(started)
 
 
+def recorded_process_alive(pid: Any, started: Any) -> bool:
+    """same_process() for a PID and start stamp read from a record; malformed values count as gone."""
+
+    try:
+        return same_process(int(pid), int(started) if started is not None else None) if pid else False
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def kill_tree(pid: int) -> None:
     """Terminate a process and all of its children."""
 
@@ -486,10 +495,43 @@ class _WindowsJob:
             self.kernel.CloseHandle(self.handle)
 
 
+BATCH_SUFFIXES = (".cmd", ".bat")
+BATCH_UNQUOTED = frozenset("&|<>^()")
+
+
+def batch_argument_problem(argv: list[str]) -> str | None:
+    """Why cmd.exe would not pass `argv` to a .cmd/.bat program unchanged, or None.
+
+    Windows starts a batch file through cmd.exe, which reads the command line that
+    subprocess.list2cmdline built: `&`, `|`, `<`, `>`, `^` and parentheses outside
+    double quotes start other commands or vanish, and `%` expands variables even
+    inside quotes. list2cmdline writes an embedded quote as `\\"`, which cmd.exe
+    still counts as a quote, so such an argument can leave the quoted part.
+    """
+
+    if not argv or Path(str(argv[0])).suffix.lower() not in BATCH_SUFFIXES:
+        return None
+    quoted = False
+    for char in subprocess.list2cmdline([str(item) for item in argv[1:]]):
+        if char in "\r\n":
+            return "an argument contains a line break"
+        if char == "%":
+            return "an argument contains %"
+        if char == '"':
+            quoted = not quoted
+        elif not quoted and char in BATCH_UNQUOTED:
+            return f"an argument contains {char!r} that cmd.exe would interpret"
+    return None
+
+
 @contextlib.contextmanager
 def worker_process(argv: list[str], **kwargs: Any) -> Iterator[subprocess.Popen]:
     """Launch a contained worker; destroy its whole tree before releasing its lease."""
 
+    problem = batch_argument_problem(argv) if os.name == "nt" else None
+    if problem:
+        raise OSError(f"{Path(str(argv[0])).name} is a batch file run by cmd.exe and {problem}; "
+                      "point the runtime's binary setting at the program itself (an .exe, or node with its script)")
     job = _WindowsJob() if os.name == "nt" else None
     process = None
     options = new_group_kwargs()

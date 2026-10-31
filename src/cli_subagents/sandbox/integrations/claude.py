@@ -11,6 +11,7 @@ import secrets
 import sys
 from typing import Any
 
+from cli_subagents.agy_review.paths import inside_any, network_path
 from cli_subagents.config import home, load_config
 from cli_subagents.fsutil import make_private_dir, python_executable, read_json, write_json
 from cli_subagents.sandbox import SHIMS, add_shims, policy
@@ -103,6 +104,9 @@ def handle(event: dict[str, Any], action: str) -> dict[str, Any] | None:
     if not isinstance(tool, dict) or not isinstance(tool.get("command"), str) or not tool["command"].strip():
         raise PolicyError("missing PowerShell command")
     cwd = tool.get("cwd", event.get("cwd"))
+    # Checking \\server\share would connect to that server from the host first.
+    if isinstance(cwd, str) and network_path(cwd) and not inside_any(os.path.normpath(cwd), filesystem.workspaces):
+        raise PolicyError("command cwd is a network or device path outside the session's writable roots")
     if not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir():
         raise PolicyError("invalid command cwd")
     cwd = policy._real(cwd)

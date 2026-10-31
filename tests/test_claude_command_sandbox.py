@@ -64,6 +64,23 @@ class ClaudeCommandSandboxTests(TempHome):
         self.assertIsNone(claude.handle(event, "claude-sandbox"))
         self.assertIsNone(claude.handle({"tool_name": "Read"}, "claude-sandbox"))
 
+    def test_network_cwd_is_refused_before_it_is_opened(self):
+        if os.name != "nt":
+            self.skipTest("UNC paths are Windows paths")
+        self.start()
+        self.event["cwd"] = r"\\csa-fixture-host\share"
+        original = Path.is_dir
+
+        def is_dir(path):
+            if str(path).startswith("\\\\"):
+                raise AssertionError("opened a network path")
+            return original(path)
+
+        with patch.object(Path, "is_dir", is_dir), \
+                patch.object(claude.policy, "_real", side_effect=AssertionError("resolved a network path")), \
+                self.assertRaisesRegex(PolicyError, "network"):
+            claude.handle(self.event, "claude-sandbox")
+
     def test_command_is_encoded_as_data_and_permissions_are_preserved(self):
         self.start()
         line = "Write-Output 'quotes; $(evil) `new';\nWrite-Output \"next\""

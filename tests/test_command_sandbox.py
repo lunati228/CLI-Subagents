@@ -596,6 +596,16 @@ class IntegrationTests(GateBase):
                  "env": {**os.environ, "OPENAI_API_KEY": "fixture-secret"}, **values}
         return opencode.prepare(event, self.context)
 
+    @unittest.skipUnless(os.name == "nt", "UNC paths are Windows paths")
+    def test_network_cwd_is_refused_before_the_host_resolves_it(self):
+        # The model picks the shell workdir; resolving \\host\share would connect from the host.
+        for cwd in (r"\\csa-fixture-host\share", "//csa-fixture-host/share/x", r"\\?\UNC\csa-fixture-host\share"):
+            with self.subTest(cwd=cwd), \
+                    patch.object(policy, "_real", side_effect=AssertionError("resolved a network path")), \
+                    self.assertRaisesRegex(PolicyError, "network"):
+                self.issue("npm test", cwd=cwd)
+        self.assertEqual(list((self.root / "sandbox").glob("command-*.json")), [])
+
     def test_rule_and_review_network_are_bound_to_each_request(self):
         prepared = self.issue("npm test")
         [request] = list((self.root / "sandbox").glob("command-*.json"))

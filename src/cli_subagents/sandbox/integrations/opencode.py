@@ -16,6 +16,7 @@ if not __package__:
 
 from cli_subagents import opencode_review
 from cli_subagents.agy_review.context import load_context
+from cli_subagents.agy_review.paths import inside_any, network_path
 from cli_subagents.fsutil import make_private_dir, python_executable, write_json
 from cli_subagents.sandbox import add_shims, policy
 from cli_subagents.sandbox.launcher import recover
@@ -36,6 +37,9 @@ def prepare(event: dict[str, Any], context_path: Path) -> dict[str, str]:
     line, cwd = event.get("command"), event.get("cwd")
     if not isinstance(line, str) or not line.strip() or not isinstance(cwd, str):
         raise PolicyError("shell invocation needs a command and cwd")
+    # Resolving \\server\share would connect to that server from the host first.
+    if network_path(cwd) and not inside_any(os.path.normpath(cwd), base_policy.workspaces):
+        raise PolicyError("shell cwd is a network or device path outside the writable workspaces")
     cwd = policy._real(cwd)
     if not any(policy._inside(cwd, root) for root in base_policy.workspaces):
         raise PolicyError("shell cwd is outside the writable workspaces")

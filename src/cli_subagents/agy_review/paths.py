@@ -203,13 +203,15 @@ def needs_review_for_write(path: str) -> str | None:
 
 
 def network_path(path: str) -> bool:
-    """A UNC or device path (\\\\server\\share, //server/share, \\\\?\\..., \\\\.\\...) on Windows.
+    """A UNC or device path (\\\\server\\share, //server/share, \\\\?\\..., \\\\.\\..., \\??\\...) on Windows.
 
     Opening one (resolving, stat, listing) looks up the server and connects to it
     over SMB with the user's Windows login, from the host, outside any sandbox.
+    Win32 passes a \\??\\ path to the NT namespace as it is, so \\??\\UNC\\server
+    reaches a server too.
     """
 
-    return IS_WINDOWS and os.path.normpath(path).startswith("\\\\")
+    return IS_WINDOWS and os.path.normpath(path).startswith(("\\\\", "\\??\\"))
 
 
 NETWORK_REASON = "it is a network or device path, which the gate doesn't open"

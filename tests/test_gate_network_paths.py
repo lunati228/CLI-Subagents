@@ -27,6 +27,9 @@ SERVER_PATHS = (
     "//attacker.invalid/share/x.txt",
     r"\\?\UNC\attacker.invalid\share\x.txt",
     r"\\.\pipe\attacker",
+    # Win32 hands \??\ paths to the NT namespace unchanged: \??\UNC\ reaches a server.
+    r"\??\UNC\attacker.invalid\share\x.txt",
+    "/??/UNC/attacker.invalid/share/x.txt",
 )
 
 
@@ -35,7 +38,7 @@ def _network(value) -> bool:
         text = os.fspath(value)
     except TypeError:
         return False
-    return isinstance(text, str) and os.path.normpath(text).startswith("\\\\")
+    return isinstance(text, str) and os.path.normpath(text).startswith(("\\\\", "\\??\\"))
 
 
 @unittest.skipUnless(os.name == "nt", "UNC and device paths are Windows paths")

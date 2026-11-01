@@ -251,7 +251,7 @@ max_jobs_by_room = [[75, 4], [50, 3], [25, 2], [5, 1], [0, 0]]
 web_search = "live"
 ```
 
-This example allows 4 jobs above 75 percent, 3 above 50, 2 above 25, 1 above 5, and none at 5 percent or less. An exact threshold uses the next step: 75 percent allows 3 jobs. csa uses each account's smaller remaining share across its open 5-hour and weekly windows, then takes the highest share among eligible regular accounts. Fallback accounts do not raise the cap. Windows that already reset are ignored. With no known usage it uses the top step. Antigravity reports no remaining quota, so it always uses the top step.
+This example allows 4 jobs above 75 percent, 3 above 50, 2 above 25, 1 above 5, and none at 5 percent or less. An exact threshold uses the next step: 75 percent allows 3 jobs. csa uses each account's smaller remaining share across its open 5-hour and weekly windows, then takes the highest share among eligible regular accounts. Fallback accounts do not raise the cap. A job pinned to one account with `account` is judged by that account's share alone, fallback accounts included, so a free fallback account with room still takes pinned jobs when the main account's week is spent. Windows that already reset are ignored. With no known usage it uses the top step. Antigravity reports no remaining quota, so it always uses the top step.
 
 The lowest applicable cap wins. A lower cap refuses new starts, including with `when_full = "queue"`; jobs already running keep going. A refusal names the current percentage and cap:
 

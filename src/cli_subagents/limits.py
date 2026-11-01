@@ -278,7 +278,7 @@ class Admission:
 
 
 def acquire_execution_slots(config: Config, runtime_name: str, model: str | None = None,
-                            *, override: str | None = None) -> list | None:
+                            *, override: str | None = None, pinned: str | None = None) -> list | None:
     """Lease the global and runtime caps at execution, including jobs admitted to queue.
 
     These slots join the account lease, so its owner tracking and cleanup cover
@@ -286,7 +286,7 @@ def acquire_execution_slots(config: Config, runtime_name: str, model: str | None
     """
 
     runtime = config.runtime(runtime_name)
-    room_cap, _ = quota.room_cap(runtime, time.time(), model)
+    room_cap, _ = quota.room_cap(runtime, time.time(), model, pinned=pinned)
     runtime_caps = [cap for cap in (runtime.max_jobs, room_cap) if cap is not None]
     caps = [("global", config.max_jobs), (runtime_name, min(runtime_caps) if runtime_caps else None)]
     slots = []
@@ -340,7 +340,7 @@ def admit(
                 f"{name} is at its limit: {running} of {runtime.max_jobs} subagents running "
                 f"(max_jobs under [{runtime_name}]). {_tail(found, WAIT)}"
             )
-    cap, left = quota.room_cap(runtime, now, model)
+    cap, left = quota.room_cap(runtime, now, model, pinned=account)
     running = counts.by_runtime.get(runtime_name, 0)
     if not override and cap is not None and running >= cap:
         found = _alternatives(config, runtime_name, counts, now)

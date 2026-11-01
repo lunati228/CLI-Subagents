@@ -155,6 +155,19 @@ class QuotaTests(TempHome):
         item.accounts[0].enabled = False
         self.assertEqual(quota.room_cap(item, self.now), (1, 20))
 
+    def test_a_job_pinned_to_a_fallback_account_uses_that_accounts_room(self):
+        config = self.configure(steps=True)
+        from cli_subagents.config import Account
+        item = config.runtime("codex")
+        item.include_primary = True
+        item.accounts = [Account("spare", self.root / "spare", fallback=True, models=["luna"])]
+        self.usage(used=0.99)
+        self.usage("spare", used=0.4)
+        self.assertEqual(quota.room_cap(item, self.now, "luna"), (0, 1))
+        self.assertEqual(quota.room_cap(item, self.now, "luna", pinned="spare"), (3, 60))
+        self.assertEqual(quota.room_cap(item, self.now, "luna", pinned="primary"), (0, 1))
+        self.assertEqual(quota.room_cap(item, self.now, "sol", pinned="spare"), (4, None))  # model not allowed there
+
     def test_unknown_or_reset_usage_uses_top_step(self):
         item = self.configure(steps=True).runtime("codex")
         self.assertEqual(quota.room_cap(item, self.now), (4, None))

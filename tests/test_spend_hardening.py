@@ -135,6 +135,21 @@ class SpendHardeningTests(SpendHome):
                                     resume_job=first["job_id"], access="read", start=False)
         self.assertEqual(Runner(follow_up["job_id"]).run(), 0)
 
+    def test_follow_up_message_continues_on_the_pinned_explicit_only_account(self):
+        from cli_subagents import tools
+
+        self.account.explicit_only = True
+        save_config(self.config)
+        first = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), account="paid", access="read", start=False)
+        self.assertEqual(Runner(first["job_id"]).run(), 0)
+        create_job = jobs.create_job
+        with patch.object(jobs, "create_job", lambda **kwargs: create_job(**kwargs, start=False)):
+            result = tools.call("subagent_message", {"job_id": first["job_id"], "text": "continue"})
+        follow_up = result["new_job"]["job_id"]
+        self.assertEqual(jobs.read_spec(follow_up).account, "paid")
+        self.assertEqual(Runner(follow_up).run(), 0)
+        self.assertEqual(jobs.read_status(follow_up)["account"], "paid")
+
     def test_preflight_and_launch_failures_release_capped_allowance(self):
         from cli_subagents.runtimes.base import AttemptResult
 

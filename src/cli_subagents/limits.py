@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 import time
 from typing import Any
 
-from cli_subagents import accounts, quota, spend
+from cli_subagents import accounts, openrouter, quota, spend
 from cli_subagents.config import Config, RUNTIMES, jobs_dir, state_dir
 from cli_subagents.fsutil import read_json, recorded_process_alive, unlock
 from cli_subagents.plans import Limits, account_limits, cap_effort, model_allowed
@@ -139,6 +139,8 @@ class Room:
     pool_budget_hit: bool = False
     pool_budget_used: int = 0
     spend_blocked: list = field(default_factory=list)
+    soft_capped: list = field(default_factory=list)  # (account, usd) over openrouter_weekly_cap_usd
+    notes: list[str] = field(default_factory=list)  # warnings for the admission
 
 
 def _source(limits: Limits) -> str:
@@ -180,6 +182,14 @@ def room(config: Config, runtime_name: str, counts: Counts, *, pinned: str | Non
             summary = spend.snapshot(runtime, account, now=now)
             if summary["remaining_usd"] < spend.MIN_BUDGET_USD:
                 result.spend_blocked.append((account, summary))
+                continue
+        if account.openrouter_weekly_cap_usd is not None and not override:
+            used = openrouter.weekly_usage(account, now)
+            if used is None:
+                result.notes.append(f"could not read the OpenRouter key's weekly spend for '{account.name}'; "
+                                    "started without the soft cap check")
+            elif used >= account.openrouter_weekly_cap_usd:
+                result.soft_capped.append((account, used))
                 continue
         if pool:
             if not override and pool.weekly_jobs is not None and state.budget_used(account.name, pool.name) >= pool.weekly_jobs:
@@ -278,7 +288,7 @@ class Admission:
 
 
 def acquire_execution_slots(config: Config, runtime_name: str, model: str | None = None,
-                            *, override: str | None = None) -> list | None:
+                            *, override: str | None = None, pinned: str | None = None) -> list | None:
     """Lease the global and runtime caps at execution, including jobs admitted to queue.
 
     These slots join the account lease, so its owner tracking and cleanup cover
@@ -286,7 +296,7 @@ def acquire_execution_slots(config: Config, runtime_name: str, model: str | None
     """
 
     runtime = config.runtime(runtime_name)
-    room_cap, _ = quota.room_cap(runtime, time.time(), model)
+    room_cap, _ = quota.room_cap(runtime, time.time(), model, pinned=pinned)
     runtime_caps = [cap for cap in (runtime.max_jobs, room_cap) if cap is not None]
     caps = [("global", config.max_jobs), (runtime_name, min(runtime_caps) if runtime_caps else None)]
     slots = []
@@ -340,7 +350,7 @@ def admit(
                 f"{name} is at its limit: {running} of {runtime.max_jobs} subagents running "
                 f"(max_jobs under [{runtime_name}]). {_tail(found, WAIT)}"
             )
-    cap, left = quota.room_cap(runtime, now, model)
+    cap, left = quota.room_cap(runtime, now, model, pinned=account)
     running = counts.by_runtime.get(runtime_name, 0)
     if not override and cap is not None and running >= cap:
         found = _alternatives(config, runtime_name, counts, now)
@@ -359,6 +369,7 @@ def admit(
                 f"effort lowered from {effort} to {capped} ({chosen.name}: {limits.max_effort_source})"
             )
         admission.effort = capped
+        admission.warnings += current.notes
         return admission
     if current.model_blocked:
         found = [] if account else _alternatives(config, runtime_name, counts, now)
@@ -371,6 +382,10 @@ def admit(
     if current.spend_blocked:
         raise _refusal(config, " ".join(spend.refusal(account, summary)
                                        for account, summary in current.spend_blocked), overridable=False)
+    if current.soft_capped:
+        # Overridable, but with its own wording: the generic hint is about parallel jobs.
+        raise _refusal(config, " ".join(openrouter.refusal(account, used)
+                                       for account, used in current.soft_capped), overridable=False)
     if current.pool_budget_hit:
         pool = current.pool
         found = [] if account else _alternatives(config, runtime_name, counts, now)

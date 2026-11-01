@@ -330,8 +330,9 @@ def _call(name: str, arguments: dict[str, Any], progress=None, client: str | Non
             if record is not None:
                 return {"job_id": job_id, "delivered": "queued for the running subagent", "message_id": record["id"]}
         spec = jobs.read_spec(job_id)
+        # A job pinned to an account (explicit-only ones must be) continues on that account.
         follow_up = jobs.create_job(
-            runtime=spec.runtime, prompt=text, cwd=spec.cwd, model=spec.model, effort=spec.effort,
+            runtime=spec.runtime, prompt=text, cwd=spec.cwd, account=spec.account, model=spec.model, effort=spec.effort,
             access=spec.access, max_turns=spec.max_turns, timeout_seconds=spec.timeout_seconds,
             add_dirs=spec.add_dirs, resume_job=job_id,
         )

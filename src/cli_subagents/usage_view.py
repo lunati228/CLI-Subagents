@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cli_subagents import accounts, quota, spend
+from cli_subagents import accounts, openrouter, quota, spend
 from cli_subagents.config import Config, RuntimeConfig
 from cli_subagents.limits import NAMES, utilization
 
@@ -135,6 +135,9 @@ def room_line(config: Config, runtimes: list[str] | None = None, now: float | No
             text = _account_text(runtime, account, record, now)
             if spend.configured(account):
                 text = (text or account.name) + " [" + spend.describe(spend.snapshot(runtime, account, now=now)) + "]"
+            if account.openrouter_weekly_cap_usd is not None:
+                used = openrouter.weekly_usage(account, now)
+                text = (text or account.name) + " [" + openrouter.describe(account, used) + "]"
             pools = quota.pool_report(runtime, account.name, state, record, now)
             if pools:
                 text = (text or account.name) + " [" + "; ".join(pool["state"] for pool in pools) + "]"

@@ -162,7 +162,21 @@ Before starting an attempt, csa subtracts settled spend and running reservations
 
 csa reserves that budget under a lock and passes it to Claude as `--max-budget-usd`. The reservation counts against every cap until settlement. Concurrent starts see that reservation and can use only room left under every cap; increasing `max_jobs` or using `override` cannot allocate the same money twice. All running reservations count even as windows advance or `spend_since` changes. A budget stop has outcome `budget` and ends without retry or failover. `when_full = "queue"` and `override` cannot bypass spend checks.
 
-`csa accounts list`, `subagent_accounts`, `csa doctor` and the `Room:` line show every cap with its spent, reserved and remaining USD. Remaining is the amount available after reservations. `csa accounts reset NAME` clears cooldowns; use `spend_since` to reset spend accounting. A future `spend_since` refuses jobs until that time. Resuming an explicit-only account requires naming it again.
+`csa accounts list`, `subagent_accounts`, `csa doctor` and the `Room:` line show every cap with its spent, reserved and remaining USD. Remaining is the amount available after reservations. `csa accounts reset NAME` clears cooldowns; use `spend_since` to reset spend accounting. A future `spend_since` refuses jobs until that time. A new start that resumes an explicit-only account's job must name the account again; a follow-up message to a finished job (`subagent_message`, or SendMessage to its relay) stays on the account the job was pinned to.
+
+### OpenRouter weekly soft cap
+
+A Claude account can run Claude Code against OpenRouter through the account folder's own `settings.json` (`ANTHROPIC_BASE_URL` set to `https://openrouter.ai/api` and the key in `ANTHROPIC_AUTH_TOKEN`). Claude Code's cost estimate is far too high for non-Anthropic models, so don't use `spend_caps` there. Use a soft cap on the key instead:
+
+```toml
+[[claude.accounts]]
+name = "deepseek"
+home = "C:/Users/me/.claude-deepseek"
+explicit_only = true
+openrouter_weekly_cap_usd = 20
+```
+
+Before a start on that account, csa asks OpenRouter (`GET /api/v1/key`) how much the key has spent in the current UTC week, Monday to Sunday, and caches the answer for a minute. The figure is the key's total, so use outside csa counts too. At or above the cap, csa refuses the start; `override=<the user's words>` lets one through, as with `max_jobs_by_room`. Running jobs are never stopped. If OpenRouter can't be reached, the job starts with a warning. The `Room:` line shows the spend, for example `deepseek explicit-only [OpenRouter key $7.25 / $20.00 this week, soft cap]`. This setting is for Claude accounts only and never changes the key's own limit on OpenRouter.
 
 The estimate can be higher than the invoice, so this accounting errs on the safe side. Resumed Claude sessions can report earlier spend again, and summing attempt costs can count it again. Claude checks its native budget after a response completes, so the last response and native subagents stopping can exceed it. Set an organization or workspace spend limit in the Anthropic Console as the authoritative billing-side control, and leave headroom. The local cap covers csa workers using this state folder; interactive sessions and other machines need their own controls. See [spend-cap research](research/spend-caps.md) for sources and caveats.
 
@@ -251,7 +265,7 @@ max_jobs_by_room = [[75, 4], [50, 3], [25, 2], [5, 1], [0, 0]]
 web_search = "live"
 ```
 
-This example allows 4 jobs above 75 percent, 3 above 50, 2 above 25, 1 above 5, and none at 5 percent or less. An exact threshold uses the next step: 75 percent allows 3 jobs. csa uses each account's smaller remaining share across its open 5-hour and weekly windows, then takes the highest share among eligible regular accounts. Fallback accounts do not raise the cap. Windows that already reset are ignored. With no known usage it uses the top step. Antigravity reports no remaining quota, so it always uses the top step.
+This example allows 4 jobs above 75 percent, 3 above 50, 2 above 25, 1 above 5, and none at 5 percent or less. An exact threshold uses the next step: 75 percent allows 3 jobs. csa uses each account's smaller remaining share across its open 5-hour and weekly windows, then takes the highest share among eligible regular accounts. Fallback accounts do not raise the cap. A job pinned to one account with `account` is judged by that account's share alone, fallback accounts included, so a free fallback account with room still takes pinned jobs when the main account's week is spent. Windows that already reset are ignored. With no known usage it uses the top step. Antigravity reports no remaining quota, so it always uses the top step.
 
 The lowest applicable cap wins. A lower cap refuses new starts, including with `when_full = "queue"`; jobs already running keep going. A refusal names the current percentage and cap:
 

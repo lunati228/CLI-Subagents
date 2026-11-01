@@ -28,8 +28,13 @@ def job_pool(runtime: RuntimeConfig, status: dict, spec: dict) -> str | None:
     return pool.name if pool else None
 
 
-def room_cap(runtime: RuntimeConfig, now: float, model: str | None = None) -> tuple[int | None, float | None]:
-    """Cap and best remaining percent on regular, eligible accounts; unknown uses the top step."""
+def room_cap(runtime: RuntimeConfig, now: float, model: str | None = None,
+             pinned: str | None = None) -> tuple[int | None, float | None]:
+    """Cap and best remaining percent on regular, eligible accounts; unknown uses the top step.
+
+    A job pinned to one account is judged by that account alone, fallback accounts included:
+    a free fallback account with room must not inherit the main account's empty week.
+    """
 
     from cli_subagents import accounts
     from cli_subagents.limits import utilization
@@ -38,8 +43,10 @@ def room_cap(runtime: RuntimeConfig, now: float, model: str | None = None) -> tu
         return None, None
     usage = accounts.load_usage(runtime.runtime)
     remaining = []
-    for account in runtime.worker_accounts():
-        if account.fallback or not model_allowed(runtime, account_limits(runtime, account), model):
+    for account in runtime.worker_accounts() if pinned is None else [runtime.find(pinned)]:
+        if account is None:
+            continue
+        if (pinned is None and account.fallback) or not model_allowed(runtime, account_limits(runtime, account), model):
             continue
         record = usage.get(account.name)
         if accounts.cooldown_until(record, now):

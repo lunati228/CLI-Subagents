@@ -164,6 +164,20 @@ csa reserves that budget under a lock and passes it to Claude as `--max-budget-u
 
 `csa accounts list`, `subagent_accounts`, `csa doctor` and the `Room:` line show every cap with its spent, reserved and remaining USD. Remaining is the amount available after reservations. `csa accounts reset NAME` clears cooldowns; use `spend_since` to reset spend accounting. A future `spend_since` refuses jobs until that time. A new start that resumes an explicit-only account's job must name the account again; a follow-up message to a finished job (`subagent_message`, or SendMessage to its relay) stays on the account the job was pinned to.
 
+### OpenRouter weekly soft cap
+
+A Claude account can run Claude Code against OpenRouter through the account folder's own `settings.json` (`ANTHROPIC_BASE_URL` set to `https://openrouter.ai/api` and the key in `ANTHROPIC_AUTH_TOKEN`). Claude Code's cost estimate is far too high for non-Anthropic models, so don't use `spend_caps` there. Use a soft cap on the key instead:
+
+```toml
+[[claude.accounts]]
+name = "deepseek"
+home = "C:/Users/me/.claude-deepseek"
+explicit_only = true
+openrouter_weekly_cap_usd = 20
+```
+
+Before a start on that account, csa asks OpenRouter (`GET /api/v1/key`) how much the key has spent in the current UTC week, Monday to Sunday, and caches the answer for a minute. The figure is the key's total, so use outside csa counts too. At or above the cap, csa refuses the start; `override=<the user's words>` lets one through, as with `max_jobs_by_room`. Running jobs are never stopped. If OpenRouter can't be reached, the job starts with a warning. The `Room:` line shows the spend, for example `deepseek explicit-only [OpenRouter key $7.25 / $20.00 this week, soft cap]`. This setting is for Claude accounts only and never changes the key's own limit on OpenRouter.
+
 The estimate can be higher than the invoice, so this accounting errs on the safe side. Resumed Claude sessions can report earlier spend again, and summing attempt costs can count it again. Claude checks its native budget after a response completes, so the last response and native subagents stopping can exceed it. Set an organization or workspace spend limit in the Anthropic Console as the authoritative billing-side control, and leave headroom. The local cap covers csa workers using this state folder; interactive sessions and other machines need their own controls. See [spend-cap research](research/spend-caps.md) for sources and caveats.
 
 ## Reasoning summaries

@@ -100,6 +100,9 @@ class Account:
     spend_period: str = "month"
     spend_since: str | None = None  # UTC date or ISO datetime; starts a new accounting window
     spend_caps: list[SpendCap] = field(default_factory=list)
+    # Soft weekly cap on the OpenRouter key in the account's own settings.json (see openrouter.py).
+    # It refuses new starts like a quota step; override lets one through.
+    openrouter_weekly_cap_usd: float | None = None
 
 
 @dataclass
@@ -376,7 +379,13 @@ def _account_spend(runtime: str, account: str, item: dict[str, Any]) -> dict[str
                 date.fromisoformat(since)
         except (TypeError, ValueError):
             raise ValueError(f"{label} spend_since must be an ISO UTC date or datetime (for example 2026-10-23 or 2026-10-23T12:00:00Z)") from None
-    return {"spend_cap_usd": cap, "spend_period": period, "spend_since": since, "spend_caps": caps}
+    soft = item.get("openrouter_weekly_cap_usd")
+    if soft is not None:
+        if runtime != "claude":
+            raise ValueError(f"{label}: openrouter_weekly_cap_usd is supported for Claude accounts only")
+        soft = _spend_amount(label, "openrouter_weekly_cap_usd", soft)
+    return {"spend_cap_usd": cap, "spend_period": period, "spend_since": since, "spend_caps": caps,
+            "openrouter_weekly_cap_usd": soft}
 
 
 def _reviewer_entries(section: str, value: Any) -> list[ReviewerEntry]:
@@ -730,6 +739,8 @@ def dump_config(config: Config) -> str:
                     for cap in account.spend_caps
                 )
                 lines.append(f"spend_caps = [{entries}]")
+            if account.openrouter_weekly_cap_usd is not None:
+                lines.append(f"openrouter_weekly_cap_usd = {_toml_value(account.openrouter_weekly_cap_usd)}")
             for key, value in (("plan", account.plan), ("max_jobs", account.max_jobs), ("max_effort", account.max_effort)):
                 if value is not None:
                     lines.append(f"{key} = {_toml_value(value)}")

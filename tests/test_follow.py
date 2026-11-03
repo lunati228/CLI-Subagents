@@ -286,8 +286,7 @@ class FollowTests(TempHome):
         self.assertIn("| says: done on a1", lines)
         self.assertTrue(any(line.startswith("| started: Claude Code 9.9.9 · claude-haiku-5-5 · 1 MCP server") for line in lines))
         self.assertRegex(lines[-1], r"^\[csa\] DONE · success · \d+s · 1 tool call · account a1 · job \S+ · token [0-9a-f]{32}$")
-        self.assertEqual(lines[-5:-2], ["===== RESULT =====", "| done on a1", "===== END RESULT ====="])
-        self.assertEqual(lines[-2], "[csa] title: Claude Code: done on a1")
+        self.assertEqual(lines[-4:-1], ["===== RESULT =====", "| done on a1", "===== END RESULT ====="])
         job_id, token = FRAME_RE.search(lines[0]).groups()
         self.assertEqual(FRAME_RE.search(lines[-1]).groups(), (job_id, token))
         # The follower delivered the result: nothing is left for the wake-up or SessionStart hooks.
@@ -320,7 +319,6 @@ class FollowTests(TempHome):
             self.assertNotEqual(token, previous_token)
             self.assertEqual(FRAME_RE.search(lines[-1]).groups(), (current, token))
             self.assertTrue(lines[-1].startswith("[csa] DONE"), text)
-            self.assertTrue(lines[-2].startswith("[csa] title: Claude Code:"), text)
             self.assertIn("| tool: Read", lines)
             self.assertIn("| says: done on a1", lines)
             self.assertEqual(result_body(text), "done on a1")
@@ -417,7 +415,7 @@ class FollowTests(TempHome):
             self.assertIn("[csa] STILL RUNNING after", text)
             match = FOLLOW_RE.search(text)
             self.assertEqual(match.group(1), job_id)
-            self.assertEqual(text.splitlines()[-3], match.group(0))
+            self.assertEqual(text.splitlines()[-2], match.group(0))
             self.assertEqual(FRAME_RE.search(text.splitlines()[-1]).groups(), (job_id, match.group(3)))
             offset = int(match.group(2))
             self.assertLess(calls, 100)
@@ -441,7 +439,7 @@ class FollowTests(TempHome):
         token = FRAME_RE.search(lines[0]).group(2)
         self.assertIn(f"csa message {job_id} --reply-to {question['id']} - # csa-token {token}", lines)
         self.assertTrue(lines[-1].startswith(f"[csa] QUESTION from the worker (id {question['id']}) · job {job_id}"))
-        self.assertEqual(lines[-4], "Then keep watching with:")
+        self.assertEqual(lines[-3], "Then keep watching with:")
         offset = int(FOLLOW_RE.search(text).group(2))
         # The note after the question waits for the next follow.
         self.assertNotIn("| note for the main session: halfway there", lines)
@@ -522,8 +520,7 @@ class FollowTests(TempHome):
         self.assertTrue(lines[0].startswith("[csa] CLI Subagents · Antigravity · model gemini-test · access edit"), lines)
         self.assertEqual(
             [line for line in lines[1:lines.index("===== RESULT =====")] if not line.startswith("| running")],
-            ["| started: Antigravity · gemini-test", "| step: tool_call", "| says: gemini done",
-             "===== PROGRESS =====", "| gemini done", "===== END PROGRESS ====="],
+            ["| started: Antigravity · gemini-test", "| step: tool_call", "| says: gemini done"],
         )
         self.assertRegex(lines[-1], r"^\[csa\] DONE · success · \d+s · 1 tool call · account primary · job \S+ · token [0-9a-f]{32}$")
         self.assertEqual(result_body(text), "gemini done")

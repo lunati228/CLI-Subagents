@@ -135,7 +135,7 @@ class RelayShellTests(unittest.TestCase):
                          ROOT / "src/cli_subagents/templates/antigravity-plugin/agents" / f"cli-subagents-{runtime}.md"):
                 with self.subTest(path=path):
                     text = path.read_text(encoding="utf-8")
-                    self.assertIn(f"csa run --follow --window 60 --runtime {runtime} --relay-file '<INBOX_PATH>'", text)
+                    self.assertIn(f"csa run --follow --window 180 --runtime {runtime} --relay-file '<INBOX_PATH>'", text)
                     self.assertIn("csa message <JOB> --reply-to <ID> --relay-file '<INBOX_PATH>'", text)
                     self.assertIn("csa message <JOB> --follow --from <OFFSET> --window <WINDOW> --relay-file '<INBOX_PATH>'", text)
                     self.assertIn("csa relay-path", text)

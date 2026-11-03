@@ -102,7 +102,7 @@ reasoning_summary = "detailed"  # "concise", "auto", "none" or "off" also accept
 
 `"none"` requests no summaries; `"off"` adds no override and leaves Codex's defaults alone. These are the summary levels in the [official OpenAI configuration reference](https://developers.openai.com/codex/config-reference/), plus csa's `"off"` switch. Summaries depend on the model and account: on 2026-10-19, `gpt-6.1-sol` emitted one with `"detailed"` but none with its default or `"auto"`; `gpt-6-luna` on a free account emitted none even with `"detailed"`. A quiet reasoning stream does not mean the worker has stopped.
 
-In Claude Code, the relay returns its output about once a minute using `--window 60`. A terminal follow still streams immediately; see [follow windows](configuration.md#follow-windows).
+Reasoning summaries are not copied by the relays; they show the worker's messages (`agent_message` items), the same text the Codex app shows between steps. A terminal follow still prints every event; see [follow windows](configuration.md#follow-windows).
 
 ## Using it
 

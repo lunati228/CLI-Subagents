@@ -30,7 +30,7 @@ class CodexAgentDefinitionTests(unittest.TestCase):
                 self.assertEqual(role["model"], "gpt-6-luna")
                 self.assertEqual(role["model_reasoning_effort"], "low")
                 self.assertIn("subagent_start", role["description"])
-                self.assertIn(f"csa run --follow --window 60 --runtime {runtime}", role["developer_instructions"])
+                self.assertIn(f"csa run --follow --window 180 --runtime {runtime}", role["developer_instructions"])
                 self.assertEqual(role["features"], {
                     "apps": False, "plugins": False, "memories": False, "request_permissions_tool": False,
                 })
@@ -56,7 +56,7 @@ class CodexAgentDefinitionTests(unittest.TestCase):
         required = (
             "`model=...`", "`access=...`", "`account=...`", "`effort=...`", "`cwd=...`", "`timeout=...`", "`override=...`",
             "Never set override on your own judgment", "how much of the 5-hour window is left",
-            "csa message <JOB> --follow --from <OFFSET> --window <WINDOW> --relay-file", "--window 60", "csa cancel <JOB>",
+            "csa message <JOB> --follow --from <OFFSET> --window <WINDOW> --relay-file", "--window 180", "csa cancel <JOB>",
             "A finished job continues the same worker conversation", "resetting OFFSET if JOB changed",
             "`session_id`", "`write_stdin`", "Retain every output chunk in order",
             '"process still running" notice is not a csa status', "If output was truncated, stop",

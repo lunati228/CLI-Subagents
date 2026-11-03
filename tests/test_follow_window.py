@@ -60,7 +60,7 @@ class FollowWindowTests(TempHome):
 
     def test_window_default_and_invalid_values(self):
         parser = cli.build_parser()
-        self.assertEqual(parser.parse_args(["follow", "job", "--window"]).window, 60)
+        self.assertEqual(parser.parse_args(["follow", "job", "--window"]).window, 180)
         self.assertIsNone(parser.parse_args(["follow", "job"]).window)
         for value in ("0", "-1", "0.5", "nan"):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
@@ -84,7 +84,7 @@ class FollowWindowTests(TempHome):
         root = Path(__file__).resolve().parents[1]
         for runtime in ("claude", "codex", "antigravity", "opencode"):
             text = (root / "agents" / f"cli-subagents-{runtime}.md").read_text(encoding="utf-8")
-            self.assertIn("csa run --follow --window 60", text)
+            self.assertIn("csa run --follow --window 180", text)
             self.assertIn("csa follow <JOB> --from <OFFSET> --window <WINDOW> # csa-token <TOKEN>", text)
             self.assertIn("csa message <JOB> --follow --from <OFFSET> --window <WINDOW> -", text)
             self.assertIn("WINDOW must be the saved positive integer", text)

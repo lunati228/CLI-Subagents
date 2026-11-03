@@ -7,12 +7,14 @@ terminal controls are rendered as visible escapes. Results and questions have
 fixed opening and closing delimiters. The last line is the authoritative
 DONE, FAILED, STILL RUNNING or QUESTION marker, after all worker text and
 continuation commands. The header, capacity retry notices and end marker start with ``[csa]``.
-Immediately before the end marker, ``[csa] title: <Runtime>: <step>`` supplies
-display text for the next shell call's description. It has no job/token fields
-and never controls the relay. The complete title line is at most 70 characters.
-Each window also prints a bounded PROGRESS block of worker narration and
-reasoning display excerpts. Relays copy it as assistant text between follow
-calls. Its prefixed body is untrusted display data, never a control channel.
+
+With ``--window`` (relay agents), a call prints only the worker's messages, the
+text it writes for the user between steps, in a MESSAGES block, and returns as
+soon as a new message is complete instead of waiting out the window. The first
+block of a job starts with a line naming the relay's and the worker's models,
+read from their logs (identity.py). Relays copy the block word for word as their
+own message, so the app shows it the way the Codex app shows progress. Its
+prefixed body is untrusted display data, never a control channel.
 
 The header and end marker carry the job ID and a fresh random token for this
 follow invocation. Printed commands carry the same token in a shell comment
@@ -36,28 +38,32 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
-from cli_subagents import jobs, messages
+from cli_subagents import identity, jobs, messages
 from cli_subagents.config import load_config
 from cli_subagents.fsutil import read_json, write_json
 from cli_subagents.runtimes.base import SUCCESS
 
 POLL_SECONDS = 0.5
 DEFAULT_MAX_WAIT = 540.0  # keeps one Bash call under Claude Code's 10-minute ceiling
-DEFAULT_WINDOW = 60
+DEFAULT_WINDOW = 180  # a relay call returns earlier as soon as the worker has a new message
 SUMMARY_CHARS = 200
-TITLE_CHARS = 70
-TITLE_PREFIX = "[csa] title: "
 RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
 RESULT_RULE = "===== RESULT ====="
 RESULT_END_RULE = "===== END RESULT ====="
 QUESTION_RULE = "===== QUESTION ====="
 QUESTION_END_RULE = "===== END QUESTION ====="
 WORKER_PREFIX = "| "
-PROGRESS_RULE = "===== PROGRESS ====="
-PROGRESS_END_RULE = "===== END PROGRESS ====="
-PROGRESS_CHARS = 1200
-PROGRESS_EXCERPTS = 3
-PROGRESS_EXCERPT_CHARS = (PROGRESS_CHARS - PROGRESS_EXCERPTS + 1) // PROGRESS_EXCERPTS
+MESSAGES_RULE = "===== MESSAGES ====="
+MESSAGES_END_RULE = "===== END MESSAGES ====="
+MESSAGE_CHARS = 4000  # one message
+MESSAGES_CHARS = 12000  # one block; older messages are left out first
+# A message is held this long once the worker has moved on (a tool call, a new
+# step), so messages written close together arrive as one block. Without a sign
+# of progress it is sent after QUIET_SECONDS: until then it may be the final
+# answer, which the result shows instead.
+SETTLE_SECONDS = 1.0
+QUIET_SECONDS = 15.0
+IDENTITY_SHOWN = "identity-shown"
 
 # A carriage return, backspace or terminal escape must not erase the prefix.
 _DISPLAY_ESCAPES = {
@@ -104,8 +110,8 @@ def reasoning_line(text: str) -> str:
 
 
 # Strip terminal sequences before removing controls, so their payloads do not
-# become visible title text. This covers CSI, OSC and other string escapes.
-_TITLE_ESCAPES = re.compile(
+# become visible message text. This covers CSI, OSC and other string escapes.
+_TERMINAL_SEQUENCES = re.compile(
     r"(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c|$)"
     r"|(?:\x1b[P^_X]|\x90|\x98|\x9e|\x9f).*?(?:\x1b\\|\x9c|$)"
     r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b[ -/]*[@-Z\\-_]",
@@ -113,78 +119,36 @@ _TITLE_ESCAPES = re.compile(
 )
 
 
-def title_text(value: str) -> str:
-    """Display-only text, with no framing, token or shell-comment syntax."""
+def display_text(value: str) -> str:
+    """Worker text for a relay to copy: no terminal sequences, control or format characters."""
 
-    value = _TITLE_ESCAPES.sub("", value)
-    value = "".join(" " if ch.isspace() else ch for ch in value
-                    if ch.isspace() or not unicodedata.category(ch).startswith("C"))
-    value = re.sub(r"\[csa\]", "", value, flags=re.IGNORECASE).replace("[", "").replace("]", "")
-    value = re.sub(r"\b(?:csa-)?token\b\s*[:=]?\s*\S*", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"[0-9a-f]{32,}", "", value, flags=re.IGNORECASE)
-    return " ".join(value.split("#", 1)[0].split())
+    value = _TERMINAL_SEQUENCES.sub("", value)
+    value = "".join(ch for ch in value if ch in "\n\t" or not unicodedata.category(ch).startswith("C"))
+    text = "\n".join(line.rstrip() for line in value.split("\n")).strip("\n")
+    return text if len(text) <= MESSAGE_CHARS else text[: MESSAGE_CHARS - 3].rstrip() + "..."
 
 
-class ProgressTitle:
-    """Prefer the latest narration or reasoning summary, then a tool/command."""
+def said(lines: list[str]) -> tuple[list[str], bool]:
+    """The `says:` texts in one event's display lines, and whether another line follows the last."""
 
-    def __init__(self) -> None:
-        self.steps: dict[int, str] = {}
-
-    def remember(self, lines: list[str]) -> None:
-        for line in lines:
-            for priority, prefixes in enumerate((("thinking: ", "says: "),
-                                                  ("tool: ", "$ ", "edited: ", "search: ", "step: "))):
-                prefix = next((p for p in prefixes if line.startswith(p)), None)
-                if prefix is not None:
-                    text = title_text(line[len(prefix):])
-                    if text:
-                        self.steps[priority] = text
-                    break
-
-    def render(self, runtime: str) -> str:
-        label = RUNTIME_LABELS.get(runtime, "Worker")
-        step = self.steps[min(self.steps)] if self.steps else "working"
-        return short(f"{label}: {step}", TITLE_CHARS - len(TITLE_PREFIX))
-
-
-class ProgressBlock:
-    """Bounded display excerpts from assistant narration, never tool arguments."""
-
-    def __init__(self) -> None:
-        self.excerpts: list[str] = []
-
-    def remember(self, lines: list[str]) -> None:
-        current: list[str] = []
-        kind = ""
-
-        def save() -> None:
-            if not current:
-                return
-            value = _TITLE_ESCAPES.sub("", "\n".join(current))
-            value = "".join(ch for ch in value if not unicodedata.category(ch).startswith("C")
-                            or ch.isspace())
-            # This is an excerpt of already-visible worker text, not a model
-            # summary. Thinking gets its title and first sentence only.
-            value = reasoning_line(value) if kind == "thinking: " else short(value, PROGRESS_EXCERPT_CHARS)
-            if value and (not self.excerpts or value != self.excerpts[-1]):
-                self.excerpts.append(value)
-                self.excerpts = self.excerpts[-PROGRESS_EXCERPTS:]
-
-        for line in lines:
-            prefix = next((p for p in ("says: ", "thinking: ") if line.startswith(p)), None)
-            if prefix:
-                save()
-                current, kind = [line[len(prefix):]], prefix
-            elif current and (line.startswith("  ") or not line):
-                current.append(line[2:] if line.startswith("  ") else "")
-            else:
-                save()
-                current, kind = [], ""
-        save()
-
-    def lines(self) -> list[str]:
-        return self.excerpts
+    texts: list[str] = []
+    current: list[str] | None = None
+    after = False
+    for line in lines:
+        if line.startswith("says: "):
+            if current is not None:
+                texts.append("\n".join(current))
+            current, after = [line[len("says: "):]], False
+        elif current is not None and (line.startswith("  ") or not line):
+            current.append(line[2:])
+        else:
+            if current is not None:
+                texts.append("\n".join(current))
+                current = None
+            after = bool(texts)
+    if current is not None:
+        texts.append("\n".join(current))
+    return texts, after
 
 
 def plural(count: int, word: str) -> str:
@@ -223,15 +187,15 @@ class Describer:
     def flush(self) -> list[str]:
         return []
 
-    def progress_lines(self) -> list[str]:
-        """Buffered progress for a title, without consuming resumable output."""
-
-        return []
-
     def drop_pending(self) -> None:
         self.pending_offset = None
 
     def starts_attempt(self, event: dict[str, Any]) -> bool:
+        return False
+
+    def ends(self, event: dict[str, Any]) -> bool:
+        """The worker's last event for this run: whatever it said just before is its answer."""
+
         return False
 
 
@@ -278,6 +242,9 @@ def _tool_result_text(content: Any) -> str:
 class ClaudeDescriber(Describer):
     def starts_attempt(self, event: dict[str, Any]) -> bool:
         return event.get("type") == "system" and event.get("subtype") == "init"
+
+    def ends(self, event: dict[str, Any]) -> bool:
+        return event.get("type") == "result"
 
     def describe(self, event: dict[str, Any], offset: int = 0) -> list[str]:
         kind = event.get("type")
@@ -348,6 +315,9 @@ def _codex_plan(item: dict[str, Any]) -> list[str]:
 class CodexDescriber(Describer):
     def starts_attempt(self, event: dict[str, Any]) -> bool:
         return event.get("type") == "thread.started"
+
+    def ends(self, event: dict[str, Any]) -> bool:
+        return event.get("type") in ("turn.completed", "turn.failed")
 
     def describe(self, event: dict[str, Any], offset: int = 0) -> list[str]:
         kind = event.get("type")
@@ -427,8 +397,8 @@ class AntigravityDescriber(Describer):
     def starts_attempt(self, event: dict[str, Any]) -> bool:
         return event.get("event") == "init"
 
-    def progress_lines(self) -> list[str]:
-        return block("thinking: " if self._kind == "thinking" else "says: ", self._text) if self._text.strip() else []
+    def ends(self, event: dict[str, Any]) -> bool:
+        return event.get("event") == "result"
 
     def flush(self) -> list[str]:
         text, kind = self._text, self._kind
@@ -508,6 +478,10 @@ class OpenCodeDescriber(Describer):
         return event.get("type") == "step_start" and (
             not self._started or bool(session and session != self._session)
         )
+
+    def ends(self, event: dict[str, Any]) -> bool:
+        part = event.get("part")
+        return event.get("type") == "step_finish" and isinstance(part, dict) and part.get("reason") == "stop"
 
     def describe(self, event: dict[str, Any], offset: int = 0) -> list[str]:
         kind = event.get("type")
@@ -671,7 +645,7 @@ def decode(raw: bytes) -> dict[str, Any] | None:
 
 class Follower:
     def __init__(self, job_id: str, start: int | None, max_wait: float, out: TextIO | None = None,
-                 window: int | None = None) -> None:
+                 window: int | None = None, marker: str | None = None) -> None:
         if window is not None and (type(window) is not int or window < 1):
             raise ValueError("--window must be a positive integer")
         self.job_id = job_id
@@ -687,8 +661,15 @@ class Follower:
         self.out = out
         self.token = secrets.token_hex(16)  # never stored in worker-readable job files
         self.describer = describer_for(self.spec.runtime)
-        self.title = ProgressTitle()
-        self.progress = ProgressBlock()
+        # Relay mode: print only the worker's messages and return once a new one is complete.
+        self.relay = window is not None
+        self.markers = [name for name in (marker, job_id) if name]  # find the relay's own transcript
+        self.record = identity.WorkerRecord(self.spec.runtime)
+        self.identity_line: str | None = None
+        self.identity_shown = (self.folder / IDENTITY_SHOWN).exists()
+        self.news: list[str] = []  # complete messages not printed yet
+        self.news_at = 0.0  # when the newest one arrived (monotonic)
+        self.moved_on = False  # the worker did something after the newest message
         self.inits = 0  # attempt-start events seen so far
         self.reported = 0  # attempts whose account line was printed (or needs none)
         self.announced: str | None = None  # account named in the header
@@ -719,15 +700,60 @@ class Follower:
         # A shell comment preserves the existing CLI arguments.
         return f"{text} # csa-token {self.token}"
 
-    def emit_title(self) -> None:
-        self.title.remember(self.describer.progress_lines())
-        self.emit(TITLE_PREFIX + self.title.render(self.spec.runtime))
+    def emit_messages(self) -> None:
+        """The identity line and new messages, newest kept when the block would grow too long."""
 
-    def emit_progress(self) -> None:
-        if self.progress.lines():
-            self.emit(PROGRESS_RULE)
-            self.emit_worker(*self.progress.lines())
-            self.emit(PROGRESS_END_RULE)
+        news, skipped = list(self.news), 0
+        while len(news) > 1 and sum(map(len, news)) > MESSAGES_CHARS:
+            news.pop(0)
+            skipped += 1
+        texts = ([self.identity_line] if self.identity_line else []) + (
+            [f"({plural(skipped, 'earlier message')} left out)"] if skipped else []) + news
+        self.news.clear()
+        if not texts:
+            return
+        self.emit(MESSAGES_RULE)
+        for index, text in enumerate(texts):
+            if index:
+                self.emit_worker("")
+            self.emit_worker(text)
+        self.emit(MESSAGES_END_RULE)
+        if self.identity_line:
+            self.identity_line = None
+            try:
+                (self.folder / IDENTITY_SHOWN).write_text("", encoding="utf-8")
+            except OSError:
+                pass  # shown again next time at worst
+
+    def add_news(self, texts: list[str], moved_on: bool) -> None:
+        texts = [text for text in map(display_text, texts) if text.strip()]
+        if texts:
+            self.news += texts
+            self.news_at = time.monotonic()
+            self.moved_on = moved_on
+
+    def check_identity(self, final: bool = False) -> None:
+        if not self.relay or self.identity_shown:
+            return
+        attempts = self.status.get("attempts") or []
+        account = self.status.get("account") or (attempts[0].get("account") if attempts else None) or self.spec.account
+        try:
+            worker = identity.worker_identity(self.record, account, final)
+            if worker is None:
+                return  # the worker's records aren't written yet
+            relay = identity.relay_identity(self.markers)
+            self.identity_line = identity.sentence(relay, worker, self.spec.runtime, self.spec.model, self.spec.effort)
+        except Exception:
+            pass  # identity is display text; it never stops a follow
+        self.identity_shown = True
+
+    def ready(self) -> bool:
+        """Relay mode: return now, so the relay can show what is new."""
+
+        if self.news:
+            quiet = time.monotonic() - self.news_at
+            return (self.moved_on and quiet >= SETTLE_SECONDS) or quiet >= QUIET_SECONDS
+        return self.identity_line is not None
 
     # Steps
 
@@ -751,6 +777,8 @@ class Follower:
             parts.append(f"account {account}")
             self.announced = account
         self.control(" · ".join(parts))
+        if not self.replay:
+            return  # the room note belongs to a job's first call only
         try:
             config = load_config()
             if any(runtime.max_jobs_by_room or runtime.pools for runtime in config.runtimes.values()):
@@ -772,7 +800,6 @@ class Follower:
                 break
             self._feed(offset, raw)
         self.describer.drop_pending()  # everything before the offset was printed already
-        self.progress = ProgressBlock()  # replay rebuilds state, not new narration
         attempts = self.status.get("attempts") or []
         self.reported = min(self.inits, len(attempts))
 
@@ -781,14 +808,12 @@ class Follower:
         if event is None:
             return []
         try:
+            self.record.observe(event)
             lines = []
             if self.describer.starts_attempt(event):
                 self.inits += 1
                 lines += self.attempt_lines(self.inits)
-            output = self.describer.describe(event, offset)
-            self.title.remember(output)
-            self.progress.remember(output)
-            return lines + output
+            return lines + self.describer.describe(event, offset)
         except Exception:  # one odd event never stops the follow
             return []
 
@@ -840,8 +865,15 @@ class Follower:
                                  f"({retry['number']} of {retry['total']})")
                     continue
             output = self._feed(offset, raw)
-            if output:
-                self.emit_worker(*output)
+            if not self.relay:
+                if output:
+                    self.emit_worker(*output)
+                continue
+            texts, after = said(output)
+            if texts:
+                self.add_news(texts, after)
+            elif self.news and event is not None and not self.describer.ends(event):
+                self.moved_on = True  # a tool call or step after the message: it was not the answer
 
     def resume_offset(self) -> int:
         pending = self.describer.pending_offset
@@ -866,15 +898,15 @@ class Follower:
                 if record_id in open_ids and record_id not in already and not done:
                     stop = record
                     break
-                self.emit_worker(*block("asked the main session: ", record.get("text")))
-                if record_id in replies:
-                    self.emit_worker(*block("  answer: ", replies[record_id]))
+                if not self.relay:
+                    self.emit_worker(*block("asked the main session: ", record.get("text")))
+                    if record_id in replies:
+                        self.emit_worker(*block("  answer: ", replies[record_id]))
+            elif self.relay:
+                if record_id not in already:
+                    self.add_news([str(record.get("text") or "")], True)
             else:
                 self.emit_worker(*block("note for the main session: ", record.get("text")))
-                if record_id not in already:
-                    narration = block("says: ", record.get("text"))
-                    self.progress.remember(narration)
-                    self.title.remember(narration)
             printed.add(record_id)
         if stop is not None:
             printed.add(str(stop["id"]))
@@ -899,7 +931,10 @@ class Follower:
             if not record_id or (record_id in already and not self.review_replay) or record_id in fresh:
                 continue
             fresh.append(record_id)
-            if not record.get("quiet"):
+            if self.relay:
+                if record.get("decision") != "approve" and record_id not in already:  # denials only, once
+                    self.add_news([review_line(record)], True)
+            elif not record.get("quiet"):
                 self.emit_worker(review_line(record))
         self.review_replay = False
         if set(fresh) - already:
@@ -922,11 +957,12 @@ class Follower:
     def finish(self) -> int:
         self.read_events(final=True)
         lines = self.describer.flush()
-        self.title.remember(lines)
-        self.progress.remember(lines)
-        lines += self.attempt_lines()
-        if lines:
-            self.emit_worker(*lines)
+        if self.relay:
+            self.add_news(said(lines)[0], False)
+        else:
+            lines += self.attempt_lines()
+            if lines:
+                self.emit_worker(*lines)
         self.review_lines()
         self.worker_messages(done=True)
         status = self.status
@@ -934,11 +970,14 @@ class Follower:
         text = str(result.get("result") or "")
         outcome = status.get("outcome") or "error"
         jobs.claim_delivery(self.job_id)  # the forwarder hands the result on: no wake-up or pending notice
-        self.emit_progress()
+        if self.relay:
+            if self.news and " ".join(self.news[-1].split()) == " ".join(display_text(text).split()):
+                self.news.pop()  # the final message is the result, shown once below
+            self.check_identity(final=True)
+            self.emit_messages()
         self.emit(RESULT_RULE)
         self.emit_worker(text)
         self.emit(RESULT_END_RULE)
-        self.emit_title()
         if outcome == SUCCESS:
             account = status.get("account") or self.announced or "-"
             self.control(
@@ -951,9 +990,8 @@ class Follower:
         return 1
 
     def still_running(self) -> int:
-        self.emit_progress()
+        self.emit_messages()
         self.emit("Keep watching with:", self.command(self.follow_command()))
-        self.emit_title()
         self.control(f"STILL RUNNING after {duration(self.elapsed())}")
         return 0
 
@@ -962,14 +1000,13 @@ class Follower:
         return command + (f" --window {self.window}" if self.window is not None else "")
 
     def question(self, record: dict[str, Any]) -> int:
-        self.emit_progress()
+        self.emit_messages()
         question_id = str(record["id"])
         if not re.fullmatch(r"[0-9a-f]{8}", question_id):
             # A malformed outbox record must not inject lines or shell syntax.
             self.emit(RESULT_RULE)
             self.emit_worker("Cannot relay a worker question with an invalid id.", str(record.get("text") or ""))
             self.emit(RESULT_END_RULE)
-            self.emit_title()
             self.control("FAILED · invalid worker question id")
             return 1
         self.emit(QUESTION_RULE)
@@ -982,7 +1019,6 @@ class Follower:
             "Then keep watching with:",
             self.command(self.follow_command()),
         )
-        self.emit_title()
         self.control(f"QUESTION from the worker (id {question_id})")
         return 0
 
@@ -1007,6 +1043,10 @@ class Follower:
             question = self.worker_messages(done=False)
             if question is not None:
                 return self.question(question)
+            if self.relay:
+                self.check_identity()
+                if self.ready():
+                    return self.still_running()
             if time.monotonic() >= deadline:
                 return self.still_running()
             time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
@@ -1026,7 +1066,11 @@ def failed_start(message: str, out: TextIO | None = None) -> int:
 
 
 def follow(job_id: str, start: int | None = None, max_wait: float = DEFAULT_MAX_WAIT, out: TextIO | None = None,
-           window: int | None = None) -> int:
-    """Print a job's events from byte `start` until it ends, asks a question, or `max_wait` passes."""
+           window: int | None = None, marker: str | None = None) -> int:
+    """Print a job's events from byte `start` until it ends, asks a question, or `max_wait` passes.
 
-    return Follower(job_id, start, max_wait, out, window).run()
+    With `window`, print only the worker's messages and return once a new one is
+    complete; `marker` (the relay's inbox file name) helps find the relay's transcript.
+    """
+
+    return Follower(job_id, start, max_wait, out, window, marker).run()

@@ -417,7 +417,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.follow:
         from cli_subagents.follow import follow
 
-        return follow(status["job_id"], None, args.max_wait, window=args.window)
+        return follow(status["job_id"], None, args.max_wait, window=args.window, marker=_relay_marker(args))
     print(f"Started {status['job_id']}", file=sys.stderr)
     status = jobs.wait_for(status["job_id"], args.timeout + 960)
     result = jobs.read_result(status["job_id"], 1_000_000)
@@ -427,6 +427,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(result["result"])
     print(json.dumps(tools.summarize(result), indent=2, default=str), file=sys.stderr)
     return 0 if result.get("outcome") == "success" else 1
+
+
+def _relay_marker(args: argparse.Namespace) -> str | None:
+    """The relay's inbox file name: it appears in the relay's own transcript (identity line)."""
+
+    return Path(args.relay_file).name if getattr(args, "relay_file", None) else None
 
 
 def cmd_follow(args: argparse.Namespace) -> int:
@@ -472,7 +478,7 @@ def _message(args: argparse.Namespace) -> int:
         job_id = new_job["job_id"] if new_job else args.job_id
         # A continuation has its own event log; an old job's offset cannot apply.
         start = None if new_job else args.from_offset
-        return follow(job_id, start, args.max_wait, window=args.window)
+        return follow(job_id, start, args.max_wait, window=args.window, marker=_relay_marker(args))
     _print(result)
     return 0
 
@@ -661,8 +667,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     for watcher in (run_parser, follow_parser, message):
         watcher.add_argument("--window", type=_positive_seconds, nargs="?", const=DEFAULT_WINDOW, metavar="SECONDS",
-                             help="Return after this many seconds and repeat the window in continuations "
-                             "(bare --window: 60; omitted: keep --max-wait behavior).")
+                             help="Relay mode: print only the worker's messages, return as soon as a new one is "
+                             "complete or after this many seconds, and repeat the window in continuations "
+                             f"(bare --window: {DEFAULT_WINDOW}; omitted: print every event, keep --max-wait behavior).")
     jobs_parser = sub.add_parser("jobs", help="List recent jobs.")
     jobs_parser.add_argument("--limit", type=int, default=20)
 

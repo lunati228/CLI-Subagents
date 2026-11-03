@@ -45,7 +45,7 @@ class AntigravityAgentDefinitionTests(unittest.TestCase):
                     "name", "description", "tools", "mainAgent", "subagent", "model", "commandExecutionPolicy",
                 })
                 self.assertIn("subagent_start", json.loads(metadata["description"]))
-                self.assertIn(f"csa run --follow --window 60 --runtime {runtime}", body)
+                self.assertIn(f"csa run --follow --window 180 --runtime {runtime}", body)
 
     def test_authenticated_framing_matches_the_claude_relays(self):
         for runtime in RUNTIMES:

@@ -14,7 +14,7 @@ from helpers import TempHome
 
 import re
 
-from cli_subagents import accounts, jobs, mcp_server, runner, sync
+from cli_subagents import accounts, fsutil, jobs, mcp_server, runner, sync
 from cli_subagents.config import load_config
 from cli_subagents.fsutil import is_link, read_json, write_json
 from cli_subagents.runtimes.base import clean_environment
@@ -308,14 +308,17 @@ class JobTests(TempHome):
         self.write_config(accounts=("a1",))
         text = (self.home / "config.toml").read_text(encoding="utf-8")
         (self.home / "config.toml").write_text("max_depth = 2\n" + text, encoding="utf-8")
-        job = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), access="read")
+        job = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), access="edit")
         self.wait(job["job_id"])
         argv = self.records()[0]["argv"]
         self.assertNotIn("--disallowedTools", argv)
         allowed = argv[argv.index("--allowedTools") + 1].split(",")
         self.assertIn("mcp__plugin_cli-subagents_cli-subagents", allowed)
-        self.assertIn("Bash(csa:*)", allowed)
         self.assertIn("subagent_start", argv[argv.index("--append-system-prompt") + 1])
+        settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
+        self.assertIn("Bash(csa:*)", settings["permissions"]["allow"])
+        # claude.cmd on Windows: cmd.exe must get these arguments unchanged.
+        self.assertIsNone(fsutil.batch_argument_problem(["claude.cmd", *argv[1:]]))
 
     def test_worker_environment_and_arguments(self):
         self.write_config(accounts=("a1",))

@@ -543,7 +543,8 @@ class ClaudeRuntime:
         if spec.max_budget_usd is not None:
             argv += ["--max-budget-usd", format(spec.max_budget_usd, ".6f")]
         warnings: list[str] = []
-        argv += ["--settings", str(self._job_settings(spec.job_id, setup, warnings, access=spec.access))]
+        argv += ["--settings", str(self._job_settings(spec.job_id, setup, warnings, access=spec.access,
+                                                      can_delegate=spec.can_delegate))]
         servers = dict((read_json(Path(setup["mcp_config_path"]), {}) or {}).get("mcpServers") or {}) if setup.get("mcp_config_path") else {}
         servers[PARENT_SERVER] = parent_server(spec.job_id)
         job_mcp = jobs_dir() / spec.job_id / "mcp.json"
@@ -556,7 +557,9 @@ class ClaudeRuntime:
         allowed = [f"mcp__{PARENT_SERVER}", *(READ_ONLY_TOOLS if spec.access == "read" else ())]
         if spec.can_delegate:
             # The depth counter in the environment stops the helpers from going further.
-            allowed += [*SELF_TOOLS.split(","), "Bash(csa:*)"]
+            # Bash(csa:*) goes in the job settings: unquoted in this list, cmd.exe would
+            # misread its parentheses when the binary is claude.cmd.
+            allowed += SELF_TOOLS.split(",")
         else:
             argv += ["--disallowedTools", SELF_TOOLS]
         argv += [
@@ -578,7 +581,8 @@ class ClaudeRuntime:
         stdin = ("" if spec.resume_session else parent_note(spec.parent, "claude")) + prompt
         return Launch(argv=argv, env=env, stdin=stdin, session_id=session_id, warnings=warnings)
 
-    def _job_settings(self, job_id: str, setup: dict[str, Any], warnings: list[str], *, access: str = "edit") -> Path:
+    def _job_settings(self, job_id: str, setup: dict[str, Any], warnings: list[str], *, access: str = "edit",
+                      can_delegate: bool = False) -> Path:
         """The account's overlay plus inbox delivery and, for read jobs, shell validation.
 
         The hook is added next to the user's own hooks, never in place of them.
@@ -605,6 +609,13 @@ class ClaudeRuntime:
             # A primary account/project can disable hooks too. The job overlay
             # must keep this enforcement hook enabled.
             settings["disableAllHooks"] = False
+        if can_delegate:
+            # The relay agents start helpers with `csa run`.
+            permissions = settings.get("permissions")
+            permissions = dict(permissions) if isinstance(permissions, dict) else {}
+            allow = permissions.get("allow")
+            permissions["allow"] = [*(allow if isinstance(allow, list) else []), "Bash(csa:*)"]
+            settings["permissions"] = permissions
         path = jobs_dir() / job_id / "settings.json"
         write_json(path, settings)
         return path

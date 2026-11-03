@@ -56,6 +56,9 @@ WORKER_PREFIX = "| "
 MESSAGES_RULE = "===== MESSAGES ====="
 MESSAGES_END_RULE = "===== END MESSAGES ====="
 COPY_LINE = "Now write the block below as your message, word for word, then run the command above."
+REASK_LINE = ("You didn't write the block below. Write it now as your message, word for word, "
+              "then run the command above again.")
+RELAY_PENDING = "relay-pending.json"  # the last block a relay should have written, checked on its next call
 MESSAGE_CHARS = 4000  # one message
 MESSAGES_CHARS = 12000  # one block; older messages are left out first
 # A message is held this long once the worker has moved on (a tool call, a new
@@ -701,8 +704,8 @@ class Follower:
         # A shell comment preserves the existing CLI arguments.
         return f"{text} # csa-token {self.token}"
 
-    def emit_messages(self) -> None:
-        """The identity line and new messages, newest kept when the block would grow too long."""
+    def emit_messages(self) -> str:
+        """The identity line and new messages, newest kept when the block would grow too long; returns the body."""
 
         news, skipped = list(self.news), 0
         while len(news) > 1 and sum(map(len, news)) > MESSAGES_CHARS:
@@ -712,12 +715,10 @@ class Follower:
             [f"({plural(skipped, 'earlier message')} left out)"] if skipped else []) + news
         self.news.clear()
         if not texts:
-            return
+            return ""
+        body = "\n\n".join(texts)
         self.emit(MESSAGES_RULE)
-        for index, text in enumerate(texts):
-            if index:
-                self.emit_worker("")
-            self.emit_worker(text)
+        self.emit_worker(body)
         self.emit(MESSAGES_END_RULE)
         if self.identity_line:
             self.identity_line = None
@@ -725,6 +726,46 @@ class Follower:
                 (self.folder / IDENTITY_SHOWN).write_text("", encoding="utf-8")
             except OSError:
                 pass  # shown again next time at worst
+        return body
+
+    def missed_block(self) -> str | None:
+        """Relay mode: the last block again when the relay's transcript shows it wasn't written.
+
+        Asks once per block. Without the relay's Claude Code transcript (other
+        hosts) or once the job has ended, nothing is re-asked.
+        """
+
+        path = self.folder / RELAY_PENDING
+        pending = read_json(path, None)
+        if not isinstance(pending, dict):
+            return None
+        text = str(pending.get("text") or "")
+        missed = None
+        if (text and not pending.get("asked") and pending.get("offset") == self.position
+                and self.status.get("state") in jobs.ACTIVE_STATES):
+            try:
+                transcript = identity.relay_transcript(self.markers)
+                needle = WORKER_PREFIX + text.split("\n", 1)[0].translate(_DISPLAY_ESCAPES)
+                written = identity.written_after(transcript, needle) if transcript else None
+                if written is not None and not identity.copied(text, written):
+                    missed = text
+            except Exception:
+                pass  # the check is a convenience; never stop a follow over it
+        try:
+            if missed is None:
+                path.unlink(missing_ok=True)
+            else:
+                write_json(path, {**pending, "asked": True})
+        except OSError:
+            pass
+        return missed
+
+    def reask(self, text: str) -> int:
+        self.emit("Keep watching with:", self.command(self.follow_command()), REASK_LINE, MESSAGES_RULE)
+        self.emit_worker(text)
+        self.emit(MESSAGES_END_RULE)
+        self.control(f"STILL RUNNING after {duration(self.elapsed())}")
+        return 0
 
     def add_news(self, texts: list[str], moved_on: bool) -> None:
         texts = [text for text in map(display_text, texts) if text.strip()]
@@ -995,7 +1036,12 @@ class Follower:
         if self.relay and (self.news or self.identity_line):
             # Last before the status, so copying it is the relay's next step, not a detail it skips.
             self.emit(COPY_LINE)
-        self.emit_messages()
+        body = self.emit_messages()
+        if self.relay and body:
+            try:
+                write_json(self.folder / RELAY_PENDING, {"offset": self.resume_offset(), "text": body})
+            except OSError:
+                pass  # then this block just isn't checked
         self.control(f"STILL RUNNING after {duration(self.elapsed())}")
         return 0
 
@@ -1032,6 +1078,10 @@ class Follower:
         self.status = jobs.read_status(self.job_id)
         self.header()
         self.catch_up()
+        if self.relay:
+            missed = self.missed_block()
+            if missed is not None:
+                return self.reask(missed)
         deadline = time.monotonic() + self.max_wait
         while True:
             # Status first: once it says done, every event is already in the file.

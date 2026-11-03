@@ -7,6 +7,9 @@ effort it sent. The worker's come from its CLI's own records: Claude Code's
 init event and session transcript, Codex's rollout file (`turn_context`) and
 Antigravity's init event. OpenCode's JSON output does not name the model, so
 the line says so. Every value is reduced to a short plain token before display.
+
+The same relay transcript also shows whether the relay wrote the last message
+block it was given (`written_after`, `copied`), so `csa follow` can ask again.
 """
 
 from __future__ import annotations
@@ -146,6 +149,62 @@ def relay_transcript(markers: list[str], env: Mapping[str, str] | None = None) -
 def relay_identity(markers: list[str], env: Mapping[str, str] | None = None) -> tuple[str, str | None] | None:
     path = relay_transcript(markers, env)
     return transcript_model(path) if path else None
+
+
+def _result_text(content: Any) -> str:
+    if isinstance(content, list):
+        return "\n".join(str(item.get("text") or "") for item in content if isinstance(item, dict))
+    return str(content or "")
+
+
+def written_after(path: Path, needle: str) -> str | None:
+    """The relay's own text after the last tool result containing `needle`; None if no result has it.
+
+    Claude Code saves an assistant text block before the tool call that follows
+    it runs, so text the relay wrote ahead of its current call is already here.
+    """
+
+    try:
+        lines = _tail_lines(path)
+    except OSError:
+        return None
+    texts: list[str] = []
+    for raw in reversed(lines):
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        message = entry.get("message") if isinstance(entry, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        if entry.get("type") == "user":
+            if any(isinstance(item, dict) and item.get("type") == "tool_result"
+                   and needle in _result_text(item.get("content")) for item in content):
+                return "\n".join(reversed(texts))
+        elif entry.get("type") == "assistant":
+            texts += [str(item.get("text") or "") for item in reversed(content)
+                      if isinstance(item, dict) and item.get("type") == "text"]
+    return None
+
+
+_PLAIN = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-",
+                        " ": " "})
+
+
+def _plain(text: str) -> str:
+    return " ".join(text.translate(_PLAIN).split()).lower()
+
+
+def copied(block: str, written: str) -> bool:
+    """Whether the relay wrote the block, allowing straight quotes and changed spacing."""
+
+    want, got = _plain(block), _plain(written)
+    if not want or want in got:
+        return True
+    from difflib import SequenceMatcher
+
+    return len(got) >= len(want) * 0.8 and SequenceMatcher(None, want, got, autojunk=False).ratio() >= 0.9
 
 
 class WorkerRecord:

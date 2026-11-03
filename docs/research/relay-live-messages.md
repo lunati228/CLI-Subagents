@@ -149,6 +149,38 @@ command and a line telling the relay to write it now; the relay rules say to wri
 sentence about copying it, and that the hand-back holds only the status and result even when the job failed;
 the relay-transcript search reads the end of the file, where the markers are.
 
+## 0.2.33 retest and the options without a model (2026-11-04, 00:15 UTC+1)
+
+Same Luna task with the 0.2.33 relay at effort medium (transcript `agent-ad911b539a7f8b72d.jsonl`,
+`e34f35dbd45597fc7d78eb65344d0181fde505c537e1ba8eeb13fafcc46e2098`): csa again delivered 6 blocks. The relay copied
+the first 3 (two with `’` typed as `'`), then only made the next calls, even with the block printed last under a
+"write it now" line. 11 requests: 12,236 cache-write, 114,025 cache-read and 3,149 output tokens, 27% more output
+than at effort low for no better copying. Counted with [scripts/relay_check.py](scripts/relay_check.py)
+(`python -I docs/research/scripts/relay_check.py <relay transcript>`). It compares each delivered block with the
+relay's next text exactly, so the two copies with straight apostrophes count as "written differently".
+
+What else was checked, without a mod:
+
+- Monitor or faster polling: every event wakes the agent as a new request, so watching more closely costs more and
+  the model still has to write the text.
+- Bash description: in the old relay (`agent-a95942083a6986ade.jsonl`, hash above) Haiku set the description to
+  csa's title in 56 of 56 calls, against 1 of 67 for the free-text copy. But the app cuts a description off after
+  about 45 characters in the agent view (owner's screenshot, 2026-11-04), and messages run 150 to 290.
+- Plugin hooks ([hooks reference](https://code.claude.com/docs/en/hooks), read 2026-11-04): PostToolUse hooks fire
+  for a subagent's tool calls with `agent_id`/`agent_type` and `tool_response.stdout`. A test hook in a
+  gitignored `.claude/settings.local.json` and one Haiku subagent (`agent-af5e802dc0088ff33.jsonl`,
+  `80f245b42db5ecbe856e08c3b38083e28403651ee1b2459cb252c04a5c225aac`) showed: `updatedToolOutput` (same object shape
+  as `tool_response`, `stdout` replaced) changes what both the model and the app show; `systemMessage` is stored in
+  the subagent transcript as a `hook_system_message` attachment but the desktop app's agent view did not draw it.
+- Transcript timing: a text block is in the session's transcript before the tool call that follows it runs (a
+  probe string in this session's own text was found by the command right after it).
+
+Chosen for Claude Code (0.2.34): csa remembers the last block it gave a relay (`relay-pending.json` in the job
+folder) and, on the relay's next call, looks for it after that tool result in the relay's transcript. If it is
+missing, csa shows it again at the same offset with "You didn't write the block below", once per block. Matching
+ignores quote style and spacing. Relays are back at effort low. Codex and Antigravity hosts have no Claude transcript
+and keep the plain copy rule for now.
+
 ## Alternatives
 
 - Mod-driven relay (`turn.step` answers a subagent's model requests with chunks built locally; see

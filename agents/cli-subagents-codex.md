@@ -2,7 +2,7 @@
 name: cli-subagents-codex
 description: Runs a task in OpenAI Codex (`codex exec`) on one of the user's ChatGPT accounts (CLI Subagents). The worker reads your CLAUDE.md files and skills from a note it gets. Use it for a second opinion from another vendor, or when the user asks for Codex. Start it in the background. Set the Agent description to "<model> · <access> · <task in a few words>", e.g. "GPT-6.1 Sol · read · review the auth module". Begin the prompt with optional lines like model=gpt-6.1-sol, access=read (read, edit or full), account=NAME, effort=high, cwd=PATH, timeout=SECONDS, window=SECONDS (default 180), override=USER_WORDS (only with the user's request for more jobs), then the complete, self-contained task.
 model: haiku
-effort: medium
+effort: low
 color: green
 tools: Bash, Write
 maxTurns: 200

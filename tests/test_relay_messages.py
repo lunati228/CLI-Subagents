@@ -203,5 +203,5 @@ class RelayInstructionTests(unittest.TestCase):
                     for gone in ("PROGRESS", "TITLE", "--window 60"):
                         self.assertNotIn(gone, text)
                     if folder.name == "agents" and folder.parent == root:
-                        # At effort low, Haiku skipped most blocks in the 2026-11-03 live test.
-                        self.assertIn("\neffort: medium\n", text)
+                        # Medium copied no better than low in the 2026-11-03 tests; csa re-asks instead.
+                        self.assertIn("\neffort: low\n", text)

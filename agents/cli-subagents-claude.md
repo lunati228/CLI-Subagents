@@ -2,7 +2,7 @@
 name: cli-subagents-claude
 description: Runs a task as a separate Claude Code session on another of the user's Claude accounts (CLI Subagents), with the same MCP servers, skills, plugins and instructions. Use it like any subagent when the work should run on another account or alongside you without using this session's quota. Start it in the background. Set the Agent description to "<model> · <access> · <task in a few words>", e.g. "Sonnet 5.5 · edit · fix the login test". Begin the prompt with optional lines like model=opus, access=read (read, edit or full), account=NAME, effort=high, cwd=PATH, timeout=SECONDS, window=SECONDS (default 180), override=USER_WORDS (only with the user's request for more jobs), then the complete, self-contained task.
 model: haiku
-effort: medium
+effort: low
 color: orange
 tools: Bash, Write
 maxTurns: 200

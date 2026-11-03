@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Any
 
-from cli_subagents import accounts, limits, messages, plans, quota, sandbox, spend
+from cli_subagents import accounts, limits, messages, openrouter, plans, quota, sandbox, spend
 from cli_subagents.config import OPT_IN_FAILOVER, Account, RuntimeConfig, load_config
 from cli_subagents.fsutil import kill_tree, open_private, process_start_time, unlock, worker_process, write_text
 from cli_subagents.jobs import job_dir, mark_pending, read_spec, update_status
@@ -104,6 +104,19 @@ class Runner:
         except OSError:
             return False
 
+    def _openrouter_cost_note(self) -> str | None:
+        """For jobs on an OpenRouter account: the key's real weekly spend instead of Claude Code's estimate."""
+
+        estimate = sum(float(item.get("claude_code_estimate_usd") or 0) for item in self.attempts)
+        if not estimate:
+            return None
+        account = self.runtime_config.find(self.attempts[-1]["account"])
+        week = openrouter.weekly_usage(account) if account else None
+        spent = f"${week:.2f}" if week is not None else "an unknown amount (OpenRouter couldn't be reached)"
+        return (f"No cost recorded: Claude Code estimated ${estimate:.2f}, but it prices this model far too high. "
+                f"OpenRouter's own figure for the key is {spent} this week (Monday to Sunday UTC), "
+                "including anything else billed to the key.")
+
     def finish(self, outcome: str, message: str = "", result: AttemptResult | None = None) -> int:
         messages.close_or_continue(
             self.job_id, result.session_id if result else None,
@@ -123,6 +136,9 @@ class Runner:
             child_pid=None,
             child_started=None,
         )
+        note = self._openrouter_cost_note()
+        if note:
+            fields["cost_note"] = note
         try:
             mark_pending(self.job_id)  # before the final status: whoever sees "done" also sees the marker
         except OSError as exc:
@@ -527,6 +543,10 @@ class Runner:
             cost_usd=result.cost_usd,
             num_turns=result.num_turns,
         )
+        if result.cost_usd is not None and openrouter.api_key(account):
+            # Claude Code prices models it doesn't know far too high; OpenRouter's own figure is the bill.
+            attempt.update(cost_usd=None, claude_code_estimate_usd=result.cost_usd)
+            result.cost_usd = None
         self.status(progress=parser.progress(), init=getattr(parser, "init", None))
         return result
 

@@ -1,6 +1,7 @@
 """The soft weekly cap on an account's OpenRouter key: overridable, never touches running jobs."""
 
 import json
+import os
 from unittest.mock import patch
 
 from test_spend import SpendHome
@@ -75,6 +76,32 @@ class OpenRouterCapTests(SpendHome):
             self.assertEqual(len(self.calls), 1)
             openrouter.weekly_usage(self.account, now=1000 + openrouter.CACHE_SECONDS)
             self.assertEqual(len(self.calls), 2)
+
+    def test_a_finished_job_reports_openrouters_figure_not_claude_codes_estimate(self):
+        from cli_subagents import jobs, tools
+        from cli_subagents.runner import Runner
+
+        with self.fake(2.72), patch.dict(os.environ, {"FAKE_CLAUDE_COST": "17.79"}):
+            job = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), account="paid",
+                                  access="read", start=False)
+            self.assertEqual(Runner(job["job_id"]).run(), 0)
+            status = jobs.read_status(job["job_id"])
+            report = tools.summarize(status)
+        self.assertIsNone(status.get("cost_usd"))
+        self.assertEqual(status["attempts"][0]["claude_code_estimate_usd"], 17.79)
+        self.assertNotIn("cost_usd", report)
+        self.assertIn("estimated $17.79", report["cost_note"])
+        self.assertIn("$2.72 this week", report["cost_note"])
+
+    def test_accounts_report_shows_the_keys_weekly_spend(self):
+        from cli_subagents import tools
+
+        with self.fake(2.72):
+            report = tools.call("subagent_accounts", {"runtime": "claude"})
+        entry = next(item for item in report["runtimes"][0]["accounts"] if item["name"] == "paid")
+        self.assertEqual(entry["openrouter_key_week_usd"], 2.72)
+        self.assertEqual(entry["openrouter_weekly_cap_usd"], 20)
+        self.assertNotIn("spent_usd", entry)
 
     def test_room_line_shows_the_soft_cap(self):
         with self.fake(7.25):

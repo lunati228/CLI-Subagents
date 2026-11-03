@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from helpers import TempHome
 
@@ -52,6 +53,27 @@ class SelfServerTests(unittest.TestCase):
         # Codex 0.162.1 refuses `enabled=false` alone for an undefined server ("invalid transport").
         args = self.overrides('[mcp_servers.docs]\ncommand = "docs-server"\n')
         self.assertEqual(args, ["-c", "mcp_servers.cli-subagents.command='csa'", "-c", "mcp_servers.cli-subagents.enabled=false"])
+
+    def test_a_worker_that_may_delegate_keeps_the_server_with_its_depth(self):
+        env = {"CLI_SUBAGENTS_DEPTH": "1", "CLI_SUBAGENTS_JOB_ID": "job-1"}
+        text = CONFIG + '\n[mcp_servers.nested]\ncommand = "python"\nargs = ["-m", "cli_subagents", "mcp"]\n'
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.toml"
+            path.write_text(text, encoding="utf-8")
+            args = self_server_overrides([path], env)
+        pairs = [args[index + 1] for index in range(0, len(args), 2)]
+        self.assertFalse(any(pair.endswith("enabled=false") for pair in pairs))
+        for name in ("cli-subagents", "nested"):
+            self.assertIn(f'mcp_servers.{name}.env.CLI_SUBAGENTS_DEPTH="1"', pairs)
+            self.assertIn(f'mcp_servers.{name}.env.CLI_SUBAGENTS_JOB_ID="job-1"', pairs)
+        # Defined servers keep their own command; nothing is stubbed for them.
+        self.assertFalse(any(".command=" in pair or ".args=" in pair for pair in pairs))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.toml"
+            path.write_text('[mcp_servers.docs]\ncommand = "docs-server"\n', encoding="utf-8")
+            args = self_server_overrides([path], env)
+        # A plugin-only server needs a full definition, or Codex refuses the config.
+        self.assertEqual(args[:4], ["-c", "mcp_servers.cli-subagents.command='csa'", "-c", "mcp_servers.cli-subagents.args=['mcp']"])
 
     def test_unparseable_config_fails_clearly(self):
         with self.assertRaisesRegex(RuntimeError, "could not read Codex config"):
@@ -143,6 +165,27 @@ class CodexJobTests(TempHome):
         self.assertEqual(argv[argv.index("-s") + 1], "read-only")
         self.assertEqual(argv[-1], "-")
         self.assertIn("task", record["stdin"])
+
+    def test_with_max_depth_2_a_codex_worker_may_start_helpers_and_they_may_not(self):
+        text = (self.home / "config.toml").read_text(encoding="utf-8")
+        (self.home / "config.toml").write_text("max_depth = 2\n" + text, encoding="utf-8")
+        job = jobs.create_job(runtime="codex", prompt="task", cwd=str(self.project), access="edit")
+        status = jobs.wait_for(job["job_id"], 60)
+        self.assertEqual(status["outcome"], "success", status)
+        self.assertTrue(jobs.read_spec(job["job_id"]).can_delegate)
+        record = self.records()[-1]
+        self.assertNotIn("mcp_servers.cli-subagents.enabled=false", record["argv"])
+        self.assertIn('mcp_servers.cli-subagents.env.CLI_SUBAGENTS_DEPTH="1"', record["argv"])
+        self.assertIn("subagent_start", record["stdin"])
+        # The helper runs at depth 2: it gets csa switched off, and its own starts are refused.
+        with patch.dict(os.environ, {"CLI_SUBAGENTS_DEPTH": "1", "CLI_SUBAGENTS_JOB_ID": job["job_id"]}):
+            helper = jobs.create_job(runtime="codex", prompt="helper", cwd=str(self.project), access="read", start=False)
+            with self.assertRaisesRegex(ValueError, "can't start a helper with access=full"):
+                jobs.create_job(runtime="codex", prompt="x", cwd=str(self.project), access="full", start=False)
+        self.assertFalse(jobs.read_spec(helper["job_id"]).can_delegate)
+        with patch.dict(os.environ, {"CLI_SUBAGENTS_DEPTH": "2"}):
+            with self.assertRaisesRegex(ValueError, "nested delegation is disabled"):
+                jobs.create_job(runtime="codex", prompt="x", cwd=str(self.project), start=False)
 
     def use_primary_only(self):
         (self.home / "config.toml").write_text(f"[codex]\nprimary = {json.dumps(str(self.primary))}\n", encoding="utf-8")

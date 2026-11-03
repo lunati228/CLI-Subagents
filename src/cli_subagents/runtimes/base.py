@@ -63,6 +63,11 @@ WORKER_TOOLS_NOTE = (
     "notes or early findings, ask_parent only when you truly can't decide something from the task and "
     "the files, and check_parent_messages between major steps to pick up follow-up instructions."
 )
+DELEGATE_NOTE = (
+    " You may start helper subagents of your own with the cli-subagents tools (subagent_start, then "
+    "subagent_wait and subagent_result) when that clearly helps. Your helpers can't start subagents, and "
+    "can't get more access than you have. Choose their models by the user's delegation rules."
+)
 
 
 def clean_environment(source: dict[str, str] | None = None) -> dict[str, str]:
@@ -98,6 +103,7 @@ class JobSpec:
     resume_account: str | None = None  # account folder that holds resume_session
     parent: dict[str, Any] | None = None  # host CLI of the main session and its context paths
     depth: int = 1
+    can_delegate: bool = False  # depth < max_depth: the worker keeps csa's tools and may start helpers
     created: float = 0.0
     override: str | None = None  # user's words authorizing this start to exceed csa's caps
     max_budget_usd: float | None = None  # internal: granted per-attempt reservation, never caller-controlled

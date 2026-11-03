@@ -6,7 +6,7 @@ import copy
 import time
 from typing import Any
 
-from cli_subagents import accounts, jobs, limits, messages, plans, quota, spend, usage_view
+from cli_subagents import accounts, jobs, limits, messages, openrouter, plans, quota, spend, usage_view
 from cli_subagents.config import load_config
 from cli_subagents.hosts import detect_host
 from cli_subagents.runtimes import AVAILABLE as RUNTIMES, get_runtime, offered_runtimes
@@ -190,7 +190,7 @@ def summarize(status: dict[str, Any]) -> dict[str, Any]:
 
     keys = (
         "job_id", "runtime", "state", "outcome", "message", "account", "session_id",
-        "cwd", "progress", "cost_usd", "warnings", "override",
+        "cwd", "progress", "cost_usd", "cost_note", "warnings", "override",
     )
     summary = {key: status.get(key) for key in keys if status.get(key) not in (None, [], {})}
     notes = [*(status.get("warnings") or []), *(status.get("limit_notes") or [])]
@@ -475,7 +475,12 @@ def account_report(runtime_name: str) -> dict[str, Any]:
             "name": account.name, "home": str(account.home), "enabled": account.enabled,
             "explicit_only": account.explicit_only,
         }
-        entry.update(spend.snapshot(config, account, now=now))
+        if openrouter.api_key(account) and not spend.configured(account):
+            # The ledger here would hold Claude Code's estimates, which are far off for OpenRouter models.
+            entry["openrouter_key_week_usd"] = openrouter.weekly_usage(account, now)
+            entry["openrouter_weekly_cap_usd"] = account.openrouter_weekly_cap_usd
+        else:
+            entry.update(spend.snapshot(config, account, now=now))
         if binary:
             entry["auth"] = runtime.auth_status(config, account)
         until = accounts.cooldown_until(record, now)

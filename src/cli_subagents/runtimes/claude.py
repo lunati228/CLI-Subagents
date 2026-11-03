@@ -44,6 +44,7 @@ from cli_subagents.fsutil import (
     write_json,
 )
 from cli_subagents.runtimes.base import (
+    DELEGATE_NOTE,
     PARENT_SERVER,
     WORKER_TOOLS_NOTE,
     parent_server,
@@ -552,10 +553,15 @@ class ClaudeRuntime:
             argv += ["--plugin-dir", directory]
         for directory in spec.add_dirs:
             argv += ["--add-dir", directory]
+        allowed = [f"mcp__{PARENT_SERVER}", *(READ_ONLY_TOOLS if spec.access == "read" else ())]
+        if spec.can_delegate:
+            # The depth counter in the environment stops the helpers from going further.
+            allowed += [*SELF_TOOLS.split(","), "Bash(csa:*)"]
+        else:
+            argv += ["--disallowedTools", SELF_TOOLS]
         argv += [
-            "--disallowedTools", SELF_TOOLS,
-            "--allowedTools", ",".join([f"mcp__{PARENT_SERVER}", *(READ_ONLY_TOOLS if spec.access == "read" else ())]),
-            "--append-system-prompt", WORKER_NOTE + WORKER_TOOLS_NOTE,
+            "--allowedTools", ",".join(allowed),
+            "--append-system-prompt", WORKER_NOTE + WORKER_TOOLS_NOTE + (DELEGATE_NOTE if spec.can_delegate else ""),
         ]
         if spec.resume_session:
             session_id = spec.resume_session

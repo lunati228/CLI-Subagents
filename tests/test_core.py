@@ -304,6 +304,19 @@ class JobTests(TempHome):
         status = self.wait(jobs.create_job(runtime="claude", prompt="y", cwd=str(self.project))["job_id"])
         self.assertEqual((status["outcome"], status["account"]), ("success", "a2"))
 
+    def test_with_max_depth_2_a_claude_worker_keeps_csas_tools(self):
+        self.write_config(accounts=("a1",))
+        text = (self.home / "config.toml").read_text(encoding="utf-8")
+        (self.home / "config.toml").write_text("max_depth = 2\n" + text, encoding="utf-8")
+        job = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), access="read")
+        self.wait(job["job_id"])
+        argv = self.records()[0]["argv"]
+        self.assertNotIn("--disallowedTools", argv)
+        allowed = argv[argv.index("--allowedTools") + 1].split(",")
+        self.assertIn("mcp__plugin_cli-subagents_cli-subagents", allowed)
+        self.assertIn("Bash(csa:*)", allowed)
+        self.assertIn("subagent_start", argv[argv.index("--append-system-prompt") + 1])
+
     def test_worker_environment_and_arguments(self):
         self.write_config(accounts=("a1",))
         with patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "http://host-proxy", "CLAUDECODE": "1"}):

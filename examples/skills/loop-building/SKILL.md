@@ -25,10 +25,6 @@ Cheap workers do the repository work; you keep the decisions.
 
 Every role runs at `effort=max`.
 
-Start every Builder with a timeout, for example `timeout=2400` (40 minutes; `timeout_seconds` with `subagent_start`). A unit is small, so a Builder still running then is stuck; treat the timeout as an interrupted Builder (Rules).
-
-The same cheap model often runs in more than one pool. The rows below are examples; keep the ones you have.
-
 | Pool | Start with | Context | Limits |
 |---|---|---|---|
 | Free | `cli-subagents:cli-subagents-opencode` with `model=opencode/deepseek-v4.1-flash-free`, `effort=max` | 200K | Small daily limit per IP address, shared by all parallel jobs, reset at UTC midnight |
@@ -41,6 +37,17 @@ Only Claude and Codex workers can start helpers. An OpenCode worker builds fine,
 Start each worker on the free tier. Move it to a pool you pay for when one of these holds and the work is allowed there (or the user allowed it):
 - it needs more context than the free tier gives: a long investigation, a repo-wide sweep, a long build session, a big diff;
 - the free daily limit is used up.
+
+## Timeouts and check-ins
+
+- **Timeout on every worker,** as a safety net: for example Builders `timeout=3600`, Investigators and Reviewers `timeout=1800` (`timeout_seconds` with `subagent_start`).
+- **Two check-ins per worker,** at a third and two thirds of its timeout: a Builder at 20 and 40 minutes, the others at 10 and 20. Don't poll: call `subagent_wait` with `wait_seconds` set to the time until the next check-in; it returns early when the job finishes. Then read `subagent_status` once (tool count, last activity) and, for a Builder, `git -C <its checkout> status --short`. A Claude orchestrator may call these tools too; `subagent_list` gives its jobs' ids.
+- **Making progress:** the tool count rose since the last check, and by the second check a Builder has changed files. Let it run.
+- **Stuck:** no new tool calls since the last check, or a Builder with no changed files at the second check. Get its findings note (Rules) and move the unit to a fresh Builder, or to a strong model from another vendor at the feature's tier.
+- **Timed out:** if the last check showed progress, continue the same session with a follow-up, "continue where you stopped and finish"; it keeps its whole context. Otherwise treat it as stuck.
+- **A start that fails** (`no_account`, refused, FAILED): reroute it at once.
+
+The same cheap model often runs in more than one pool. The rows below are examples; keep the ones you have.
 
 ## Who does what
 

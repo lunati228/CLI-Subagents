@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 from helpers import TempHome
 from cli_subagents import identity, jobs
@@ -126,6 +127,15 @@ class IdentityFollowTests(TempHome):
         [line] = self.first_block(job)
         self.assertTrue(line.startswith("| I'm Haiku 5.5 (effort low), the relay agent for OpenCode."))
         self.assertIn("OpenCode didn't report which model it runs; asked for opencode/deepseek-v4.1-flash-free.", line)
+
+    def test_a_long_relay_transcript_is_searched_from_its_end(self):
+        relay = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "C--work" / SESSION / "subagents" / "agent-a1.jsonl"
+        early = [{"type": "user", "message": {"content": "x" * 500}}] * 4
+        write_lines(relay, early + [assistant("claude-haiku-5-5", "medium") | {"note": INBOX}])
+        with patch.object(identity, "SEARCH_BYTES", 300):
+            self.assertEqual(identity.relay_identity([INBOX]), ("claude-haiku-5-5", "medium"))
+            write_lines(relay, [assistant("claude-haiku-5-5", "medium") | {"note": INBOX}] + early)
+            self.assertIsNone(identity.relay_identity([INBOX]))  # only an old mention: not this call's relay
 
     def test_relay_found_by_job_id_on_later_calls_and_unknown_elsewhere(self):
         job = self.job("antigravity", [{"event": "init", "init": {"model": "gemini-3.8-flash-high"}}])

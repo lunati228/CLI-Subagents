@@ -55,6 +55,7 @@ QUESTION_END_RULE = "===== END QUESTION ====="
 WORKER_PREFIX = "| "
 MESSAGES_RULE = "===== MESSAGES ====="
 MESSAGES_END_RULE = "===== END MESSAGES ====="
+COPY_LINE = "Now write the block below as your message, word for word, then run the command above."
 MESSAGE_CHARS = 4000  # one message
 MESSAGES_CHARS = 12000  # one block; older messages are left out first
 # A message is held this long once the worker has moved on (a tool call, a new
@@ -990,8 +991,11 @@ class Follower:
         return 1
 
     def still_running(self) -> int:
-        self.emit_messages()
         self.emit("Keep watching with:", self.command(self.follow_command()))
+        if self.relay and (self.news or self.identity_line):
+            # Last before the status, so copying it is the relay's next step, not a detail it skips.
+            self.emit(COPY_LINE)
+        self.emit_messages()
         self.control(f"STILL RUNNING after {duration(self.elapsed())}")
         return 0
 

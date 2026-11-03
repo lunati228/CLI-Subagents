@@ -124,6 +124,31 @@ should help; if it doesn't, raise the relay's effort or move to a mod.
   the collapsed view, and that the relay's transcript already holds its inbox path when csa looks. If Haiku still
   skips, the next step is `effort: medium` on the relay agents.
 
+## Live test of 0.2.32 (2026-11-03, 23:56 UTC+1)
+
+Two read-only review jobs started from the Claude desktop app through the relays, each asked to write one or two
+sentences before each step. Inputs are this session's relay transcripts and the job's event log on the owner's PC:
+
+- Luna relay `agent-a6c3734e913ff9f67.jsonl`: `3fa8df98d1a21d7d3e60d013801070c3ce87ce625cbd26effda01e0600ceaf5b`
+- DeepSeek relay `agent-a619802647b0f15bb.jsonl`: `7e678fb7d051e0a4e440c900d76346961d3414f4c9d42efcfa12781c866f1f33`
+- Luna job `20261103-225609-5e4b83/events.jsonl`: `585adb6b513fd978f8525713b989774b1cc47e01d33f07587e92275473274865`
+
+csa delivered every message of the Luna job (`gpt-6-luna` on `codex-2`, 57 s) live, one block per message, at
+3, 9, 13, 18, 24 and 45 s, and the final answer only as the result. The identity line read
+`I'm Haiku 5.5 (effort low), the relay agent for Codex gpt-6-luna (effort high). Read from my transcript and
+Codex's session log.` (no effort was requested; Codex's log shows the effort it used).
+
+The Haiku relay at effort low copied 2 of 6 blocks word for word (the identity line and one message), skipped 3,
+and once wrote its own sentence instead ("I'm writing the worker's message from this run as shown, without
+changes."). The relay used 10 requests: 11,321 cache-write, 97,779 cache-read and 2,474 output tokens. The
+DeepSeek job failed at once (OpenCode's free daily limit); its relay copied the identity line exactly but added a
+paragraph of its own to the hand-back.
+
+Changes in 0.2.33: the Claude Code relays run at effort medium; csa prints the block last, after the next
+command and a line telling the relay to write it now; the relay rules say to write the text itself, never a
+sentence about copying it, and that the hand-back holds only the status and result even when the job failed;
+the relay-transcript search reads the end of the file, where the markers are.
+
 ## Alternatives
 
 - Mod-driven relay (`turn.step` answers a subagent's model requests with chunks built locally; see

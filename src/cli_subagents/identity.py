@@ -21,7 +21,7 @@ from typing import Any, Mapping
 from cli_subagents.fsutil import read_json
 
 TAIL_BYTES = 4_000_000  # read from the end of a transcript or rollout file
-SEARCH_BYTES = 64_000_000  # read from one relay transcript when looking for its marker
+SEARCH_BYTES = 64_000_000  # read from the end of one relay transcript when looking for its marker
 CANDIDATES = 40  # newest subagent transcripts of the session that are searched
 LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
 SOURCES = {"claude": "the worker's transcript", "codex": "Codex's session log", "antigravity": "the worker's start event"}
@@ -112,7 +112,8 @@ def relay_transcript(markers: list[str], env: Mapping[str, str] | None = None) -
     Claude Code stores a session's subagents under
     `<config>/projects/<project>/<session>/subagents/agent-<id>.jsonl`. The
     markers (the relay's inbox file name, the job ID) appear in the relay's own
-    tool calls and results, so only that agent's transcript contains them.
+    tool calls and results, so only that agent's transcript contains them. They
+    are recent, so a long transcript is searched from its end.
     """
 
     env = os.environ if env is None else env
@@ -132,7 +133,9 @@ def relay_transcript(markers: list[str], env: Mapping[str, str] | None = None) -
             continue
         try:
             with open(path, "rb") as handle:
-                data = handle.read(SEARCH_BYTES)
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - SEARCH_BYTES))
+                data = handle.read()
         except OSError:
             continue
         if any(needle in data for needle in needles):

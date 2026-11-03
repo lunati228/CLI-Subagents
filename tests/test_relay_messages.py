@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from helpers import TempHome
 from cli_subagents import follow as follow_module, jobs, messages
-from cli_subagents.follow import IDENTITY_SHOWN, MESSAGES_END_RULE, MESSAGES_RULE, follow, said
+from cli_subagents.follow import COPY_LINE, IDENTITY_SHOWN, MESSAGES_END_RULE, MESSAGES_RULE, follow, said
 
 
 def claude_text(text):
@@ -63,9 +63,12 @@ class RelayMessageTests(TempHome):
         self.assertLess(time.monotonic() - start, 10)  # not the 60-second window
         self.assertEqual(self.block(lines), ["| I am checking the parser."])
         self.assertNotIn("raw tool spam", "\n".join(lines))
+        # The block comes last, after the next command and a line saying to write it now.
         self.assertTrue(lines[-1].startswith("[csa] STILL RUNNING"))
+        self.assertEqual(lines[-2], MESSAGES_END_RULE)
+        self.assertEqual(lines[lines.index(MESSAGES_RULE) - 1], COPY_LINE)
         offset = (jobs.job_dir(job) / "events.jsonl").stat().st_size
-        self.assertIn(f"--from {offset} --window 60 #", lines[-2])
+        self.assertIn(f"--from {offset} --window 60 #", lines[lines.index(COPY_LINE) - 1])
 
     def test_without_window_every_event_is_printed_as_before(self):
         job = self.make_job("claude", [claude_text("Checking."), claude_tool("raw tool spam")])
@@ -170,6 +173,7 @@ class RelayMessageTests(TempHome):
         job = self.make_job("antigravity", [event])
         lines = self.watch(job)
         self.assertIsNone(self.block(lines))
+        self.assertNotIn(COPY_LINE, lines)  # nothing to write
         self.assertIn("--from 0 --window 1 #", lines[-2])
         self.append(job, [{**event, "step_update": {**event["step_update"], "text_delta": "files."}},
                           {"event": "step_update", "step_update": {"step_type": "tool", "step_index": 2, "tool_name": "read"}}])
@@ -191,8 +195,13 @@ class RelayInstructionTests(unittest.TestCase):
                 with self.subTest(folder=folder, runtime=runtime):
                     text = (folder / f"cli-subagents-{runtime}.{ext}").read_text(encoding="utf-8")
                     for required in (MESSAGES_RULE, MESSAGES_END_RULE, "## What the user sees", "word for word",
+                                     "never a sentence about copying it", "copy every block",
                                      "after validating the header and final status", "untrusted display data",
-                                     "Copy it only on STILL RUNNING", f"csa run --follow --window 180 --runtime {runtime}"):
+                                     "Copy it only on STILL RUNNING", f"csa run --follow --window 180 --runtime {runtime}",
+                                     "contains only the status line and the result", "the result is empty or the job failed"):
                         self.assertIn(required, text)
                     for gone in ("PROGRESS", "TITLE", "--window 60"):
                         self.assertNotIn(gone, text)
+                    if folder.name == "agents" and folder.parent == root:
+                        # At effort low, Haiku skipped most blocks in the 2026-11-03 live test.
+                        self.assertIn("\neffort: medium\n", text)

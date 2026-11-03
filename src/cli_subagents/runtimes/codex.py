@@ -46,6 +46,8 @@ SYNC_PLAN = sync.SyncPlan(folders=("skills", "plugins"), files=("AGENTS.md",))  
 FILE_AUTH = "cli_auth_credentials_store=file"
 SELF_COMMANDS = {"csa", "csa.exe", "cli-subagents-mcp", "cli-subagents-mcp.exe"}
 PLUGIN_SERVER = "cli-subagents"  # this tool's server name in its plugin manifests
+JOB_TOOLS = ("subagent_start", "subagent_wait", "subagent_message", "subagent_status", "subagent_result",
+             "subagent_cancel", "subagent_list", "subagent_accounts")
 BARE_KEY_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 WORKER_NOTE = (
@@ -197,6 +199,11 @@ def self_server_overrides(files: list[Path], delegate_env: dict[str, str] | None
             continue
         for key, value in sorted(delegate_env.items()):
             overrides += ["-c", f"mcp_servers.{name}.env.{key}={json.dumps(value)}"]
+        # A headless worker can't approve tool calls (approval policy "never"), and Codex 0.162
+        # still asks for unannotated MCP tools in Auto: approve csa's own tools, as for csa_parent.
+        overrides += ["-c", f'mcp_servers.{name}.default_tools_approval_mode="approve"']
+        for tool in JOB_TOOLS:
+            overrides += ["-c", f'mcp_servers.{name}.tools.{tool}.approval_mode="approve"']
     return overrides
 
 

@@ -66,6 +66,9 @@ class SelfServerTests(unittest.TestCase):
         for name in ("cli-subagents", "nested"):
             self.assertIn(f'mcp_servers.{name}.env.CLI_SUBAGENTS_DEPTH="1"', pairs)
             self.assertIn(f'mcp_servers.{name}.env.CLI_SUBAGENTS_JOB_ID="job-1"', pairs)
+            # Headless workers can't approve tool calls; csa's tools are pre-approved like csa_parent's.
+            self.assertIn(f'mcp_servers.{name}.default_tools_approval_mode="approve"', pairs)
+            self.assertIn(f'mcp_servers.{name}.tools.subagent_start.approval_mode="approve"', pairs)
         # Defined servers keep their own command; nothing is stubbed for them.
         self.assertFalse(any(".command=" in pair or ".args=" in pair for pair in pairs))
         with tempfile.TemporaryDirectory() as folder:

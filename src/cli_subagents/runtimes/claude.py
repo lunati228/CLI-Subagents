@@ -117,6 +117,9 @@ READ_ONLY_TOOLS = (
 
 # Tools of this server inside a worker, denied so workers can't fan out further.
 SELF_TOOLS = "mcp__cli-subagents,mcp__cli_subagents,mcp__plugin_cli-subagents_cli-subagents"
+# Claude Code's own subagent tool ("Task" is its older name), denied to a helper's helper:
+# nothing may start below it, and native subagents would bypass the depth counter.
+NATIVE_AGENT_TOOLS = ("Agent", "Task")
 
 WORKER_NOTE = (
     "You are running as a delegated subagent for another agent session, which "
@@ -554,14 +557,16 @@ class ClaudeRuntime:
             argv += ["--plugin-dir", directory]
         for directory in spec.add_dirs:
             argv += ["--add-dir", directory]
-        allowed = [f"mcp__{PARENT_SERVER}", *(READ_ONLY_TOOLS if spec.access == "read" else ())]
+        nested = spec.depth >= 2
+        read_tools = [tool for tool in (READ_ONLY_TOOLS if spec.access == "read" else ()) if not (nested and tool in NATIVE_AGENT_TOOLS)]
+        allowed = [f"mcp__{PARENT_SERVER}", *read_tools]
         if spec.can_delegate:
             # The depth counter in the environment stops the helpers from going further.
             # Bash(csa:*) goes in the job settings: unquoted in this list, cmd.exe would
             # misread its parentheses when the binary is claude.cmd.
             allowed += SELF_TOOLS.split(",")
         else:
-            argv += ["--disallowedTools", SELF_TOOLS]
+            argv += ["--disallowedTools", ",".join([SELF_TOOLS, *(NATIVE_AGENT_TOOLS if nested else ())])]
         argv += [
             "--allowedTools", ",".join(allowed),
             "--append-system-prompt", WORKER_NOTE + WORKER_TOOLS_NOTE + (DELEGATE_NOTE if spec.can_delegate else ""),

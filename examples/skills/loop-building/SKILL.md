@@ -83,7 +83,7 @@ Dependencies that live outside git (`node_modules`, a virtualenv, build output) 
 
 Run independent work at the same time: it finishes sooner and costs no more.
 
-- **Start first, wait after.** Start every independent unit's worker before you wait for any of them.
+- **Start first, wait after.** Start every worker in the background (`run_in_background: true` on each relay), never several in one foreground batch: a batch waits for its slowest worker. Start every independent unit's worker before you wait for any of them.
 - **Investigators.** When a piece has several separate aspects to check, start one Investigator per aspect, each with a narrow question and its own scratch copy. They never touch the real checkout, so they can all run together.
 - **Builders.** Units can build at the same time when their Files don't overlap and none needs another's result. Each gets its own worktree (below). Units that share a file, or where one needs another's result, run one after the other.
 - **Reviewers.** Each unit gets its fresh Reviewer as soon as its Builder reports. Make its scratch copy from the unit's worktree, running the scratch-copy commands inside it.
@@ -127,7 +127,16 @@ git worktree remove --force "$WT" && rm -f "$WT.patch" "$WT.base" "$WT.unit.patc
    Then the unit goes to a stronger model (see "Your job as orchestrator"), with the brief, the current diff and the open findings.
 8. **Next units.** Start a unit once the units it needs have landed. Independent units run steps 3 to 7 at the same time, each in its own worktree; in any one checkout there's one writer at a time.
 9. **Combined check.** A fresh Reviewer runs, in a scratch copy of the whole change, every unit's checks plus the full test suite; with one unit, that is the unit's checks plus the full suite. It reviews the whole change in phase-review mode only when units connect to each other (one calls, imports or configures another) or the combined checks fail. It covers only this loop's work; pieces built outside the loop (UI done by Claude, for example) are not part of it. If the combined diff is too big for one review, review it in parts by area. Defects it finds go back to the Builder that owns that unit, through steps 4 to 7, and end with a new combined check.
-10. **Report** to whoever started you: what changed, the check results, what the Reviewers found and fixed, and anything still open.
+10. **Ship,** only when your task says to (see "Shipping").
+11. **Report** to whoever started you: what changed, the check results, what the Reviewers found and fixed, and anything still open.
+
+## Shipping
+
+Only when your task includes a PR or a merge.
+- **CI wakes you.** You wake only when a worker finishes or a message arrives; CI turning green is neither. Right after opening a PR, start one background wait on its checks, for example `gh pr checks <n> --watch` with `run_in_background`, so their result wakes you. Don't poll CI.
+- **Merge when green,** if your task allows merging. Never hold a green PR back for other units.
+- **Report each PR at once:** send its link and state (merged with its SHA, or ready to merge) to whoever started you as soon as it happens (SendMessage to `main`, or the parent-message tool as a CLI Subagents worker), not only in the final report.
+- **Overlapping PRs:** when a second PR touches files the first one changed, merge main into it after the first lands and let its CI run again before merging.
 
 ## The brief
 

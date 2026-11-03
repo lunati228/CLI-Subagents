@@ -81,7 +81,7 @@ A review or investigation that needs to run tests or try things out shouldn't be
 | DeepSeek, free | `cli-subagents:cli-subagents-opencode` with `model=opencode/deepseek-v4.1-flash-free`, `effort=max` | 200K context. A small daily limit per IP address, shared by parallel jobs, reset at UTC midnight. Use only this free model. CLI Subagents' docs call free models personal-only: check the terms before using one for work |
 | Cheap model, a pool you pay for | examples: an OpenCode plan (`cli-subagents:cli-subagents-opencode` with `model=<your-plan-model>`); a second account of a CLI you pay for; or a pay-per-token key run inside Claude Code (`cli-subagents:cli-subagents-claude` with `account=<your-cheap-model-account>`, `model=<provider/model>`, `effort=max`), for example through OpenRouter | Context and limits are the plan's or the model's. With a key inside Claude Code, always name the model, never `opus`: without the account line the job then fails instead of running real Opus |
 
-- The cheap model runs at `effort=max`, except Builders in `loop-building`, which run at `effort=high` with a timeout.
+- The cheap model always runs at `effort=max`. Builders in `loop-building` get a timeout.
 - **Free or paid cheap model:** the same model at the same tier. Use free first. Use a pool you pay for when the free limit is used up or the job needs more context than the free tier gives, and only where that pool is allowed (section 10).
 - OpenCode jobs' shell commands pass CLI Subagents' review gate, which may ask a cheap Claude model and then Gemini whether to allow a command. That's the tool's own check, not a Gemini job you start.
 

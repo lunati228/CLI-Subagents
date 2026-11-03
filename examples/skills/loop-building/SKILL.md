@@ -23,7 +23,7 @@ Cheap workers do the repository work; you keep the decisions.
 
 ## Cheap pools
 
-The same model runs in two pools. Builders run at `effort=high`: at max, each step can spend minutes thinking. Every other role runs at `effort=max`.
+Every role runs at `effort=max`.
 
 Start every Builder with a timeout, for example `timeout=2400` (40 minutes; `timeout_seconds` with `subagent_start`). A unit is small, so a Builder still running then is stuck; treat the timeout as an interrupted Builder (Rules).
 

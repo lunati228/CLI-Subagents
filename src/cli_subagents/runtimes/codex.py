@@ -29,6 +29,7 @@ from cli_subagents.config import Account, RuntimeConfig, state_dir
 from cli_subagents import mcp_translate
 from cli_subagents.fsutil import copy_exclusive, file_lock, find_program, is_link, locate_program, no_window_kwargs, same_path, write_text
 from cli_subagents.runtimes.base import (
+    DELEGATE_NOTE,
     WORKER_TOOLS_NOTE,
     parent_server,
     AUTH,
@@ -144,8 +145,12 @@ def config_files(home: Path, cwd: str) -> list[Path]:
     return [path for path in files if path.is_file()]
 
 
-def self_server_overrides(files: list[Path]) -> list[str]:
+def self_server_overrides(files: list[Path], delegate_env: dict[str, str] | None = None) -> list[str]:
     """`-c` arguments that turn this tool's own MCP server off for a worker.
+
+    With `delegate_env` (the worker may start helpers), the server stays on instead and
+    gets those variables through its own `env` table, the one environment Codex passes
+    on, so the depth counter reaches the nested `csa mcp` and still stops the next level.
 
     Codex hands MCP servers a filtered environment, so CLI_SUBAGENTS_DEPTH never
     reaches a nested `csa mcp`; the recursion guard has to happen here. Every
@@ -185,7 +190,13 @@ def self_server_overrides(files: list[Path]) -> list[str]:
             )
         if name not in defined:
             overrides += ["-c", f"mcp_servers.{name}.command='csa'"]
-        overrides += ["-c", f"mcp_servers.{name}.enabled=false"]
+            if delegate_env is not None:
+                overrides += ["-c", f"mcp_servers.{name}.args=['mcp']"]
+        if delegate_env is None:
+            overrides += ["-c", f"mcp_servers.{name}.enabled=false"]
+            continue
+        for key, value in sorted(delegate_env.items()):
+            overrides += ["-c", f"mcp_servers.{name}.env.{key}={json.dumps(value)}"]
     return overrides
 
 
@@ -641,7 +652,13 @@ class CodexRuntime:
         if not command:
             raise RuntimeError("codex binary not found; install Codex or set [codex] binary in config.toml")
         files = config_files(account.home, spec.cwd)
-        no_nesting = self_server_overrides(files)
+        delegate_env = None
+        if spec.can_delegate:
+            from cli_subagents.config import home as csa_home
+
+            delegate_env = {"CLI_SUBAGENTS_DEPTH": str(spec.depth), "CLI_SUBAGENTS_JOB_ID": spec.job_id,
+                            "CLI_SUBAGENTS_HOME": str(csa_home())}
+        no_nesting = self_server_overrides(files, delegate_env)
         self._attempt_account, self._attempt_home = account.name, account.home
         resume = bool(spec.resume_session)
         argv = [*command, "exec"]
@@ -680,7 +697,7 @@ class CodexRuntime:
 
         env["CLI_SUBAGENTS_DEPTH"] = str(spec.depth)
         env["CLI_SUBAGENTS_JOB_ID"] = spec.job_id
-        note = WORKER_NOTE.rstrip("]\n") + WORKER_TOOLS_NOTE + "]\n\n"
+        note = WORKER_NOTE.rstrip("]\n") + WORKER_TOOLS_NOTE + (DELEGATE_NOTE if spec.can_delegate else "") + "]\n\n"
         return Launch(argv=argv, env=env, stdin=note + ("" if spec.resume_session else parent_note(spec.parent, "codex")) + prompt, session_id=spec.resume_session, warnings=warnings)
 
     def interactive(self, config: RuntimeConfig, account: Account, setup: dict[str, Any]) -> tuple[list[str], dict[str, str]]:

@@ -104,6 +104,11 @@ def _create_job(
         raise ValueError("prompt is empty")
     if access not in ACCESS_LEVELS:
         raise ValueError(f"access must be one of {ACCESS_LEVELS}")
+    parent_job = os.environ.get("CLI_SUBAGENTS_JOB_ID") if depth else None
+    if parent_job:
+        parent_access = (read_json(job_dir(parent_job) / "spec.json", {}) or {}).get("access")
+        if parent_access in ACCESS_LEVELS and ACCESS_LEVELS.index(access) > ACCESS_LEVELS.index(parent_access):
+            raise ValueError(f"a worker with access={parent_access} can't start a helper with access={access}")
     path = Path(cwd).expanduser()
     if not path.is_absolute() or not path.is_dir():
         raise ValueError("cwd must be an existing absolute directory")
@@ -165,6 +170,7 @@ def _create_job(
         resume_account=resume_account,
         parent=host_context(host or detect_host(), str(path.resolve())),
         depth=depth + 1,
+        can_delegate=depth + 1 < config.max_depth,
         created=time.time(),
     )
     folder = job_dir(spec.job_id)

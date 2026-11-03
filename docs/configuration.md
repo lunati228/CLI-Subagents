@@ -69,7 +69,7 @@ OpenCode can't be a reviewer: its free models' data terms allow use of the conte
 
 ```toml
 job_retention_days = 7       # finished job records older than this are deleted
-max_depth = 1                # 1 = workers can't start their own subagents
+max_depth = 1                # 1 = workers can't start their own subagents; 2 = workers started from a session may, their helpers can't
 # max_jobs = 8               # most subagents running at once on this machine, all runtimes (default: no cap)
 
 [claude]

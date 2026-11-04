@@ -79,7 +79,9 @@ failover = "on-limit"        # continue on the next account at a usage limit; "o
 max_jobs_per_account = 1     # parallel workers per account folder
 connectors = "account"       # "account" keeps each account's claude.ai connectors; "off" hides them
 edit_permission_mode = "auto"  # permission mode for access="edit"
-cooldown_minutes = 60        # cooldown when the limit error has no Retry-After or reset time (any cooldown is capped at 7 days)
+cooldown_minutes = 60        # cooldown when the limit error has no Retry-After, "try again at" time or reset time (any cooldown
+                             # is capped at 7 days); a longer cooldown lets a start try again after this many minutes,
+                             # in case the vendor resets usage early
 # binary = "C:/path/to/claude.exe"   # only if auto-detection fails
 # default_model = "sonnet"
 

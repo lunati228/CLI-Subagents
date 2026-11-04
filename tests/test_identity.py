@@ -28,6 +28,22 @@ def assistant(model, effort):
 
 
 class IdentityUnitTests(unittest.TestCase):
+    def test_identity_uses_the_attempt_that_answered_after_failover(self):
+        record = identity.WorkerRecord("claude")
+        record.observe({"type": "system", "subtype": "init", "model": "first", "session_id": "old"})
+        record.observe({"type": "assistant", "message": {"content": []}})
+        record.observe({"type": "result", "is_error": True})
+        record.observe({"type": "system", "subtype": "init", "model": "second", "session_id": "new"})
+        self.assertFalse(record.answered)
+        record.observe({"type": "assistant", "message": {"content": []}})
+        self.assertEqual((record.model, record.session, record.answered), ("second", "new", True))
+
+        record = identity.WorkerRecord("codex")
+        record.observe({"type": "thread.started", "thread_id": "old"})
+        record.observe({"type": "item.completed"})
+        record.observe({"type": "thread.started", "thread_id": "new"})
+        self.assertEqual((record.session, record.answered), ("new", False))
+
     def test_display_names_and_clean_tokens(self):
         self.assertEqual(identity.display_model("claude-haiku-5-5"), "Haiku 5.5")
         self.assertEqual(identity.display_model("claude-opus-4-1-20250805"), "Opus 4.1")

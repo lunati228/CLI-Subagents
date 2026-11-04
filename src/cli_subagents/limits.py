@@ -106,6 +106,8 @@ def utilization(record: dict[str, Any] | None, now: float, windows: tuple[str, .
     With `windows`, only those window names count (the keys of the record's "windows" dict).
     """
 
+    if accounts.cooldown_probe_due(record, now):
+        return None  # the probe checks whether the vendor reset these stored figures early
     values = []
     for key, window in ((record or {}).get("windows") or {}).items():
         if windows is not None and key not in windows:
@@ -204,7 +206,10 @@ def room(config: Config, runtime_name: str, counts: Counts, *, pinned: str | Non
             if result.pool_total_hit:
                 continue
         used = utilization(usage.get(account.name), now, windows=runtime.usage_ceiling_windows)
-        if not override and used is not None and used >= runtime.usage_ceiling:
+        record = usage.get(account.name) or {}
+        probe_due = (pool is not None and
+            accounts.cooldown_probe_due((record.get("pools") or {}).get(pool.name), now))
+        if not override and not probe_due and used is not None and used >= runtime.usage_ceiling:
             result.ceiling_hit = max(result.ceiling_hit or 0.0, used)
             continue
         running = counts.on_account(runtime_name, account.name)

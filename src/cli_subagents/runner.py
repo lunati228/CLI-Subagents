@@ -107,15 +107,21 @@ class Runner:
     def _openrouter_cost_note(self) -> str | None:
         """For jobs on an OpenRouter account: the key's real weekly spend instead of Claude Code's estimate."""
 
-        estimate = sum(float(item.get("claude_code_estimate_usd") or 0) for item in self.attempts)
-        if not estimate:
-            return None
-        account = self.runtime_config.find(self.attempts[-1]["account"])
-        week = openrouter.weekly_usage(account) if account else None
-        spent = f"${week:.2f}" if week is not None else "an unknown amount (OpenRouter couldn't be reached)"
-        return (f"No cost recorded: Claude Code estimated ${estimate:.2f}, but it prices this model far too high. "
-                f"OpenRouter's own figure for the key is {spent} this week (Monday to Sunday UTC), "
-                "including anything else billed to the key.")
+        estimates: dict[str, float] = {}
+        for item in self.attempts:
+            if item.get("claude_code_estimate_usd"):
+                name = item["account"]
+                estimates[name] = estimates.get(name, 0) + float(item["claude_code_estimate_usd"])
+        notes = []
+        for name, estimate in estimates.items():
+            account = self.runtime_config.find(name)
+            week = openrouter.weekly_usage(account) if account else None
+            spent = f"${week:.2f}" if week is not None else "an unknown amount (OpenRouter couldn't be reached)"
+            notes.append(f"No cost recorded for OpenRouter account '{name}': Claude Code estimated ${estimate:.2f}, "
+                         "but it prices this model far too high. "
+                         f"OpenRouter's own figure for the key is {spent} this week (Monday to Sunday UTC), "
+                         "including anything else billed to the key.")
+        return "\n".join(notes) or None
 
     def finish(self, outcome: str, message: str = "", result: AttemptResult | None = None) -> int:
         messages.close_or_continue(
@@ -225,10 +231,15 @@ class Runner:
                     last.resets_at,
                     minutes,
                 )
+                # A cooldown longer than the configured one is checked again after it, in case
+                # the vendor resets usage early; a start that is still limited sets a fresh one.
+                probe = time.time() + minutes * 60
+                probe_at = probe if until > probe else None
                 if self.pool:
-                    accounts.set_pool_cooldown(self.spec.runtime, lease.account.name, self.pool.name, until, last.message or USAGE_LIMIT)
+                    accounts.set_pool_cooldown(self.spec.runtime, lease.account.name, self.pool.name, until,
+                                               last.message or USAGE_LIMIT, probe_at)
                 else:
-                    accounts.set_cooldown(self.spec.runtime, lease.account.name, until, last.message or USAGE_LIMIT)
+                    accounts.set_cooldown(self.spec.runtime, lease.account.name, until, last.message or USAGE_LIMIT, probe_at)
             if not failover or last.no_rotation:
                 return self.finish(USAGE_LIMIT, f"{lease.account.name}: {last.message}", last)
             excluded.add(lease.account.name)

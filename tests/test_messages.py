@@ -73,6 +73,26 @@ class MessageTests(TempHome):
         argv = self.records()[-1]["argv"]
         self.assertEqual(argv[argv.index("--resume") + 1], jobs.read_status(job)["session_id"])
 
+    def test_finished_explicit_only_account_keeps_its_pin_and_job_budget(self):
+        from cli_subagents.config import load_config, save_config
+
+        self.write_config(accounts=("a1", "a2"))
+        config = load_config()
+        account = config.runtime("claude").find("a1")
+        account.explicit_only = True
+        account.spend_cap_usd = 10
+        account.job_budget_usd = 1.5
+        save_config(config)
+        job = self.start(account="a1")
+        self.assertEqual(jobs.wait_for(job, 30)["outcome"], "success")
+        reply = tools.call("subagent_message", {"job_id": job, "text": "one more review"})
+        new_job = reply["new_job"]["job_id"]
+        status = jobs.wait_for(new_job, 30)
+        self.assertEqual((status["outcome"], status["account"]), ("success", "a1"))
+        self.assertEqual(jobs.read_spec(new_job).account, "a1")
+        argv = self.records()[-1]["argv"]
+        self.assertEqual(argv[argv.index("--max-budget-usd") + 1], "1.500000")
+
     def test_worker_gets_the_parent_channel(self):
         self.write_config(accounts=("a1",))
         job = self.start()

@@ -51,6 +51,10 @@ def room_cap(runtime: RuntimeConfig, now: float, model: str | None = None,
         record = usage.get(account.name)
         if accounts.cooldown_until(record, now):
             continue
+        pool = pool_for(runtime, model)
+        if accounts.cooldown_probe_due(record, now) or (pool and
+                accounts.cooldown_probe_due(((record or {}).get("pools") or {}).get(pool.name), now)):
+            return int(runtime.max_jobs_by_room[0][1]), None  # probe the old full usage figures
         used = utilization(record, now)
         if used is not None:
             remaining.append(round(max(0.0, min(100.0, (1 - used) * 100)), 10))

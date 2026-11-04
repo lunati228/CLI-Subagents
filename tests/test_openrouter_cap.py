@@ -5,8 +5,9 @@ import os
 from unittest.mock import patch
 
 from test_spend import SpendHome
-from cli_subagents import limits, openrouter, usage_view
-from cli_subagents.config import load_config, save_config
+from cli_subagents import accounts, jobs, limits, openrouter, usage_view
+from cli_subagents.config import Account, load_config, save_config
+from cli_subagents.runner import Runner
 
 
 class OpenRouterCapTests(SpendHome):
@@ -51,6 +52,24 @@ class OpenRouterCapTests(SpendHome):
             self.assertEqual(self.admit().account, "paid")
         self.assertEqual(self.calls, ["sk-or-test"])
 
+    def test_runner_skips_an_account_admission_rejected_for_its_soft_cap(self):
+        self.runtime.accounts.append(Account("other", self.root / "other", max_jobs=4))
+        save_config(self.config)
+        with self.fake(20):
+            self.assertEqual(limits.admit(self.config, "claude").account, "other")
+            job = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), start=False)
+            self.assertEqual(Runner(job["job_id"]).run(), 0)
+        status = jobs.read_status(job["job_id"])
+        self.assertEqual([item["account"] for item in status["attempts"]], ["other"])
+
+    def test_execution_rechecks_the_soft_cap_and_override_still_allows_it(self):
+        with self.fake(20):
+            with self.assertRaisesRegex(limits.LimitError, "soft cap"):
+                accounts.acquire(self.runtime, pinned="paid")
+            lease, _, _ = accounts.acquire(self.runtime, pinned="paid", override="user approved")
+            self.assertIsNotNone(lease)
+            lease.release()
+
     def test_at_the_cap_refuses_and_override_lets_one_through(self):
         with self.fake(20.0):
             with self.assertRaisesRegex(limits.LimitError, r"spent \$20.00 this week.*override=<their words>"):
@@ -92,6 +111,19 @@ class OpenRouterCapTests(SpendHome):
         self.assertNotIn("cost_usd", report)
         self.assertIn("estimated $17.79", report["cost_note"])
         self.assertIn("$2.72 this week", report["cost_note"])
+
+    def test_cost_note_uses_the_openrouter_attempts_account_after_failover(self):
+        self.runtime.accounts.append(Account("other", self.root / "other"))
+        save_config(self.config)
+        job = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), start=False)
+        runner = Runner(job["job_id"])
+        runner.attempts = [{"account": "paid", "claude_code_estimate_usd": 17.79},
+                           {"account": "other", "cost_usd": 0.25}]
+        with patch.object(openrouter, "weekly_usage", return_value=2.72) as usage:
+            note = runner._openrouter_cost_note()
+        self.assertEqual(usage.call_args.args[0].name, "paid")
+        self.assertIn("paid", note)
+        self.assertIn("$2.72 this week", note)
 
     def test_accounts_report_shows_the_keys_weekly_spend(self):
         from cli_subagents import tools

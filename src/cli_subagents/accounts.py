@@ -21,6 +21,11 @@ MAX_COOLDOWN_SECONDS = 7 * 86400
 RETRY_AFTER_RE = re.compile(
     r"retry[- ]after\b[\s:=]*(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hours?)?\b", re.IGNORECASE
 )
+# Codex: "try again at 5:34 PM", or for a weekly limit "try again at Nov 8th, 2026 9:10 PM" (local time).
+TRY_AGAIN_RE = re.compile(
+    r"try again (?:at|after) (?:(?P<month>[A-Za-z]{3,9})\.? (?P<day>\d{1,2})(?:st|nd|rd|th)?,? (?P<year>\d{4}),? (?:at )?)?"
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<half>[AaPp])?\.?[Mm]?\.?", re.IGNORECASE
+)
 
 
 def _usage_path(runtime: str):
@@ -86,17 +91,50 @@ def retry_after_seconds(text: str) -> float | None:
     return float(match.group(1)) * scale
 
 
+def stated_reset(text: str, now: float | None = None) -> float | None:
+    """The local time a "try again at ..." message names, or None.
+
+    A bare clock time that has already passed means the same time tomorrow.
+    """
+
+    from datetime import datetime, timedelta
+
+    match = TRY_AGAIN_RE.search(text or "")
+    if not match:
+        return None
+    now = now or time.time()
+    hour, minute = int(match["hour"]), int(match["minute"])
+    if match["half"]:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if match["half"].lower() == "p" else 0)
+    try:
+        if match["month"]:
+            month = datetime.strptime(match["month"][:3].title(), "%b").month
+            return datetime(int(match["year"]), month, int(match["day"]), hour, minute).timestamp()
+        moment = datetime.fromtimestamp(now).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    except ValueError:
+        return None
+    if moment.timestamp() < now - 60:
+        moment += timedelta(days=1)
+    return moment.timestamp()
+
+
 def cooldown_end(error_text: str, resets_at: float | None, cooldown_minutes: int, now: float | None = None) -> float:
     """When an account that hit its limit is usable again.
 
-    In order (OpenCodex's shape): a Retry-After value in the error text, then the
-    reset time the CLI reported, then the configured cooldown; never more than 7 days.
+    In order: a Retry-After value in the error text, then the time the message
+    names ("try again at ..."), then the reset time the CLI reported, then the
+    configured cooldown; never more than 7 days.
     """
 
     now = now or time.time()
     retry = retry_after_seconds(error_text)
+    stated = stated_reset(error_text, now)
     if retry is not None and retry > 0:
         until = now + retry
+    elif stated and stated > now:
+        until = stated
     elif resets_at and resets_at > now:
         until = float(resets_at)
     else:
@@ -104,20 +142,38 @@ def cooldown_end(error_text: str, resets_at: float | None, cooldown_minutes: int
     return min(until, now + MAX_COOLDOWN_SECONDS)
 
 
-def set_cooldown(runtime: str, account: str, until: float, reason: str) -> None:
-    update_usage(runtime, account, cooldown_until=until, cooldown_reason=reason)
+def set_cooldown(runtime: str, account: str, until: float, reason: str, probe_at: float | None = None) -> None:
+    """Record a cooldown. With `probe_at`, starts may try again from then on, before `until`."""
+
+    path = _usage_path(runtime)
+    with file_lock(path.with_suffix(".lock")):
+        data = load_usage(runtime)
+        record = dict(data.get(account) or {})
+        record.update(cooldown_until=until, cooldown_reason=reason, updated=time.time())
+        if probe_at is None:
+            record.pop("cooldown_probe_at", None)
+        else:
+            record["cooldown_probe_at"] = probe_at
+        data[account] = record
+        write_json(path, data)
 
 
 def pool_cooldown_until(record: dict[str, Any] | None, pool: str, now: float | None = None) -> float | None:
     return cooldown_until(((record or {}).get("pools") or {}).get(pool), now)
 
 
-def set_pool_cooldown(runtime: str, account: str, pool: str, until: float, reason: str) -> None:
+def set_pool_cooldown(runtime: str, account: str, pool: str, until: float, reason: str,
+                      probe_at: float | None = None) -> None:
     path = _usage_path(runtime)
     with file_lock(path.with_suffix(".lock")):
         data = load_usage(runtime)
         record = data.setdefault(account, {})
-        record.setdefault("pools", {}).setdefault(pool, {}).update(cooldown_until=until, cooldown_reason=reason)
+        entry = record.setdefault("pools", {}).setdefault(pool, {})
+        entry.update(cooldown_until=until, cooldown_reason=reason)
+        if probe_at is None:
+            entry.pop("cooldown_probe_at", None)
+        else:
+            entry["cooldown_probe_at"] = probe_at
         record["updated"] = time.time()
         write_json(path, data)
 
@@ -133,6 +189,7 @@ def clear_cooldown(runtime: str, account: str) -> bool:
             return False
         record.pop("cooldown_until", None)
         record.pop("cooldown_reason", None)
+        record.pop("cooldown_probe_at", None)
         record.pop("pools", None)
         record["updated"] = time.time()
         write_json(path, data)
@@ -151,9 +208,24 @@ def max_utilization(record: dict[str, Any] | None, windows: tuple[str, ...] | No
     return max(values) if values else None
 
 
+def cooldown_probe_due(record: dict[str, Any] | None, now: float) -> bool:
+    until = (record or {}).get("cooldown_until")
+    probe = (record or {}).get("cooldown_probe_at")
+    return (isinstance(until, (int, float)) and until > now
+            and isinstance(probe, (int, float)) and probe <= now)
+
+
 def cooldown_until(record: dict[str, Any] | None, now: float | None = None) -> float | None:
+    """The end of a running cooldown, or None.
+
+    Past its probe time a long cooldown lets starts try again: a vendor may reset
+    usage early, and a start that is still limited sets a fresh cooldown at once.
+    """
+
     now = now or time.time()
     until = (record or {}).get("cooldown_until")
+    if cooldown_probe_due(record, now):
+        return None
     return float(until) if isinstance(until, (int, float)) and until > now else None
 
 
@@ -381,7 +453,7 @@ def _acquire(
     all_busy=True means accounts exist but every slot is taken right now.
     """
 
-    from cli_subagents import limits, quota, spend
+    from cli_subagents import limits, openrouter, quota, spend
 
     pool = quota.pool_for(runtime, model)
     state = quota.pool_state(runtime, limits.count_active(), time.time(), exclude_job=job_id) if pool else None
@@ -392,12 +464,19 @@ def _acquire(
         return None, earliest, bool(accounts)
     budget_blocked = 0
     spend_blocked = []
+    soft_capped = []
     for account in accounts:
         if spend.configured(account):
             summary = spend.snapshot(runtime, account)
             if summary["remaining_usd"] < spend.MIN_BUDGET_USD:
                 budget_blocked += 1
                 spend_blocked.append(spend.refusal(account, summary))
+                continue
+        if not override and account.openrouter_weekly_cap_usd is not None:
+            used = openrouter.weekly_usage(account)
+            if used is not None and used >= account.openrouter_weekly_cap_usd:
+                budget_blocked += 1
+                soft_capped.append(openrouter.refusal(account, used))
                 continue
         if not override and pool and pool.weekly_jobs is not None and state.budget_used(account.name, pool.name) >= pool.weekly_jobs:
             budget_blocked += 1
@@ -420,6 +499,8 @@ def _acquire(
             return lease, None, False
     if spend_blocked and len(accounts) == len(spend_blocked):
         raise spend.SpendLimitError(" ".join(spend_blocked))
+    if soft_capped and len(accounts) == len(soft_capped) + len(spend_blocked):
+        raise limits.LimitError(" ".join([*spend_blocked, *soft_capped]))
     return None, earliest, len(accounts) > budget_blocked
 
 

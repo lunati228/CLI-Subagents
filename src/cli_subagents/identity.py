@@ -223,18 +223,20 @@ class WorkerRecord:
     def observe(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
         if self.runtime == "claude":
-            if kind == "system" and event.get("subtype") == "init" and not self.session:
+            if kind == "system" and event.get("subtype") == "init":
                 self.model = clean(event.get("model"))
                 self.session = str(event.get("session_id") or "")
+                self.answered = False
             elif kind == "assistant" and self.session:
                 self.answered = True
         elif self.runtime == "codex":
-            if kind == "thread.started" and not self.session:
+            if kind == "thread.started":
                 self.session = str(event.get("thread_id") or "")
+                self.answered = False
             elif kind in ("item.started", "item.completed") and self.session:
                 self.answered = True
         elif self.runtime == "antigravity":
-            if event.get("event") == "init" and not self.answered:
+            if event.get("event") == "init":
                 init = event.get("init")
                 self.model = clean(init.get("model")) if isinstance(init, dict) else None
                 self.answered = True

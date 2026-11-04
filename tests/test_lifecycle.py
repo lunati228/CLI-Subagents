@@ -476,8 +476,71 @@ class CooldownTests(unittest.TestCase):
         self.assertEqual(end("Retry-After: 99999999"), 7 * 86400)
         self.assertEqual(end("", self.NOW + 30 * 86400), 7 * 86400)
 
+    def test_the_time_the_message_names_wins_over_the_default(self):
+        from datetime import datetime
+
+        # Seen live: Codex said 5:34 PM at 17:31, and csa waited until 18:31.
+        now = datetime(2026, 11, 4, 17, 31, 47).timestamp()
+        text = "You've hit your usage limit. Upgrade to Pro or try again at 5:34 PM."
+        self.assertEqual(accounts.cooldown_end(text, None, 60, now=now), datetime(2026, 11, 4, 17, 34).timestamp())
+        weekly = "You've hit your usage limit. Try again at Nov 8th, 2026 9:10 PM."
+        self.assertEqual(accounts.cooldown_end(weekly, None, 60, now=now), datetime(2026, 11, 8, 21, 10).timestamp())
+        # A clock time already past is tomorrow's; a 24-hour time works too.
+        self.assertEqual(accounts.stated_reset("try again at 9:05 AM", now), datetime(2026, 11, 5, 9, 5).timestamp())
+        self.assertEqual(accounts.stated_reset("try again at 18:00", now), datetime(2026, 11, 4, 18, 0).timestamp())
+        self.assertIsNone(accounts.stated_reset("try again later", now))
+        self.assertIsNone(accounts.stated_reset("try again at 13:00 PM", now))
+
+    def test_a_long_cooldown_lets_a_start_try_again_after_the_probe_time(self):
+        record = {"cooldown_until": self.NOW + 3 * 86400, "cooldown_probe_at": self.NOW + 3600}
+        self.assertEqual(accounts.cooldown_until(record, now=self.NOW + 60), self.NOW + 3 * 86400)
+        self.assertIsNone(accounts.cooldown_until(record, now=self.NOW + 3600))
+        self.assertIsNone(accounts.cooldown_until({"cooldown_until": self.NOW + 60}, now=self.NOW + 61))
+
 
 class CooldownRunnerTests(TempHome):
+    def test_a_probe_can_start_when_stale_usage_selects_a_zero_job_step(self):
+        from cli_subagents import limits
+        from cli_subagents.config import QuotaPool
+
+        self.write_config(accounts=("a1", "a2"), extra="usage_ceiling = 1.0\nmax_jobs_by_room = [[10, 1], [0, 0]]")
+        config = load_config()
+        config.runtime("claude").pools = [QuotaPool("p", ["*"])]
+        now = time.time()
+        accounts.update_usage("claude", "a1", windows={"weekly": {
+            "utilization": 1.0, "resets_at": now + 3 * 86400}})
+        accounts.update_usage("claude", "a2", windows={"weekly": {
+            "utilization": 1.0, "resets_at": now + 3 * 86400}})
+        for pool in (None, "p"):
+            with self.subTest(pool=pool):
+                accounts.clear_cooldown("claude", "a1")
+                if pool:
+                    accounts.set_pool_cooldown("claude", "a1", pool, now + 3 * 86400, "limited", probe_at=now - 1)
+                else:
+                    accounts.set_cooldown("claude", "a1", now + 3 * 86400, "limited", probe_at=now - 1)
+                self.assertEqual(limits.admit(config, "claude", account="a1", model="test-model").account, "a1")
+                self.assertEqual(limits.admit(config, "claude", model="test-model").account, "a1")
+
+    def test_a_probe_can_start_despite_the_last_full_usage_window(self):
+        self.write_config(accounts=("a1",), failover="off", extra="usage_ceiling = 1.0\ncooldown_minutes = 1")
+        now = time.time()
+        accounts.update_usage("claude", "a1", windows={"weekly": {
+            "utilization": 1.0, "resets_at": now + 3 * 86400}})
+        accounts.set_cooldown("claude", "a1", now + 3 * 86400, "limited", probe_at=now - 1)
+        config = load_config()
+        from cli_subagents import limits
+
+        self.assertEqual(limits.admit(config, "claude", account="a1").account, "a1")
+        from cli_subagents.runner import Runner
+
+        job = jobs.create_job(runtime="claude", prompt="probe", cwd=str(self.project), account="a1", start=False)
+        with patch.dict(os.environ, {"FAKE_CLAUDE_LIMITED": "a1"}):
+            self.assertEqual(Runner(job["job_id"]).run(), 1)
+        record = accounts.load_usage("claude")["a1"]
+        self.assertGreater(record["cooldown_probe_at"], now)
+        with self.assertRaises(limits.LimitError):
+            limits.admit(config, "claude", account="a1")
+
     def test_runner_uses_the_reset_time_of_the_event(self):
         self.write_config(accounts=("a1", "a2"))
         os.environ["FAKE_CLAUDE_LIMITED"] = "a1"

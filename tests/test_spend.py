@@ -125,6 +125,21 @@ class SpendAccountingTests(SpendHome):
         self.account.job_budget_usd = 1.5
         self.assertEqual(spend.reserve("claude", self.account, "only", 0), 1.5)
 
+    def test_a_subdollar_job_budget_does_not_lower_the_account_admission_minimum(self):
+        self.account.job_budget_usd = 0.25
+        self.assertEqual(spend.reserve("claude", self.account, "small", 0), 0.25)
+        self.account.spend_cap_usd = None
+        self.assertEqual(spend.reserve("claude", self.account, "uncapped-small", 0), 0.25)
+        self.account.spend_cap_usd = 0.5
+        with self.assertRaises(spend.SpendLimitError):
+            spend.reserve("claude", self.account, "empty", 0)
+
+    def test_a_job_budget_below_cli_precision_is_refused_clearly(self):
+        self.account.spend_cap_usd = None
+        self.account.job_budget_usd = 0.0000001
+        with self.assertRaisesRegex(spend.SpendLimitError, "job_budget_usd"):
+            spend.reserve("claude", self.account, "tiny", 0)
+
     def test_job_budget_round_trip_and_validation(self):
         self.account.job_budget_usd = 1.5
         save_config(self.config)

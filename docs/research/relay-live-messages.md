@@ -198,7 +198,24 @@ and keep the plain copy rule for now.
   5 skipped, 0 re-asked; 17 requests, 200,104 cache-read, 14,839 cache-write, 3,988 output tokens.
 - 0.2.39 judges a block only when the relay's turn after it is closed by the next tool result (the file is
   append-only and in order, so that turn is complete). A skip is re-asked one call late, a written block never.
-  The live measurement after release goes below.
+
+### After 0.2.39 (2026-11-04, 18:55 UTC+1)
+
+Gemini 3.8 Flash worker through the Antigravity relay (Haiku 5.5, effort low), 8 m 30 s, job
+20261104-185546-de930e, relay transcript `agent-ae6eaecd4655bb770.jsonl`
+(`cb4486318daead8aaf058961e87b352e7ba73c3ddfaeccacf2d602a335cd10be`), csa 0.2.39 at 2da9996:
+
+- csa delivered 8 blocks (identity, 5 worker messages, 2 review-gate denials) and re-asked 5. Every re-ask
+  was for a block the relay had skipped; none for a written one.
+- The relay copied the identity line at once and message 1 after its re-ask, wrote message 3 one call late,
+  and skipped the rest, including 3 of the 5 re-asks. 3 of the 8 blocks reached the relay view.
+- `relay_check.py` counts 13 blocks delivered (with the re-asks), 2 copied exactly, 1 written differently,
+  10 skipped; 17 requests, 202,181 cache-read, 18,078 cache-write, 6,041 output tokens (about $0.007 at
+  Haiku 5.5 list prices).
+
+Copy rates so far: 2 of 6 and 3 of 6 (Luna, efforts low and medium), 8 of 13 (DeepSeek, 0.2.37), 17 of 19
+(Codex Sol, another session, with false re-asks on every block), 3 of 8 here. The detection is now right;
+Haiku's compliance varies widely between runs and drops as the relay's run gets longer.
 
 ## Alternatives
 

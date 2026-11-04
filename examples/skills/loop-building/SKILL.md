@@ -12,7 +12,7 @@ Cheap workers do the repository work; you keep the decisions.
 ## Your job as orchestrator
 
 - You are the orchestrator the manager gave one to three related features (use-agents, section 6): a strong worker for a high feature, or a cheap model that can start helpers for a medium one. You split the work, write the briefs, start the workers, make the decisions your task allows, and stop or escalate.
-- How you start workers: with `subagent_start`, then `subagent_wait`, `subagent_status` and `subagent_result`, never the Agent tool. Inside a subagent, an Agent call blocks until that worker reports, so relays would run your workers one at a time; inside a cheap model's account the relay agents also run on that cheap model and may skip the relay steps. An orchestrator in another CLI never starts your most expensive models unless the user said so.
+- As a depth-1 orchestrator, start workers with `subagent_start`, then `subagent_wait`, `subagent_status` and `subagent_result`, never the Agent tool. Inside a subagent, an Agent call blocks until that worker reports, so relays would run your workers one at a time; inside a cheap model's account the relay agents also run on that cheap model and may skip the relay steps. An orchestrator in another CLI never starts your most expensive models unless the user said so.
 - Where no cheap orchestrator is available, a medium task has none: the manager runs steps 3 to 7 itself, with the same briefs and cards, and reads only the reports.
 - Delegate the building, don't read code a worker can read for you, and don't re-check work whose checks and review passed. A strong orchestrator's tokens cost many times a worker's. Workers make the engineering choices inside a brief.
 - Avoid routine log reading and repeating a passed review for reassurance. When a failure has no clear cause, look at the specific evidence you need.
@@ -41,7 +41,7 @@ Start each worker on the free tier. Move it to a pool you pay for when one of th
 ## Timeouts and check-ins
 
 - **Timeout on every worker,** as a safety net: for example Builders `timeout=3600`, Investigators and Reviewers `timeout=1800` (`timeout_seconds` with `subagent_start`).
-- **Two check-ins per worker,** at a third and two thirds of its timeout: a Builder at 20 and 40 minutes, the others at 10 and 20. Don't poll: call `subagent_wait` with `wait_seconds` set to the time until the next check-in; it returns early when the job finishes. Then read `subagent_status` once (tool count, last activity) and, for a Builder, `git -C <its checkout> status --short`. `subagent_start` returns each job's id.
+- **Two check-ins per worker,** at a third and two thirds of its timeout: a Builder at 20 and 40 minutes, the others at 10 and 20. Don't poll: call `subagent_wait` with `job_ids` and `timeout_seconds` set to the time until the next check-in. It returns early for a result or message. Codex caps each wait at 240 seconds: if it returns before the check-in, wait again for the remaining time without checking status. Then read `subagent_status` once (tool count, last activity) and, for a Builder, `git -C <its checkout> status --short`. `subagent_start` returns each job's id.
 - **Making progress:** the tool count rose since the last check, and by the second check a Builder has changed files. Let it run.
 - **Stuck:** no new tool calls since the last check, or a Builder with no changed files at the second check. Get its findings note (Rules) and move the unit to a fresh Builder, or to a strong model from another vendor at the feature's tier.
 - **Timed out:** if the last check showed progress, continue the same session with a follow-up, "continue where you stopped and finish"; it keeps its whole context. Otherwise treat it as stuck.
@@ -61,11 +61,11 @@ Pools you pay for, and the API account, are for whatever you allowed them for. K
 
 **Optional second Reviewer.** A bigger unit (several files, or more than about 200 lines) may also get a second, independent Reviewer from a different pool, for example a fresh small model on `<your-second-codex-account>` (`account=<your-second-codex-account>`, `model=gpt-6-luna`, `effort=high`), in its own scratch copy, next to the first. Its free quota is small: if it is refused or fails, skip it and go on with the first Reviewer's verdict. Never start it on an account that costs money you haven't allowed. A concrete defect from either Reviewer starts a fix round.
 
-**A metered Reviewer.** If you put the Reviewer on an API key, it is a standing use: no confirmation per job, but the account's caps and rules in use-agents, section 10, still apply. Start it with `cli-subagents:cli-subagents-claude` (or `subagent_start` with runtime `claude`) and the option lines in the table, with a description like `Haiku 5.5 max · edit · review the CSV export`. Check the model's price per million tokens and keep its input small (see "The brief"), because a long prompt can cost several times a short one. An API account usually runs one job at a time.
+**A metered Reviewer.** An API Reviewer is a standing use only if the user explicitly set it up that way. Otherwise follow the direct request and confirmation rules in use-agents, section 10. Use `subagent_start` with `runtime=claude` and the account, model, effort and access arguments from the table. An interactive main session uses the Claude relay and its option lines instead. Check the model's price per million tokens and keep its input small (see "The brief"), because a long prompt can cost several times a short one. Set `max_jobs` and `job_budget_usd` on the account if several reviews must fit under its caps.
 
 ## Scratch copies for the Investigator and Reviewer
 
-Both need to run tests and try things out, and `access=read` can't run commands. So they work in a throwaway git worktree with `access=edit`, where nothing they do reaches the real checkout. Make a new one for every Investigator and Reviewer run, in a folder outside the repository (for example the system temp folder). In Git Bash, from the real checkout:
+Both need to run tests and try things out, which `access=read` restricts. Give them a throwaway git worktree with `access=edit` and tell them to keep all edits there. A worktree shares Git metadata and does not prevent access to the real checkout. Make a new one for every Investigator and Reviewer run, in a folder outside the repository (for example the system temp folder). In Git Bash, from the real checkout:
 
 ```bash
 git worktree add --detach "$SCRATCH" HEAD
@@ -118,7 +118,7 @@ git worktree remove --force "$WT" && rm -f "$WT.patch" "$WT.base" "$WT.unit.patc
 3. **Builder.** A fresh Builder per unit gets the brief and builds it in the real checkout, or in its own worktree when units build in parallel. It fixes its own failing checks before it reports.
 4. **Scratch copy.** When the Builder reports, make a fresh scratch copy of the checkout with its changes.
 5. **Reviewer.** A fresh Reviewer in task-review mode works in that copy: it gets the brief and the Builder's report, runs the checks itself and tries what it needs to.
-6. **Fix.** If the Reviewer finds defects, send its findings to the same Builder. In Claude Code, SendMessage to the Builder's finished relay continues its session as a new job; from another host, `subagent_message` to the Builder's finished job does the same. Start a fresh Builder instead, with the brief, the current diff and the findings, when that follow-up is refused or the old session has gone stale: it has been through two fix rounds, its reports mix up old and new failures, or it keeps repeating a fix that doesn't work. Then go back to step 4 with a new scratch copy and a new, fresh Reviewer.
+6. **Fix.** If the Reviewer finds defects, send its findings to the same Builder. Send `subagent_message` to the Builder's finished job to continue its session as a new job. Track the returned `new_job.job_id` for the next wait, status, result and follow-up. A main session using relays sends SendMessage to the finished Builder relay instead. Start a fresh Builder instead, with the brief, the current diff and the findings, when that follow-up is refused or the old session has gone stale: it has been through two fix rounds, its reports mix up old and new failures, or it keeps repeating a fix that doesn't work. Then go back to step 4 with a new scratch copy and a new, fresh Reviewer.
 7. **Repeat** steps 4 to 6 until the checks pass and a fresh Reviewer passes. Stop and escalate instead when the loop stops making progress:
    - the same defect comes back after a fix;
    - two rounds in a row don't reduce the defects;
@@ -133,7 +133,7 @@ git worktree remove --force "$WT" && rm -f "$WT.patch" "$WT.base" "$WT.unit.patc
 ## Shipping
 
 Only when your task includes a PR or a merge.
-- **CI wakes you.** You wake only when a worker finishes or a message arrives; CI turning green is neither. Right after opening a PR, start one background Bash command that waits on its checks, for example `gh pr checks <n> --watch` with `run_in_background`; when it ends, you get a notification. Not an Agent call, which would block. Don't poll CI.
+- **Wait for CI.** Right after opening a PR, run `gh pr checks <n> --watch` through your shell tool. In Claude Code use Bash with `run_in_background` for a completion notification. In another CLI keep its returned process session and wait for completion through that CLI's shell tools. Don't start an Agent just to wait.
 - **Merge when green,** if your task allows merging. Never hold a green PR back for other units.
 - **Report each PR at once:** send its link and state (merged with its SHA, or ready to merge) to whoever started you as soon as it happens (SendMessage to `main`, or the parent-message tool as a CLI Subagents worker), not only in the final report.
 - **Overlapping PRs:** when a second PR touches files the first one changed, merge main into it after the first lands and let its CI run again before merging.
@@ -141,11 +141,12 @@ Only when your task includes a PR or a merge.
 ## The brief
 
 Each worker prompt is, in this order:
-1. the relay option lines and a blank line (CLI Subagents reads options only before the task starts);
-2. the depth line `[depth 2 of 2: you can't start subagents]`;
-3. the worker preamble;
-4. one role card;
-5. the brief.
+1. the depth line `[depth 2 of 2: you can't start subagents]`;
+2. the worker preamble;
+3. one role card;
+4. the brief.
+
+Pass `runtime`, `account`, `model`, `effort`, `access`, `cwd` and `timeout_seconds` as `subagent_start` arguments. Relay option lines inside `prompt` are ordinary task text and do not select the worker. An interactive Claude main session running the medium fallback uses Agent relays instead, with the relay option lines and a blank line before the depth line.
 
 The brief has:
 - **Request:** the user's own words for this feature, unchanged. The Builder and the Reviewer both get it.

@@ -29,6 +29,7 @@ The tier says how hard and how important the delegated piece is. The agents are 
 | `worker-xhigh` | exceptionally hard or high-impact work, deep planning, high wasn't enough | xhigh | your strongest model, for example Opus 5.5 |
 | `worker-max` | features, hard or global jobs, only after asking (section 9) | max | your strongest model; ask first |
 
+- Native `worker-*` files set effort but may inherit the caller's model. Pass the tier's model explicitly on the Agent call, including `haiku` for the low emergency fallback.
 - No tier is the default. Judge each piece by how hard and how important it is. When it sits between two tiers, take the higher one.
 - Subagents started by a subagent use `worker-low` to `worker-xhigh`.
 - A mid model at high effort can cost about as much per task as the strong model, so use the strong one there. Write down any model you restrict this way.
@@ -64,11 +65,11 @@ The table is an example. Order the pools so your paid quota goes last on work, a
 
 ## 5. Pools and how to start them
 
-In Claude Code, start every CLI Subagents job with the Agent tool and the relay agent, in the background, as the `cli-subagents` skill describes. Never run `csa run`, `csa start` or `csa follow` in your own shell and never call `subagent_start` there: the user can't see those jobs in the agent list. In Codex or another MCP host, start them with `subagent_start` and collect them with `subagent_wait` and `subagent_result` (section 11).
+In Claude Code, start every CLI Subagents job with the Agent tool and the relay agent, in the background, as the `cli-subagents` skill describes. Never run `csa run`, `csa start` or `csa follow` in your own shell and never call `subagent_start` there: the user can't see those jobs in the agent list. A Codex worker starts helpers with `subagent_start` and collects them with `subagent_wait` and `subagent_result` (section 11). So does a cheap model running inside Claude Code, whose relays would run on that cheap model, and a Claude subagent orchestrating workers, whose Agent calls block until each worker finishes. These are the exceptions to the relay rule.
 
 Give each job a description of the form `<model> · <access> · <task in a few words>`, e.g. `DeepSeek V4.1 Flash max · edit · fix the date parser`. Use `access=read` for reviews and research that only read, `edit` for changes, `full` only when the user asks.
 
-A review or investigation that needs to run tests or try things out shouldn't be stuck with `access=read`, which can't run commands. Give it a scratch copy instead: `git worktree add --detach <scratch folder> HEAD`, copy the current changes into it, start the worker there with `access=edit`, and remove the worktree afterwards (`git worktree remove --force <scratch folder>`). Nothing it does can reach the real checkout.
+A review or investigation that needs to run tests or try things out shouldn't be stuck with `access=read`, which restricts the commands it can run. Give it a scratch copy instead: `git worktree add --detach <scratch folder> HEAD`, copy the current changes into it, start the worker there with `access=edit`, and remove the worktree afterwards (`git worktree remove --force <scratch folder>`). Tell it to keep all edits in the scratch copy; a worktree shares Git metadata and does not prevent access to the real checkout.
 
 | Pool | Start with | Notes |
 |---|---|---|
@@ -110,7 +111,7 @@ When a cheap model builds or changes code, the work runs as described in the `lo
 - CLI Subagents decides whether there's room: it checks usage, caps parallel jobs per pool (`max_jobs`) and refuses a start when there's no room. Don't check usage yourself beyond two things: the account check (section 10), and one look at the numbers CLI Subagents already has when proposing pools (section 9). Treat missing or stale numbers as unknown and let CLI Subagents decide.
 - If a start is refused, its last `[csa]` line says FAILED, or there's no result, take the next pool in the tier's order. With no pool left, use the main vendor's model for that tier.
 - The main session runs at most **`<N>` subagents of your own vendor** at once, unless the user asks for more. Set `<N>` in your own instructions; 4 is a common example. These count: native workers, and relay jobs on any account of that vendor. These don't: jobs on separate API or OpenRouter accounts, and jobs in other CLIs (the `max_jobs` setting caps those). Start with a low number and raise it only when you have seen jobs run well together.
-- **Low usage:** CLI Subagents no longer refuses a start because a window is nearly used up; the last few percent are yours to spend. When a pool has about 10% or less left in its 5-hour or weekly window (the `Room:` line or `subagent_accounts` shows it), you decide:
+- **Low usage:** With `usage_ceiling = 1.0` on a runtime, CLI Subagents allows starts until the window is full. A lower ceiling still refuses starts earlier. When a pool has about 10% or less left in its 5-hour or weekly window (the `Room:` line or `subagent_accounts` shows it), you decide:
   - one job there: start it and say in one line that usage is low;
   - several jobs there: start one, tell the user how much is left, and ask whether to run the rest there too or on a pool with more room;
   - no answer by the time that first job reports, or by your next wake-up: start the rest on the pool with the most room for that tier, and say so;
@@ -175,7 +176,7 @@ Then tell the user in a line or two which account makes more sense and ask which
 ## 11. Nesting
 
 - Know your depth. A subagent's prompt starts with a line like `[depth 1 of 2: you may start up to <helper limit> helpers; jobs on your cheap pools don't count]` or `[depth 2 of 2: you can't start subagents]`. A delegated CLI Subagents worker with no such line is depth 1. Otherwise you're the main session.
-- When you start a subagent, begin its task with that line. For a relay, the option lines (`model=`, `account=`, ...) and the blank line after them come first: anything after the task starts is task text, so an option placed below the depth line is ignored and the job runs with defaults. Give the subagent a task it can finish itself, plus at most the helpers it may start.
+- When you start a subagent, begin its task with that line. For a relay, the option lines (`model=`, `account=`, ...) and the blank line after them come first: anything after the task starts is task text, so an option placed below the depth line is ignored and the job runs with defaults. With `subagent_start`, pass model, account and other options as tool arguments; option lines inside `prompt` have no effect. Give the subagent a task it can finish itself, plus at most the helpers it may start.
 - A depth-1 subagent may start up to `<helper limit>` helpers at once. Jobs that count are the ones on your own accounts; cheap pools that CLI Subagents caps itself can be left out of the count, as the depth line says. Depth 2 starts none, so it can't use the bigger pools either; do that one level higher. `max_depth = 2` is the usual setting, and CLI Subagents enforces it for its own jobs.
 - A CLI Subagents worker started straight from a session (the second vendor, the main vendor on a second account, or a cheap model inside the main vendor's CLI) may start helpers of its own, with `subagent_start`; its note from CLI Subagents says so. Its helpers can't, and they never get more access than it has.
 - **Such a worker never starts your most expensive models** unless the user said so in chat. It may start the cheaper CLIs and accounts within the rules above.

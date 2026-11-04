@@ -12,7 +12,7 @@ Cheap workers do the repository work; you keep the decisions.
 ## Your job as orchestrator
 
 - You are the orchestrator the manager gave one to three related features (use-agents, section 6): a strong worker for a high feature, or a cheap model that can start helpers for a medium one. You split the work, write the briefs, start the workers, make the decisions your task allows, and stop or escalate.
-- How you start workers: a strong Claude orchestrator through the relay agents (Agent tool); a Codex orchestrator, or a cheap model running inside Claude Code, with `subagent_start`, then `subagent_wait` and `subagent_result`, never the Agent tool. Inside a cheap model's account the relay agents run on that cheap model too and may skip the relay steps. A worker in another CLI never starts your most expensive models unless the user said so.
+- How you start workers: with `subagent_start`, then `subagent_wait`, `subagent_status` and `subagent_result`, never the Agent tool. Inside a subagent, an Agent call blocks until that worker reports, so relays would run your workers one at a time; inside a cheap model's account the relay agents also run on that cheap model and may skip the relay steps. An orchestrator in another CLI never starts your most expensive models unless the user said so.
 - Where no cheap orchestrator is available, a medium task has none: the manager runs steps 3 to 7 itself, with the same briefs and cards, and reads only the reports.
 - Delegate the building, don't read code a worker can read for you, and don't re-check work whose checks and review passed. A strong orchestrator's tokens cost many times a worker's. Workers make the engineering choices inside a brief.
 - Avoid routine log reading and repeating a passed review for reassurance. When a failure has no clear cause, look at the specific evidence you need.
@@ -41,7 +41,7 @@ Start each worker on the free tier. Move it to a pool you pay for when one of th
 ## Timeouts and check-ins
 
 - **Timeout on every worker,** as a safety net: for example Builders `timeout=3600`, Investigators and Reviewers `timeout=1800` (`timeout_seconds` with `subagent_start`).
-- **Two check-ins per worker,** at a third and two thirds of its timeout: a Builder at 20 and 40 minutes, the others at 10 and 20. Don't poll: call `subagent_wait` with `wait_seconds` set to the time until the next check-in; it returns early when the job finishes. Then read `subagent_status` once (tool count, last activity) and, for a Builder, `git -C <its checkout> status --short`. A Claude orchestrator may call these tools too; `subagent_list` gives its jobs' ids.
+- **Two check-ins per worker,** at a third and two thirds of its timeout: a Builder at 20 and 40 minutes, the others at 10 and 20. Don't poll: call `subagent_wait` with `wait_seconds` set to the time until the next check-in; it returns early when the job finishes. Then read `subagent_status` once (tool count, last activity) and, for a Builder, `git -C <its checkout> status --short`. `subagent_start` returns each job's id.
 - **Making progress:** the tool count rose since the last check, and by the second check a Builder has changed files. Let it run.
 - **Stuck:** no new tool calls since the last check, or a Builder with no changed files at the second check. Get its findings note (Rules) and move the unit to a fresh Builder, or to a strong model from another vendor at the feature's tier.
 - **Timed out:** if the last check showed progress, continue the same session with a follow-up, "continue where you stopped and finish"; it keeps its whole context. Otherwise treat it as stuck.
@@ -83,7 +83,7 @@ Dependencies that live outside git (`node_modules`, a virtualenv, build output) 
 
 Run independent work at the same time: it finishes sooner and costs no more.
 
-- **Start first, wait after.** Start every worker in the background (`run_in_background: true` on each relay), never several in one foreground batch: a batch waits for its slowest worker. Start every independent unit's worker before you wait for any of them.
+- **Start first, wait after.** Start every independent unit's worker with `subagent_start` before you wait for any of them, then wait with `subagent_wait`.
 - **Investigators.** When a piece has several separate aspects to check, start one Investigator per aspect, each with a narrow question and its own scratch copy. They never touch the real checkout, so they can all run together.
 - **Builders.** Units can build at the same time when their Files don't overlap and none needs another's result. Each gets its own worktree (below). Units that share a file, or where one needs another's result, run one after the other.
 - **Reviewers.** Each unit gets its fresh Reviewer as soon as its Builder reports. Make its scratch copy from the unit's worktree, running the scratch-copy commands inside it.
@@ -133,7 +133,7 @@ git worktree remove --force "$WT" && rm -f "$WT.patch" "$WT.base" "$WT.unit.patc
 ## Shipping
 
 Only when your task includes a PR or a merge.
-- **CI wakes you.** You wake only when a worker finishes or a message arrives; CI turning green is neither. Right after opening a PR, start one background wait on its checks, for example `gh pr checks <n> --watch` with `run_in_background`, so their result wakes you. Don't poll CI.
+- **CI wakes you.** You wake only when a worker finishes or a message arrives; CI turning green is neither. Right after opening a PR, start one background Bash command that waits on its checks, for example `gh pr checks <n> --watch` with `run_in_background`; when it ends, you get a notification. Not an Agent call, which would block. Don't poll CI.
 - **Merge when green,** if your task allows merging. Never hold a green PR back for other units.
 - **Report each PR at once:** send its link and state (merged with its SHA, or ready to merge) to whoever started you as soon as it happens (SendMessage to `main`, or the parent-message tool as a CLI Subagents worker), not only in the final report.
 - **Overlapping PRs:** when a second PR touches files the first one changed, merge main into it after the first lands and let its CI run again before merging.

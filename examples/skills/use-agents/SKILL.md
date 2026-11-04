@@ -102,7 +102,7 @@ When a cheap model builds or changes code, the work runs as described in the `lo
 - **High feature:** the orchestrator is a `worker-high` on your strongest model, or a strong model from another vendor at `xhigh` (for example Sol 6.1) to keep your own quota free.
 - **Medium feature:** the orchestrator is a cheap model in a runtime that can start helpers: Claude Code with a pay-per-token key (`cli-subagents:cli-subagents-claude` with `account=<your-cheap-model-account>`, `model=<provider/model>`, `effort=max`, `access=edit`), or a second account of that vendor. An OpenCode worker can't start helpers. Without such a pool, the manager starts the Builder and then the Reviewer itself, as `loop-building` describes.
 - Give one orchestrator one to three features: one if it is design-heavy or touches many parts of the app; two if they are related and don't edit the same files; three only if they are small and closely related. Related features share what the orchestrator learns about the code; unrelated ones only fill its context.
-- Start the orchestrator with the depth line `[depth 1 of 2: ...]` (section 11) and tell it to use `loop-building`. Tell a second-vendor or cheap-model orchestrator to start its workers with `subagent_start`, not the Agent tool.
+- Start the orchestrator with the depth line `[depth 1 of 2: ...]` (section 11) and tell it to use `loop-building`. Tell the orchestrator to start its workers with `subagent_start`, not the Agent tool: inside a subagent an Agent call blocks until the worker reports.
 - If the task includes a PR, say in the brief whether the orchestrator may merge, and ask it to report each PR as soon as it's ready or merged. `loop-building` ("Shipping") covers waiting for CI.
 
 ## 7. Room, refusals and limits

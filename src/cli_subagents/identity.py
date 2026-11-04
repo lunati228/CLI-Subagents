@@ -169,6 +169,7 @@ def written_after(path: Path, needle: str) -> str | None:
     except OSError:
         return None
     texts: list[str] = []
+    turns = 0  # assistant entries after the result; none means the relay's turn isn't on disk yet
     for raw in reversed(lines):
         try:
             entry = json.loads(raw)
@@ -181,8 +182,11 @@ def written_after(path: Path, needle: str) -> str | None:
         if entry.get("type") == "user":
             if any(isinstance(item, dict) and item.get("type") == "tool_result"
                    and needle in _result_text(item.get("content")) for item in content):
-                return "\n".join(reversed(texts))
+                # Claude Code can run the relay's next command before writing its turn to the
+                # file; then nothing is known yet, which mustn't read as a skipped block.
+                return "\n".join(reversed(texts)) if turns else None
         elif entry.get("type") == "assistant":
+            turns += 1
             texts += [str(item.get("text") or "") for item in reversed(content)
                       if isinstance(item, dict) and item.get("type") == "text"]
     return None

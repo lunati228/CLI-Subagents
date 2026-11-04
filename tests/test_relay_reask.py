@@ -89,6 +89,15 @@ class ReaskTests(TempHome):
         third = self.watch(start=self.offset)
         self.assertNotIn(REASK_LINE, third)
 
+    def test_a_turn_not_yet_on_disk_is_not_read_as_skipped(self):
+        # Seen live: the relay wrote the block, but its turn reached the transcript
+        # only after csa had already looked, and every block came out twice.
+        first = self.watch()
+        self.relay_saw(first)
+        second = self.watch(start=self.offset)
+        self.assertNotIn(REASK_LINE, second)
+        self.assertNotIn(MESSAGES_RULE, second)
+
     def test_a_reasked_block_written_the_second_time_is_accepted(self):
         first = self.watch()
         self.relay_saw(first, calls())

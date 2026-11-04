@@ -158,7 +158,7 @@ Then tell the user in a line or two which account makes more sense and ask which
 - Use it for one cheap model only unless the user names another: bigger models cost too much on a metered key.
 - Use it only when the user asks for it directly in this conversation, or as the Reviewer in `loop-building` if you set that up as a standing use. For a direct request, confirm once before starting: the task, number of jobs and rough cost. That yes covers only those jobs. A small-model job costs cents.
 - When your plan quota is low (an agent hit its limit, or usage is at 90% or more), you may ask the user once whether to use it. Never switch to it on your own.
-- It's explicit-only: only a job started with `account=<your-api-account>` runs on it. One job at a time unless `max_jobs` on the account says more.
+- It's explicit-only: only a job started with `account=<your-api-account>` runs on it. Set `max_jobs` and `job_budget_usd` on the account so several jobs fit under its caps; without `job_budget_usd` one job reserves everything left.
 - Set the caps yourself in the account's config (a rolling window and a total, for example). The `Room:` line shows what's left. A refusal at a cap is on purpose: tell the user, don't work around it, and never edit the caps. Only the user turns the account on or off.
 
 **A pay-per-token key for the cheap model** (`account=<your-cheap-model-account>`, for example through OpenRouter), if you use one:

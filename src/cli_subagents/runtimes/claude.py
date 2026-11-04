@@ -251,7 +251,7 @@ class ClaudeParser:
         if result.get("subtype") == "error_max_turns":
             return AttemptResult(MAX_TURNS, message="stopped at the max_turns limit", text=text, **common)
         if result.get("subtype") == "error_max_budget_usd":
-            return AttemptResult(BUDGET, message="stopped at the account's dollar budget (--max-budget-usd)",
+            return AttemptResult(BUDGET, message="stopped at its dollar budget (--max-budget-usd); a follow-up continues the session",
                                  text=text, **common)
 
         # Only error text counts here: the model's own words may mention limits.

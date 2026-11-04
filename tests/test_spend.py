@@ -110,6 +110,35 @@ class SpendAccountingTests(SpendHome):
         self.assertCountEqual(results, [10, "refused"])
         self.assertEqual(self.snapshot()["reserved_usd"], 10)
 
+    def test_a_job_budget_leaves_room_for_parallel_jobs(self):
+        self.account.job_budget_usd = 1.5
+        self.history(cost=2.8)
+        budgets = [spend.reserve("claude", self.account, f"job{i}", 0) for i in range(5)]
+        # Four full budgets, then the last job gets only what the cap has left.
+        self.assertEqual(budgets, [1.5, 1.5, 1.5, 1.5, 1.2])
+        self.assertAlmostEqual(self.snapshot()["remaining_usd"], 0)
+        with self.assertRaises(spend.SpendLimitError):
+            spend.reserve("claude", self.account, "job5", 0)
+
+    def test_a_job_budget_alone_still_limits_each_job(self):
+        self.account.spend_cap_usd = None
+        self.account.job_budget_usd = 1.5
+        self.assertEqual(spend.reserve("claude", self.account, "only", 0), 1.5)
+
+    def test_job_budget_round_trip_and_validation(self):
+        self.account.job_budget_usd = 1.5
+        save_config(self.config)
+        self.assertIn("job_budget_usd = 1.5", (self.home / "config.toml").read_text(encoding="utf-8"))
+        self.assertEqual(load_config().runtime("claude").find("paid").job_budget_usd, 1.5)
+        for bad in ("0", "-1", '"1.5"'):
+            with self.subTest(value=bad):
+                (self.home / "config.toml").write_text(f'[[claude.accounts]]\nname = "paid"\njob_budget_usd = {bad}\n', encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "job_budget_usd"):
+                    load_config()
+        (self.home / "config.toml").write_text('[[codex.accounts]]\nname = "x"\njob_budget_usd = 1\n', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Claude accounts only"):
+            load_config()
+
     def test_costless_started_attempts_charge_the_entire_reserved_budget(self):
         for outcome in ("error", "cancelled", "timeout", "lost"):
             with self.subTest(outcome=outcome):

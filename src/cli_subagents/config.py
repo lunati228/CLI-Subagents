@@ -103,6 +103,8 @@ class Account:
     # Soft weekly cap on the OpenRouter key in the account's own settings.json (see openrouter.py).
     # It refuses new starts like a quota step; override lets one through.
     openrouter_weekly_cap_usd: float | None = None
+    # Most one job may spend: its --max-budget-usd, so one job can't reserve the whole cap.
+    job_budget_usd: float | None = None
 
 
 @dataclass
@@ -339,7 +341,7 @@ def _account_spend(runtime: str, account: str, item: dict[str, Any]) -> dict[str
     """Validate spend settings before any account can be selected or run."""
 
     label = f"[{runtime}] account '{account}'"
-    keys = ("spend_cap_usd", "spend_period", "spend_since", "spend_caps")
+    keys = ("spend_cap_usd", "spend_period", "spend_since", "spend_caps", "job_budget_usd")
     if runtime != "claude" and any(key in item for key in keys):
         raise ValueError(f"{label}: spend caps are supported for Claude accounts only")
     cap = item.get("spend_cap_usd")
@@ -384,8 +386,11 @@ def _account_spend(runtime: str, account: str, item: dict[str, Any]) -> dict[str
         if runtime != "claude":
             raise ValueError(f"{label}: openrouter_weekly_cap_usd is supported for Claude accounts only")
         soft = _spend_amount(label, "openrouter_weekly_cap_usd", soft)
+    job = item.get("job_budget_usd")
+    if job is not None:
+        job = _spend_amount(label, "job_budget_usd", job)
     return {"spend_cap_usd": cap, "spend_period": period, "spend_since": since, "spend_caps": caps,
-            "openrouter_weekly_cap_usd": soft}
+            "openrouter_weekly_cap_usd": soft, "job_budget_usd": job}
 
 
 def _reviewer_entries(section: str, value: Any) -> list[ReviewerEntry]:
@@ -741,6 +746,8 @@ def dump_config(config: Config) -> str:
                 lines.append(f"spend_caps = [{entries}]")
             if account.openrouter_weekly_cap_usd is not None:
                 lines.append(f"openrouter_weekly_cap_usd = {_toml_value(account.openrouter_weekly_cap_usd)}")
+            if account.job_budget_usd is not None:
+                lines.append(f"job_budget_usd = {_toml_value(account.job_budget_usd)}")
             for key, value in (("plan", account.plan), ("max_jobs", account.max_jobs), ("max_effort", account.max_effort)):
                 if value is not None:
                     lines.append(f"{key} = {_toml_value(value)}")

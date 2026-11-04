@@ -295,6 +295,8 @@ def reserve(runtime: RuntimeConfig | str, account: Account, job_id: str, attempt
         if key in ledger["attempts"]:
             raise SpendLimitError(f"Attempt {key} already has a spend record")
         budget = summary["remaining_usd"]
+        if account.job_budget_usd is not None:
+            budget = account.job_budget_usd if budget is None else min(budget, account.job_budget_usd)
         if budget is not None:
             # Round down so formatting for the CLI cannot grant more than the remainder.
             budget = math.floor(budget * 1_000_000) / 1_000_000

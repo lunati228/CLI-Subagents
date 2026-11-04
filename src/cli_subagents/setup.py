@@ -493,6 +493,71 @@ def claude_sandbox_hook_status(config: Config) -> tuple[str, bool]:
             f"{'matches' if matches else 'does not match'} mode {mode}."), matches
 
 
+def relay_inbox_rule() -> str | None:
+    """The allow rule for relay payload writes, or None when the inbox is outside the home folder.
+
+    In auto mode Claude Code settles allow rules before its classifier but runs the
+    classifier after hooks, so the plugin's relay-write hook alone can't keep it from
+    judging (and sometimes refusing) a worker prompt. File writes match Edit rules only.
+    """
+
+    from cli_subagents.relay_input import inbox
+
+    try:
+        relative = inbox().relative_to(Path.home().resolve())
+    except ValueError:
+        return None
+    return f"Edit(~/{relative.as_posix()}/**)"
+
+
+def _allow_rules(data: dict[str, Any]) -> list[Any]:
+    permissions = data.get("permissions", {})
+    if not isinstance(permissions, dict) or not isinstance(permissions.get("allow", []), list):
+        raise ValueError("permissions.allow isn't a list")
+    return permissions.get("allow", [])
+
+
+def sync_relay_inbox_rule(config: Config, report: Report) -> None:
+    primary = config.runtime("claude").primary
+    path = primary / "settings.json"
+    rule = relay_inbox_rule()
+    if rule is None:
+        report.add_todo(f"Claude Code: CLI_SUBAGENTS_HOME is outside your home folder, so add an Edit allow rule for "
+                        f"its relay-inbox folder to {path} yourself; auto mode may otherwise refuse relay starts.")
+        return
+    try:
+        data = _read_claude_settings(primary)
+        allow = _allow_rules(data)
+        if rule in allow:
+            report.unchanged.append(f"Claude Code: {path} already allows relay inbox writes ({rule}).")
+            return
+        if report.dry_run:
+            report.done.append(f"Claude Code: would add the allow rule {rule} to {path}, so auto mode doesn't refuse relay starts.")
+            return
+        merged = dict(data)
+        merged["permissions"] = {**data.get("permissions", {}), "allow": [*allow, rule]}
+        backup = _write_claude_settings(primary, merged)
+        note = f"; backup at {backup}" if backup else ""
+        report.done.append(f"Claude Code: added the allow rule {rule} to {path}, so auto mode doesn't refuse relay starts{note}")
+        report.add_todo(f"Claude Code: your permissions now allow writes to csa's relay inbox ({rule}); remove the rule from {path} to undo.")
+    except (OSError, ValueError) as exc:
+        report.failed.append(f"Claude Code: couldn't add the relay inbox allow rule to {path} ({exc}); settings were left unchanged.")
+
+
+def relay_inbox_rule_status(config: Config) -> tuple[str, bool]:
+    """Read-only doctor check for the relay inbox allow rule."""
+
+    path = config.runtime("claude").primary / "settings.json"
+    rule = relay_inbox_rule()
+    if rule is None:
+        return "Claude Code relay inbox rule: CLI_SUBAGENTS_HOME is outside your home folder; add an Edit allow rule for its relay-inbox yourself.", False
+    try:
+        present = rule in _allow_rules(_read_claude_settings(path.parent))
+    except (OSError, ValueError) as exc:
+        return f"Claude Code relay inbox rule: can't inspect {path} ({exc}).", False
+    return f"Claude Code relay inbox rule: {rule} {'is' if present else 'is not'} in {path}.", present
+
+
 # Accounts --------------------------------------------------------------------
 
 
@@ -663,6 +728,7 @@ def run_setup(config: Config, hosts: list[str], accounts: list[str], dry_run: bo
         install_plugin(config, host, report, claude_route)
         if host == "claude":
             sync_claude_sandbox_hooks(config, report)
+            sync_relay_inbox_rule(config, report)
         _check_primary_login(config, host, report)
     setup_accounts(config, accounts, report)
     ensure_sandbox(config, report, sandbox)
@@ -853,6 +919,7 @@ def run_update(config: Config, hosts: list[str], dry_run: bool = False, package:
     found = [host for host in candidates if update_plugin(config, host, report)]
     if "claude" in candidates:
         sync_claude_sandbox_hooks(config, report)
+        sync_relay_inbox_rule(config, report)
     if not found:
         report.unchanged.append("No host has the cli-subagents plugin installed. Run `csa setup` to install it.")
     ensure_sandbox(config, report, sandbox)

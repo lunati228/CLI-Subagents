@@ -46,9 +46,14 @@ class SetupBase(unittest.TestCase):
         # The real sandbox install downloads about 540 MB; tests/test_sandbox_install.py covers it with a fake release.
         self._sandbox = patch("cli_subagents.sandbox.install.state", return_value=("off", "turned off in these tests"))
         self._sandbox.start()
+        # The temp folder may sit under the real home; a separate home keeps the relay inbox rule out by default.
+        (self.root / "home").mkdir()
+        self._home = patch.object(Path, "home", return_value=self.root / "home")
+        self._home.start()
         os.environ.pop("FAKE_HOST_FAIL", None)
 
     def tearDown(self):
+        self._home.stop()
         self._sandbox.stop()
         self._primary.stop()
         self._env.stop()
@@ -363,6 +368,53 @@ class SandboxHookSettingsTests(SetupBase):
                 if not matches:
                     self.assertIn("Run `csa setup` or `csa update`, then restart Claude Code", out.getvalue())
                 self.assertEqual((self.claude_dir / "settings.json").read_bytes(), before)
+
+
+class RelayInboxRuleTests(SetupBase):
+    def settings(self):
+        return json.loads((self.claude_dir / "settings.json").read_text(encoding="utf-8"))
+
+    def write_settings(self, data):
+        (self.claude_dir / "settings.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def home_is_root(self):
+        return patch.object(Path, "home", return_value=self.root)
+
+    def test_setup_adds_the_rule_once_and_keeps_other_settings(self):
+        self.write_settings({"model": "fixture", "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Read(.env)"]}})
+        with self.home_is_root():
+            for _ in range(2):
+                code, out = self.run_cli("--host", "claude", "--claude-route", "cli")
+                self.assertEqual(code, 0, out)
+            data = self.settings()
+            self.assertEqual(data["model"], "fixture")
+            self.assertEqual(data["permissions"]["allow"], ["Bash(ls:*)", "Edit(~/csa/relay-inbox/**)"])
+            self.assertEqual(data["permissions"]["deny"], ["Read(.env)"])
+            self.assertIn("already allows relay inbox writes", out)
+            self.assertEqual(setup.relay_inbox_rule_status(load_config())[1], True)
+
+    def test_dry_run_changes_nothing(self):
+        self.write_settings({"model": "fixture"})
+        with self.home_is_root():
+            code, out = self.run_cli("--host", "claude", "--claude-route", "cli", "--dry-run")
+            self.assertEqual(code, 0, out)
+            self.assertIn("would add the allow rule Edit(~/csa/relay-inbox/**)", out)
+            self.assertEqual(self.settings(), {"model": "fixture"})
+            self.assertEqual(setup.relay_inbox_rule_status(load_config())[1], False)
+
+    def test_an_inbox_outside_home_gets_a_todo_instead(self):
+        code, out = self.run_cli("--host", "claude", "--claude-route", "cli")
+        self.assertEqual(code, 0, out)
+        self.assertIn("outside your home folder", out)
+        self.assertFalse((self.claude_dir / "settings.json").exists())
+
+    def test_an_unexpected_allow_list_is_left_alone(self):
+        self.write_settings({"permissions": {"allow": "Bash(ls:*)"}})
+        with self.home_is_root():
+            code, out = self.run_cli("--host", "claude", "--claude-route", "cli")
+        self.assertEqual(code, 1, out)
+        self.assertIn("couldn't add the relay inbox allow rule", out)
+        self.assertEqual(self.settings(), {"permissions": {"allow": "Bash(ls:*)"}})
 
 
 class AccountTests(SetupBase):

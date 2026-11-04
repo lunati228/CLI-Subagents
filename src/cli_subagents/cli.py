@@ -300,6 +300,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         problems += 1
         print("Problem: Claude Code sandbox hooks do not match the configured mode. "
               "Run `csa setup` or `csa update`, then restart Claude Code.")
+    if args.runtime == "claude":
+        rule_status, has_rule = setup.relay_inbox_rule_status(config)
+        print("  " + rule_status)
+        if not has_rule:
+            print("Warning: without that allow rule, auto mode can refuse a relay's task-file write. "
+                  "Run `csa setup` or `csa update` to add it.")
     if args.runtime in ("antigravity", "opencode"):
         from cli_subagents.runtimes.reviewers import describe_chain
 

@@ -181,6 +181,25 @@ missing, csa shows it again at the same offset with "You didn't write the block 
 ignores quote style and spacing. Relays are back at effort low. Codex and Antigravity hosts have no Claude transcript
 and keep the plain copy rule for now.
 
+## 0.2.34 to 0.2.37: false re-asks, then none (2026-11-04)
+
+- 0.2.34 to 0.2.36 re-asked blocks the relay had written. Codex Sol relay in another session, job
+  20261104-171441-bbbe38, transcript `agent-a6832cede7f5e0417.jsonl`
+  (`56e7e9e9c159d4825e46d9f54bf52e8faf9931f34d88c92705c769c4ad782bd7`): 5 of its 10 message blocks were shown a
+  second time although the relay had written them (`relay_check.py` counts 19 blocks delivered including the
+  re-asks, 17 copied exactly, 2 written differently, 0 skipped; 43 requests, 913,564 cache-read, 79,288
+  cache-write, 14,608 output tokens). Cause, from the transcript timestamps: the relay wrote a block at
+  16:14:45.423 UTC, its next `csa follow` started at 45.832 and re-asked at 46.297, before the relay's turn
+  reached the file. (The earlier probe had checked the main session's own transcript, which behaved differently.)
+- 0.2.37 (c74a7e4, other session) treated "no turn after the result yet" as unknown. That stops the false
+  re-asks but also the real ones, because the newest turn is never on disk at that moment. DeepSeek relay on
+  0.2.37, transcript `agent-a6c96662db4c62402.jsonl`
+  (`2a9f11cac559c0b6d1909a7dfb5830c4ec68af010e6ef6953d286bcdb3668637`): 13 blocks delivered, 8 copied exactly,
+  5 skipped, 0 re-asked; 17 requests, 200,104 cache-read, 14,839 cache-write, 3,988 output tokens.
+- 0.2.39 judges a block only when the relay's turn after it is closed by the next tool result (the file is
+  append-only and in order, so that turn is complete). A skip is re-asked one call late, a written block never.
+  The live measurement after release goes below.
+
 ## Alternatives
 
 - Mod-driven relay (`turn.step` answers a subagent's model requests with chunks built locally; see

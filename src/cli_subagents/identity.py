@@ -157,37 +157,44 @@ def _result_text(content: Any) -> str:
     return str(content or "")
 
 
-def written_after(path: Path, needle: str) -> str | None:
-    """The relay's own text after the last tool result containing `needle`; None if no result has it.
+def _results(content: list[Any]) -> list[str]:
+    return [_result_text(item.get("content")) for item in content
+            if isinstance(item, dict) and item.get("type") == "tool_result"]
 
-    Claude Code saves an assistant text block before the tool call that follows
-    it runs, so text the relay wrote ahead of its current call is already here.
+
+def written_after(path: Path, needle: str) -> str | None:
+    """The relay's own text between the last tool result containing `needle` and the next tool result.
+
+    None while that turn isn't closed by a later tool result, or if no result has `needle`.
+    Claude Code can run the relay's next command before it writes the relay's turn to the
+    file, so text after the newest result proves nothing yet. Once the next tool result is
+    on disk, the turn before it is too: the file is append-only and in order.
     """
 
     try:
         lines = _tail_lines(path)
     except OSError:
         return None
-    texts: list[str] = []
-    turns = 0  # assistant entries after the result; none means the relay's turn isn't on disk yet
-    for raw in reversed(lines):
+    entries: list[tuple[str, list[Any]]] = []
+    for raw in lines:
         try:
             entry = json.loads(raw)
         except ValueError:
             continue
         message = entry.get("message") if isinstance(entry, dict) else None
         content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, list):
-            continue
-        if entry.get("type") == "user":
-            if any(isinstance(item, dict) and item.get("type") == "tool_result"
-                   and needle in _result_text(item.get("content")) for item in content):
-                # Claude Code can run the relay's next command before writing its turn to the
-                # file; then nothing is known yet, which mustn't read as a skipped block.
-                return "\n".join(reversed(texts)) if turns else None
-        elif entry.get("type") == "assistant":
-            turns += 1
-            texts += [str(item.get("text") or "") for item in reversed(content)
+        if isinstance(content, list) and entry.get("type") in ("user", "assistant"):
+            entries.append((entry["type"], content))
+    start = next((index for index in range(len(entries) - 1, -1, -1) if entries[index][0] == "user"
+                  and any(needle in text for text in _results(entries[index][1]))), None)
+    if start is None:
+        return None
+    texts: list[str] = []
+    for kind, content in entries[start + 1:]:
+        if kind == "user" and _results(content):
+            return "\n".join(texts)
+        if kind == "assistant":
+            texts += [str(item.get("text") or "") for item in content
                       if isinstance(item, dict) and item.get("type") == "text"]
     return None
 

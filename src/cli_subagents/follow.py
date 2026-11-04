@@ -58,7 +58,8 @@ MESSAGES_END_RULE = "===== END MESSAGES ====="
 COPY_LINE = "Now write the block below as your message, word for word, then run the command above."
 REASK_LINE = ("You didn't write the block below. Write it now as your message, word for word, "
               "then run the command above again.")
-RELAY_PENDING = "relay-pending.json"  # the last block a relay should have written, checked on its next call
+RELAY_PENDING = "relay-pending.json"  # blocks a relay was given, until its transcript shows whether it wrote them
+RELAY_PENDING_KEEP = 4
 MESSAGE_CHARS = 4000  # one message
 MESSAGES_CHARS = 12000  # one block; older messages are left out first
 # A message is held this long once the worker has moved on (a tool call, a new
@@ -729,36 +730,59 @@ class Follower:
         return body
 
     def missed_block(self) -> str | None:
-        """Relay mode: the last block again when the relay's transcript shows it wasn't written.
+        """Relay mode: a block the relay's transcript shows it skipped, to show again once.
 
-        Asks once per block. Without the relay's Claude Code transcript (other
-        hosts) or once the job has ended, nothing is re-asked.
+        A block is judged only when the relay's turn after it is closed by its
+        next tool result: Claude Code can start the relay's next command before
+        it saves the relay's turn, so the newest turn is usually not in the file
+        yet. A skip is therefore found one call late and never guessed. Without
+        the relay's Claude Code transcript (other hosts) or once the job has
+        ended, nothing is re-asked.
         """
 
         path = self.folder / RELAY_PENDING
-        pending = read_json(path, None)
-        if not isinstance(pending, dict):
+        pending = read_json(path, [])
+        pending = [pending] if isinstance(pending, dict) else pending if isinstance(pending, list) else []
+        pending = [item for item in pending if isinstance(item, dict) and str(item.get("text") or "")]
+        if not pending:
             return None
-        text = str(pending.get("text") or "")
-        missed = None
-        if (text and not pending.get("asked") and pending.get("offset") == self.position
-                and self.status.get("state") in jobs.ACTIVE_STATES):
-            try:
-                transcript = identity.relay_transcript(self.markers)
-                needle = WORKER_PREFIX + text.split("\n", 1)[0].translate(_DISPLAY_ESCAPES)
-                written = identity.written_after(transcript, needle) if transcript else None
-                if written is not None and not identity.copied(text, written):
-                    missed = text
-            except Exception:
-                pass  # the check is a convenience; never stop a follow over it
+        missed, keep = None, []
         try:
-            if missed is None:
-                path.unlink(missing_ok=True)
+            transcript = (identity.relay_transcript(self.markers)
+                          if self.status.get("state") in jobs.ACTIVE_STATES else None)
+            for item in pending if transcript else []:
+                text = str(item["text"])
+                if missed is not None:
+                    keep.append(item)
+                    continue
+                needle = WORKER_PREFIX + text.split("\n", 1)[0].translate(_DISPLAY_ESCAPES)
+                written = identity.written_after(transcript, needle)
+                if written is None:
+                    keep.append(item)  # its turn isn't closed yet
+                elif not identity.copied(text, written) and not item.get("asked"):
+                    missed = text
+                    keep.append({**item, "asked": True})  # checked once more after the re-ask
+        except Exception:
+            keep = []  # the check is a convenience; never stop a follow over it
+        try:
+            if keep:
+                write_json(path, keep[-RELAY_PENDING_KEEP:])
             else:
-                write_json(path, {**pending, "asked": True})
+                path.unlink(missing_ok=True)
         except OSError:
             pass
         return missed
+
+    def remember_block(self, body: str) -> None:
+        """Relay mode: keep a block the relay was given until its transcript shows whether it was written."""
+
+        path = self.folder / RELAY_PENDING
+        pending = read_json(path, [])
+        pending = [pending] if isinstance(pending, dict) else pending if isinstance(pending, list) else []
+        try:
+            write_json(path, (pending + [{"text": body}])[-RELAY_PENDING_KEEP:])
+        except OSError:
+            pass  # then this block just isn't checked
 
     def reask(self, text: str) -> int:
         self.emit("Keep watching with:", self.command(self.follow_command()), REASK_LINE, MESSAGES_RULE)
@@ -1038,10 +1062,7 @@ class Follower:
             self.emit(COPY_LINE)
         body = self.emit_messages()
         if self.relay and body:
-            try:
-                write_json(self.folder / RELAY_PENDING, {"offset": self.resume_offset(), "text": body})
-            except OSError:
-                pass  # then this block just isn't checked
+            self.remember_block(body)
         self.control(f"STILL RUNNING after {duration(self.elapsed())}")
         return 0
 

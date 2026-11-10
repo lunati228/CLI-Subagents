@@ -138,16 +138,26 @@ class RelayMessageTests(TempHome):
         self.assertTrue(body[0].startswith("| (6 earlier messages left out)"))
         self.assertTrue(body[-1].startswith("| 9 "))
 
-    def test_the_final_message_is_not_repeated_before_the_result(self):
-        job = self.make_job("claude", [claude_text("Reading files."), claude_tool("x"), claude_text("All done.\nResult.")])
-        self.done(job, "All done.\nResult.")
-        lines = self.watch(job)
-        self.assertEqual(self.block(lines), ["| Reading files."])
-        self.assertEqual(lines[lines.index("===== RESULT =====") + 1:lines.index("===== END RESULT =====")],
-                         ["| All done.", "| Result."])
-        self.assertTrue(lines[-1].startswith("[csa] DONE"))
+    def continuation(self, lines):
+        return int(next(line for line in lines if line.startswith("csa follow ")).split("--from ")[1].split()[0])
 
-    def test_question_and_failure_keep_their_final_formats(self):
+    def test_the_last_messages_come_first_and_the_final_one_only_as_the_result(self):
+        # Relays copy blocks only on STILL RUNNING, so an ended job shows its last messages in one more
+        # STILL RUNNING call, and the next call reports the end.
+        final = "All done.\nResult."
+        job = self.make_job("claude", [claude_text("Reading files."), claude_tool("x"), claude_text(final)])
+        self.done(job, final)
+        first = self.watch(job)
+        self.assertEqual(self.block(first), ["| Reading files."])
+        self.assertTrue(first[-1].startswith("[csa] STILL RUNNING"))
+        self.assertNotIn("===== RESULT =====", first)
+        last = self.watch(job, start=self.continuation(first))
+        self.assertIsNone(self.block(last))
+        self.assertEqual(last[last.index("===== RESULT =====") + 1:last.index("===== END RESULT =====")],
+                         ["| All done.", "| Result."])
+        self.assertTrue(last[-1].startswith("[csa] DONE"))
+
+    def test_question_and_failure_keep_their_final_formats_after_the_last_messages(self):
         for outcome in ("error", "question"):
             with self.subTest(outcome=outcome):
                 job = self.make_job("claude", [claude_text("Checking files."), claude_tool("x")])
@@ -155,11 +165,15 @@ class RelayMessageTests(TempHome):
                     messages.post_from_worker(job, "Which file?", kind="question")
                 else:
                     self.done(job, "exact\n  result\n", outcome)
-                lines = self.watch(job)
+                first = self.watch(job)
+                self.assertEqual(self.block(first), ["| Checking files."])
+                self.assertTrue(first[-1].startswith("[csa] STILL RUNNING"))
+                last = self.watch(job, start=self.continuation(first))
                 marker = "QUESTION" if outcome == "question" else "FAILED"
-                self.assertTrue(lines[-1].startswith("[csa] " + marker))
-                delimiter = "===== QUESTION =====" if outcome == "question" else "===== RESULT ====="
-                self.assertLess(lines.index(MESSAGES_END_RULE), lines.index(delimiter))
+                self.assertTrue(last[-1].startswith("[csa] " + marker))
+                self.assertIsNone(self.block(last))
+                if outcome == "question":
+                    self.assertIn("| Which file?", last)
 
     def test_worker_notes_are_messages_once(self):
         job = self.make_job("claude", [])
@@ -215,11 +229,12 @@ class RelayInstructionTests(unittest.TestCase):
                                      "Copy it only on STILL RUNNING", f"csa run --follow --window 100 --runtime {runtime}",
                                      "contains only the status line and the result", "the result is empty or the job failed"):
                         self.assertIn(required, text)
-                    for gone in ("PROGRESS", "TITLE", "--window 60"):
+                    for gone in ("PROGRESS", "--window 60"):
                         self.assertNotIn(gone, text)
                     if folder.name == "agents" and folder.parent == root:
                         # Medium copied no better than low in the 2026-11-03 tests; csa re-asks instead.
                         self.assertIn("\neffort: low\n", text)
                         # The relay re-reads its prompt every turn: keep it short, with titles from csa.
-                        self.assertIn("`[csa] title: `", text)
+                        self.assertIn("`[csa] title: <TITLE>`", text)
+                        self.assertIn("with TITLE as its Bash description", text)
                         self.assertLess(len(text), 7500)

@@ -252,6 +252,19 @@ keeps the given value); the Claude Code relays re-run the same validated continu
 background, instead of reading the output file or giving up. Before: 2 of 6 follow calls in this relay were moved
 to the background. After: to be checked in the next live run (longest relay call must stay under 150 s).
 
+## 0.2.41: titles as a saved value, the end of a job, OpenCode's model (2026-11-10)
+
+- A short Gemini relay on 0.2.40 (transcript `agent-a685f403d312fa19c.jsonl`, `3e0f1fbed138a2b11eadcc41c29b1a9f46266a626388686caf2eeb7b833724b9`, 2026-11-10, job 20261110-143656-5a85e9,
+  stopped early by Google's quota) showed csa printing a title every time, but Haiku wrote its own description
+  ("Follow worker progress") after the first call. The 0.2.39 prompt that reached 56 of 56 treated the title as a saved
+  value like JOB and OFFSET; 0.2.41 does that again (`TITLE`, "never write a description of your own"). The re-ask
+  worked in that run: one skipped block, re-asked, then copied.
+- Relays copy only on STILL RUNNING, so csa now returns a job's last messages (and an unseen identity line) in one more
+  STILL RUNNING call before DONE, FAILED or a question. The relay contract is unchanged.
+- Antigravity's `result` repeated every message of the run, so the main session got the narration too. csa now keeps
+  only the last message when the response is exactly the run's messages in order.
+- OpenCode's model and variant come from its session store (`opencode.db`, `session_message` rows, read-only).
+
 ## Alternatives
 
 - Mod-driven relay (`turn.step` answers a subagent's model requests with chunks built locally; see

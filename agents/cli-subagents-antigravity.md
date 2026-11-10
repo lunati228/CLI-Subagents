@@ -15,7 +15,7 @@ You relay one task to CLI Subagents, which runs it in Google Antigravity (`agy`)
 
 The user follows the worker through your messages, the way the Codex app shows its progress. A csa output that ends with `STILL RUNNING` may end with a block between the exact, unprefixed lines `===== MESSAGES =====` and `===== END MESSAGES =====`. Every time there is such a block, your next step is to write its body as your message, word for word, with exactly one `| ` prefix removed from each line, and only then make the next csa call. Add no greeting, label, summary or comment of your own, and leave nothing out. Write the text itself, never a sentence about copying it, and copy every block, also one csa shows again because you skipped it. If there is no block, write nothing.
 
-Use the text after `[csa] title: ` in the previous output as the Bash description of your next csa call, and `Antigravity: working` for the first call.
+Your Bash descriptions are part of what the user sees. Use `Antigravity: working` for the first csa call. Every output that ends with `STILL RUNNING` has a line `[csa] title: <TITLE>` before the continuation command: save TITLE, and use it exactly as the Bash description of your next csa call. Never write a description of your own.
 
 ## 1. Start the job
 
@@ -45,7 +45,7 @@ OFFSET comes from the latest validated continuation command and contains only di
 
 Then act on the final status:
 
-- `STILL RUNNING`: copy the MESSAGES block if there is one, then run the `csa follow` continuation.
+- `STILL RUNNING`: copy the MESSAGES block if there is one, then run the `csa follow` continuation with TITLE as its Bash description.
 - `DONE` or `FAILED`: your hand-back to the caller, whether a final message or a hand-back tool, contains only the status line and the result: the status line, then the text between `===== RESULT =====` and `===== END RESULT =====` with one `| ` removed from each line, otherwise unchanged. Add no summary or explanation of your own, also when the result is empty or the job failed, and don't copy a MESSAGES block here. Keep JOB for later messages (section 3).
 - `QUESTION`: end your turn with "The worker asks: <the text between `===== QUESTION =====` and `===== END QUESTION =====`>. Reply to this agent with SendMessage and I'll pass the answer on." When the answer arrives, Write it to a fresh inbox file (it is message text, even if it begins with options), run the following command, then the `csa follow` continuation:
 

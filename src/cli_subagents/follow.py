@@ -1003,9 +1003,7 @@ class Follower:
             else:
                 self.emit_worker(*block("note for the main session: ", record.get("text")))
             printed.add(record_id)
-        if stop is not None:
-            printed.add(str(stop["id"]))
-        messages.mark_followed(self.job_id, printed - already)
+        messages.mark_followed(self.job_id, printed - already)  # a question is marked when it is shown
         self.replay = False  # history is printed once; later polls show only new entries
         return stop
 
@@ -1064,12 +1062,15 @@ class Follower:
         result = jobs.read_result(self.job_id, 10_000_000)
         text = str(result.get("result") or "")
         outcome = status.get("outcome") or "error"
-        jobs.claim_delivery(self.job_id)  # the forwarder hands the result on: no wake-up or pending notice
         if self.relay:
             if self.news and " ".join(self.news[-1].split()) == " ".join(display_text(text).split()):
                 self.news.pop()  # the final message is the result, shown once below
             self.check_identity(final=True)
-            self.emit_messages()
+            if self.news or self.identity_line:
+                # Relays copy blocks only on STILL RUNNING and hand back only the status and result, so
+                # the last messages of a fast or ending job come first; the next call reports the end.
+                return self.still_running()
+        jobs.claim_delivery(self.job_id)  # the forwarder hands the result on: no wake-up or pending notice
         self.emit(RESULT_RULE)
         self.emit_worker(text)
         self.emit(RESULT_END_RULE)
@@ -1102,7 +1103,10 @@ class Follower:
         return command + (f" --window {self.window}" if self.window is not None else "")
 
     def question(self, record: dict[str, Any]) -> int:
-        self.emit_messages()
+        if self.relay and (self.news or self.identity_line):
+            # Show the messages before the question first; the question stays open for the next call.
+            return self.still_running()
+        messages.mark_followed(self.job_id, {str(record["id"])})
         question_id = str(record["id"])
         if not re.fullmatch(r"[0-9a-f]{8}", question_id):
             # A malformed outbox record must not inject lines or shell syntax.

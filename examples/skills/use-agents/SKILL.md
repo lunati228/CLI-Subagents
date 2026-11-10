@@ -27,7 +27,7 @@ The tier says how hard and how important the delegated piece is. The agents are 
 | `worker-medium` | well-specified implementation where the approach is already clear, tests, contained fixes | medium | your default model, for example Sonnet 5.5; Opus 5.5 for normal-size work that needs more judgment |
 | `worker-high` | hard debugging, implementation that needs design decisions or spans several parts, code review, ambiguous problems | high | your strongest model, for example Opus 5.5 |
 | `worker-xhigh` | exceptionally hard or high-impact work, deep planning, high wasn't enough | xhigh | your strongest model, for example Opus 5.5 |
-| `worker-max` | features, hard or global jobs, only after asking (section 9) | max | your strongest model; ask first |
+| max | features, hard or global jobs, only on the user's word (section 13) | high or xhigh on a top model, or max on your strongest | a top model if your plan has one (for example Fable 5.2), else your strongest; ask first |
 
 - Native `worker-*` files set effort but may inherit the caller's model. Pass the tier's model explicitly on the Agent call, including `haiku` for the low emergency fallback.
 - No tier is the default. Judge each piece by how hard and how important it is. When it sits between two tiers, take the higher one.
@@ -46,26 +46,27 @@ The table is an example. Order the pools so your paid quota goes last on work, a
 | medium | the cheap builder loop (section 6), then a strong model from another vendor (for example Sol 6.1 high), then the main vendor | the same as on work |
 | high | a feature to build: the cheap builder loop with a strong orchestrator (section 6). Everything else: your strongest model at high (for example Opus 5.5), or the other vendor's at xhigh (for example Sol 6.1) | the same as on work; the cheap builder loop only when the user asks for it |
 | xhigh | your strongest model at xhigh (for example Opus 5.5) | your strongest model at xhigh (for example Opus 5.5) |
-| max | your strongest model at max, after asking | your strongest model at max, after asking |
+| max | your top model, after asking (section 13) | your top model, after asking (section 13) |
 
 - On work, the cheap builder pool comes before the main vendor at medium and high so your main accounts keep their quota. Drop this rule if you have no cheap pool.
 - **The main vendor** at medium means its default model (for example Sonnet 5.5), or its strong model where the work needs more judgment. The other vendor's strong model at xhigh covers the harder end of medium.
-- **The weakest model** is only an emergency fallback when nothing else has room.
+- **The weakest model** is only an emergency fallback when nothing else has room, apart from loop-building's ship gate if you use it there.
 - UI work and an explicit request for speed go to the main vendor whatever the table says (section 4).
 
 ## 4. Traits
 
 - **UI and visual work:** your strongest model, and the one with the best visual judgment. Never a cheap builder or a second vendor.
+- **Security work** (hardening, finding and closing exploits and vulnerabilities): your top model if it's stronger there (for example Fable 5.2), section 13.
 - **Web research, Reddit, forums:** a CLI whose search reaches those sites, for example Codex or Antigravity, never the main vendor's own search (section 8).
-- **The user asked for speed:** the main vendor. Record the other vendor's speed here as an example: one person measured Codex at about 4x slower. A cheap builder loop also takes longer than one strong worker.
-- **Two strong models of about equal strength** (one person's example: Opus 5.5 and Sol 6.1 xhigh): take whichever has more room, unless you prefer one for final code review and UI. Write that preference here, as an example setting: "prefer Opus 5.5 for final code review and UI".
+- **The user asked for speed:** the main vendor. Record the other vendor's speed here, for example: Codex measured at about 4x slower. A cheap builder loop also takes longer than one strong worker.
+- **Two strong models of about equal strength** (for example Opus 5.5 and Sol 6.1 xhigh): take whichever has more room, unless you prefer one for UI and for code review outside the loop. Write that preference here, as an example setting: "prefer Opus 5.5 for UI and for code review outside the loop".
 - **Context size:** free models in an OpenCode or Antigravity pool may have 200K, so give them short jobs. A paid model with 1M gets long build sessions, repo-wide read-only sweeps, big diffs and log analysis.
-- **Fast small models** such as Gemini Flash may often hallucinate: made-up sites, wrong research claims (one person's example). Check the sources of any fact or link from one before relying on it.
+- **Fast small models** such as Gemini Flash may often hallucinate: made-up sites, wrong research claims. Check the sources of any fact or link from one before relying on it.
 - **Reports are claims.** Before relying on a subagent's result, check the key facts it rests on yourself. That's reading, not another agent.
 
 ## 5. Pools and how to start them
 
-In Claude Code, start every CLI Subagents job with the Agent tool and the relay agent, in the background, as the `cli-subagents` skill describes. Never run `csa run`, `csa start` or `csa follow` in your own shell and never call `subagent_start` there: the user can't see those jobs in the agent list. A Codex worker starts helpers with `subagent_start` and collects them with `subagent_wait` and `subagent_result` (section 11). So does a cheap model running inside Claude Code, whose relays would run on that cheap model, and a Claude subagent orchestrating workers, whose Agent calls block until each worker finishes. These are the exceptions to the relay rule.
+In Claude Code, start every CLI Subagents job with the Agent tool and the relay agent, in the background, as the `cli-subagents` skill describes. Never run `csa run`, `csa start` or `csa follow` in your own shell and never call `subagent_start` there: the user can't see those jobs in the agent list. A Codex worker starts helpers with `subagent_start` and collects them with `subagent_wait` and `subagent_result` (section 11). So does a cheap model running inside Claude Code, whose relays would run on that cheap model, a Claude subagent orchestrating workers, whose Agent calls block until each worker finishes, and a child session running a loop (section 12), whose steps track workers by job id. These are the exceptions to the relay rule.
 
 Give each job a description of the form `<model> · <access> · <task in a few words>`, e.g. `DeepSeek V4.1 Flash max · edit · fix the date parser`. Use `access=read` for reviews and research that only read, `edit` for changes, `full` only when the user asks.
 
@@ -86,31 +87,33 @@ A review or investigation that needs to run tests or try things out shouldn't be
 - **Free or paid cheap model:** the same model at the same tier. Use free first. Use a pool you pay for when the free limit is used up or the job needs more context than the free tier gives, and only where that pool is allowed (section 10).
 - OpenCode jobs' shell commands pass CLI Subagents' review gate, which may ask a cheap main-vendor model and then a fast search model whether to allow a command. That's the tool's own check, not a job you start.
 
-**Models in one line each (one person's notes, replace with yours):**
-- **Opus 5.5** (1M context): strongest. Preferred for hard design, UI and code-review tasks.
+**Models in one line each (example notes, replace with yours):**
+- **Fable 5.2:** stronger than Opus and better at security work; used only on request (section 13).
+- **Opus 5.5** (1M context): the strongest model used without asking. Preferred for hard design, UI and code-review tasks.
 - **Sol 6.1** (`gpt-6.1-sol`, 500K): about 4x slower than the main vendor's models at the same tier. `high` is about Opus medium, `xhigh` about Opus high.
 - **GPT-6 Luna** (`gpt-6-luna`): a small, fast GPT model with the same Reddit and forum reach as Sol. Quick lookups and low work.
 - **Sonnet 5.5:** near-Opus results on well-scoped work at a lower cost per task, at medium only.
 - **Haiku 5.5:** cheap and fast, the weakest model of the main vendor.
 - **DeepSeek V4.1 Flash:** working alone, about Sonnet's level on routine coding, above Haiku and Gemini Flash. Nearly free.
-- **Gemini 3.8 Flash** (`gemini-3.8-flash-high`): fast and plentiful, often hallucinates (one person's note).
+- **Gemini 3.8 Flash** (`gemini-3.8-flash-high`): fast and plentiful, often hallucinates.
 
 ## 6. A cheap model building code
 
 When a cheap model builds or changes code, the work runs as described in the `loop-building` skill. Read that skill if, and only if, you will start and manage the loop's workers yourself.
 
-- The main session is the manager: it hands out features and doesn't run loops itself. A depth-2 agent can't orchestrate.
+- The main session is the manager: it hands out features and doesn't run loops itself; its orchestrators do, and a child session can be one (section 12). A depth-2 agent can't orchestrate.
 - **High feature:** the orchestrator is a `worker-high` on your strongest model, or a strong model from another vendor at `xhigh` (for example Sol 6.1) to keep your own quota free.
-- **Medium feature:** the orchestrator is a cheap model in a runtime that can start helpers: Claude Code with a pay-per-token key (`cli-subagents:cli-subagents-claude` with `account=<your-cheap-model-account>`, `model=<provider/model>`, `effort=max`, `access=edit`), or a second account of that vendor. An OpenCode worker can't start helpers. Without such a pool, the manager starts the Builder and then the Reviewer itself, as `loop-building` describes.
+- **Medium feature:** the orchestrator is a cheap model in a runtime that can start helpers: Claude Code with a pay-per-token key (`cli-subagents:cli-subagents-claude` with `account=<your-cheap-model-account>`, `model=<provider/model>`, `effort=max`, `access=edit`), or a second account of that vendor. An OpenCode worker can't start helpers. Without such a pool, the manager starts the Builder and then the Reviewer itself, as `loop-building` describes. Don't make the main vendor's models a medium orchestrator just because they have room; only when the cheap pool and the second vendor have none.
 - Give one orchestrator one to three features: one if it is design-heavy or touches many parts of the app; two if they are related and don't edit the same files; three only if they are small and closely related. Related features share what the orchestrator learns about the code; unrelated ones only fill its context.
 - Start the orchestrator with the depth line `[depth 1 of 2: ...]` (section 11) and tell it to use `loop-building`. Tell the orchestrator to start its workers with `subagent_start`, not the Agent tool: inside a subagent an Agent call blocks until the worker reports.
 - If the task includes a PR, say in the brief whether the orchestrator may merge, and ask it to report each PR as soon as it's ready or merged. `loop-building` ("Shipping") covers waiting for CI.
+- Loop work clears loop-building's ship gate before its PR: check its verdicts in the report and don't add a strong-model review on top, unless a concrete risk is still open or the user asks.
 
 ## 7. Room, refusals and limits
 
 - CLI Subagents decides whether there's room: it checks usage, caps parallel jobs per pool (`max_jobs`) and refuses a start when there's no room. Don't check usage yourself beyond two things: the account check (section 10), and one look at the numbers CLI Subagents already has when proposing pools (section 9). Treat missing or stale numbers as unknown and let CLI Subagents decide.
 - If a start is refused, its last `[csa]` line says FAILED, or there's no result, take the next pool in the tier's order. With no pool left, use the main vendor's model for that tier.
-- The main session runs at most **`<N>` subagents of your own vendor** at once, unless the user asks for more. Set `<N>` in your own instructions; 4 is a common example. These count: native workers, and relay jobs on any account of that vendor. These don't: jobs on separate API or OpenRouter accounts, and jobs in other CLIs (the `max_jobs` setting caps those). Start with a low number and raise it only when you have seen jobs run well together.
+- The main session runs at most **`<N>` subagents of your own vendor** at once, unless the user asks for more. Set `<N>` in your own instructions; 4 is a common example. These count: native workers, relay jobs on any account of that vendor, and child sessions (not their helpers). These don't: jobs on separate API or OpenRouter accounts, and jobs in other CLIs (the `max_jobs` setting caps those). Start with a low number and raise it only when you have seen jobs run well together.
 - **Low usage:** With `usage_ceiling = 1.0` on a runtime, CLI Subagents allows starts until the window is full. A lower ceiling still refuses starts earlier. When a pool has about 10% or less left in its 5-hour or weekly window (the `Room:` line or `subagent_accounts` shows it), you decide:
   - one job there: start it and say in one line that usage is low;
   - several jobs there: start one, tell the user how much is left, and ask whether to run the rest there too or on a pool with more room;
@@ -147,8 +150,8 @@ These are example settings. Decide yourself which of them need a question, and w
   Take the numbers from the `Room:` line or the `subagent_accounts` tool, once. Ask this together with the account check (section 10), as one question, with your proposal written out before it.
   - **When you show the user a plan, put the pool proposal in it.** Their go-ahead on the plan then covers the pools too. Nothing starts before the user approves a plan that needs approval.
   - **After the user has approved the work**, a pool question must not stall it. If the user doesn't answer, go ahead with your proposal, or with whatever pool fits and has room, and say what you picked and why. A question has no timer and ending your turn on it waits indefinitely, so start the pieces whose pool is obvious first, then ask in your message. When a notification from those agents wakes you and there's still no answer, go ahead.
-  - Subagents never ask. They follow the pools they were given, or the tier order.
-- **`worker-max`:** the top tier is costly. Never start one without asking the user, even where it fits the table. Say what the task is and why xhigh isn't enough. Until they say yes, use `worker-xhigh`. Subagents never start max helpers.
+  - Subagents never ask about pools. They follow the pools they were given, or the tier order.
+- **The max tier and your top model, at any effort:** the top tier is costly, so use it only on the user's word (section 13).
 - **A second vendor on work** (other than quick web lookups, section 8): ask first if your company or plan rules are unclear. If the user says no, use the main vendor's model for that tier. A subagent can't ask the user, so it uses the main vendor's model for that tier straight away.
 - Pools on your own accounts or a key you already allowed need no OK for work.
 
@@ -182,3 +185,23 @@ Then tell the user in a line or two which account makes more sense and ask which
 - **Such a worker never starts your most expensive models** unless the user said so in chat. It may start the cheaper CLIs and accounts within the rules above.
 - A subagent can't talk to the user. If a later step waits on a result it started, it says so in its report, and the main session tells the user.
 - The same rules apply at every depth.
+
+## 12. Child sessions
+
+Some apps let the main session start a separate session instead of a subagent (for example `start_session` in the Claude desktop app). The user can talk to it, approve its prompts and steer it, and it runs on the main account. Default to subagents: the sidebar should stay short.
+
+- **When:** only to build and test a new feature or subsystem at high tier or above that also runs past today (several PRs, or a service or timer left running) or needs the user along the way (design talks, root steps, live calls on someone's account). Bug fixes, reviews, and research-, report- or docs-only work stay subagents however big, and so do medium features (a cheap model orchestrates those). The exception is a session the user asks for or works in directly.
+- **Propose first:** each gets a one-line reason in your plan, and approving the plan approves it. Told to start at once without a plan, start only clear cases and still give the reason.
+- Only the manager starts them, at most 2 at once (an example number). When one's work is done, offer to archive it.
+- **It is the orchestrator,** the one exception to "the manager doesn't run loops" (section 6): your strongest model at high or xhigh runs loop-building itself, with no orchestrator subagent inside and fewer helpers than section 11 allows (2, for example). For nesting it counts as depth 1: its helpers get the depth-2 line.
+- **Its brief** also names a progress file to keep, which steps wait for the user, and when to report to the manager (SendMessage in the Claude desktop app): blockers, each PR, and the end.
+
+## 13. A top model, only on request
+
+Some plans offer a model above your strongest everyday one. Without one, apply this section to `worker-max` on your strongest model.
+
+For example, Fable 5.2 is stronger than Opus and the best at security work: hardening an app, finding and closing exploits and vulnerabilities. By user reports it also wrongly refuses defensive security work less often. Going by public benchmarks, Fable high does slightly better than Opus xhigh for about 30% more per task, and about as well as Opus max for less; Fable xhigh costs about what Opus max does and does a bit better on the hardest tasks. It runs out of context more often than Opus, so managers, orchestrators and child sessions never run on it.
+
+- **Only on the user's word,** at any effort, even where it fits the table; the user may not want it now. When it would make sense, ask. Say what the task is and why your strongest model at xhigh isn't enough: what makes it the exception, or the security reason, and why that gain is worth the extra cost. Add the effort you want and how much of its usage window is left. A subagent that needs it asks whoever started it with the same justification, and the ask goes up to the manager; the manager asks the user and passes the yes back in the user's words. Until the yes comes, carry on with your strongest model at the task's tier (xhigh for max-tier work).
+- **Max tier** (features, hard or global jobs): the top model at high (`worker-high` with that model) for hard work xhigh may not crack, and at xhigh (`worker-xhigh`) for the hardest. A contained feature can go to it whole; for a global job, or anything long enough to fill its context, give it the hard parts and keep the rest on your strongest model. Its max effort (`worker-max`) only when the user names it, and the manager starts it.
+- **Security work:** propose it one effort below the strongest model you'd use (high for xhigh work).

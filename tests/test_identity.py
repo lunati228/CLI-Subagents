@@ -138,11 +138,34 @@ class IdentityFollowTests(TempHome):
             "| I'm Haiku 5.5 (effort low), the relay agent for Codex gpt-6.1-sol (effort high). "
             "Read from my transcript and Codex's session log."])
 
-    def test_opencode_says_it_does_not_report_its_model(self):
-        job = self.job("opencode", [], model="opencode/deepseek-v4.1-flash-free")
-        [line] = self.first_block(job)
+    def opencode_job(self, **options):
+        events = [{"type": "step_start", "sessionID": "ses_test1234", "part": {}},
+                  {"type": "text", "sessionID": "ses_test1234", "part": {"text": "Reading files."}}]
+        return self.job("opencode", events, model="opencode/deepseek-v4.1-flash-free", **options)
+
+    def test_opencode_without_its_session_store_says_so(self):
+        line = self.first_block(self.opencode_job())[0]
         self.assertTrue(line.startswith("| I'm Haiku 5.5 (effort low), the relay agent for OpenCode."))
         self.assertIn("OpenCode didn't report which model it runs; asked for opencode/deepseek-v4.1-flash-free.", line)
+
+    def test_opencode_model_and_variant_from_its_session_store(self):
+        import sqlite3
+
+        folder = Path(os.environ["HOME"]) / ".local" / "share" / "opencode"
+        folder.mkdir(parents=True)
+        with sqlite3.connect(folder / "opencode.db") as db:  # the session_message table of OpenCode 2.x
+            db.execute("create table session_message (id text, session_id text, type text, seq integer, data text)")
+            db.execute("create table credential (id text, value text)")
+            for seq, data in enumerate(({"agent": "csa-worker"},
+                                        {"model": {"id": "deepseek-v4.1-flash-free", "providerID": "opencode",
+                                                   "variant": "max"}})):
+                db.execute("insert into session_message values (?, ?, 'x', ?, ?)",
+                           (f"m{seq}", "ses_test1234", seq, json.dumps(data)))
+        db.close()
+        with patch.dict(os.environ, {"USERPROFILE": os.environ["HOME"]}):
+            line = self.first_block(self.opencode_job(effort="max"))[0]
+        self.assertEqual(line, "| I'm Haiku 5.5 (effort low), the relay agent for OpenCode opencode/deepseek-v4.1-flash-free "
+                               "(effort max). Read from my transcript and OpenCode's session store.")
 
     def test_a_long_relay_transcript_is_searched_from_its_end(self):
         relay = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / "C--work" / SESSION / "subagents" / "agent-a1.jsonl"

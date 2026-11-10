@@ -344,10 +344,28 @@ class AntigravityParser:
     def progress(self) -> dict[str, Any]:
         return {"tool_uses": self.tool_uses, "last_tool": self.last_tool, "last_text": self.last_text[-600:]}
 
+    def final_text(self, response: str) -> str:
+        """The answer: agy's response repeats every message of the run, and the answer is the last.
+
+        Only a response that is exactly the run's messages in order is cut to the last one, so
+        the main session gets the answer while the relay has shown the progress messages.
+        """
+
+        steps = [text.strip() for _index, text in sorted(self._texts.items()) if text.strip()]
+        if len(steps) < 2 or not response.endswith(steps[-1]):
+            return response
+        rest = response
+        for text in steps:
+            found = rest.find(text)
+            if found < 0 or rest[:found].strip():
+                return response  # something else is in there: keep agy's text as it is
+            rest = rest[found + len(text):]
+        return steps[-1] if not rest.strip() else response
+
     def finish(self, exit_code: int | None, stderr_tail: str) -> AttemptResult:
         result = self.result or {}
         common = {"session_id": self.session_id, "usage": result.get("usage"), "num_turns": result.get("num_turns")}
-        response = (str(result.get("response") or "") or self.last_text).strip()
+        response = self.final_text((str(result.get("response") or "") or self.last_text).strip())
         if result.get("status") == "SUCCESS" and exit_code == 0:
             denied = [item for item in result.get("denied_actions") or [] if isinstance(item, dict)]
             if not response and denied:

@@ -27,7 +27,8 @@ TAIL_BYTES = 4_000_000  # read from the end of a transcript or rollout file
 SEARCH_BYTES = 64_000_000  # read from the end of one relay transcript when looking for its marker
 CANDIDATES = 40  # newest subagent transcripts of the session that are searched
 LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
-SOURCES = {"claude": "the worker's transcript", "codex": "Codex's session log", "antigravity": "the worker's start event"}
+SOURCES = {"claude": "the worker's transcript", "codex": "Codex's session log", "antigravity": "the worker's start event",
+           "opencode": "OpenCode's session store"}
 
 _NOT_TOKEN = re.compile(r"[^A-Za-z0-9._:/@+-]")
 _CLAUDE_MODEL = re.compile(r"claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?")
@@ -106,6 +107,41 @@ def rollout_settings(path: Path) -> tuple[str, str | None] | None:
         model = clean(payload.get("model")) if isinstance(payload, dict) else None
         if model:
             return model, clean(payload.get("effort"))
+    return None
+
+
+def opencode_settings(session: str) -> tuple[str, str | None] | None:
+    """(provider/model, variant) of the last answer in OpenCode v2's session store, read-only.
+
+    OpenCode keeps sessions in `<XDG_DATA_HOME or ~/.local/share>/opencode/opencode.db`; each
+    assistant message's JSON names the model it used (`{"model": {"providerID", "id", "variant"}}`).
+    Only the `session_message` rows of this session are read. A missing file or another schema
+    means the model stays unreported.
+    """
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{4,120}", session):
+        return None
+    import sqlite3
+
+    base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    path = base / "opencode" / "opencode.db"
+    if not path.is_file():
+        return None
+    try:
+        with sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=1) as db:
+            rows = db.execute("select data from session_message where session_id = ? order by seq desc limit 50",
+                              (session,)).fetchall()
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    for (data,) in rows:
+        try:
+            model = json.loads(data).get("model") if isinstance(data, str) else None
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(model, dict) and clean(model.get("id")):
+            provider = clean(model.get("providerID"))
+            name = f"{provider}/{clean(model['id'])}" if provider else clean(model["id"])
+            return clean(name) or name, clean(model.get("variant"))
     return None
 
 
@@ -254,6 +290,12 @@ class WorkerRecord:
                 init = event.get("init")
                 self.model = clean(init.get("model")) if isinstance(init, dict) else None
                 self.answered = True
+        elif self.runtime == "opencode":
+            session = str(event.get("sessionID") or "")
+            if session and session != self.session:  # a new attempt runs a new session
+                self.session, self.answered = session, False
+            if kind in ("text", "tool_use", "step_finish") and self.session:
+                self.answered = True
 
 
 @dataclass
@@ -278,7 +320,10 @@ def worker_identity(record: WorkerRecord, account: str | None, final: bool = Fal
 
     runtime = record.runtime
     if runtime == "opencode":
-        return Worker(None, None, None)
+        if not (record.answered or final):
+            return None  # OpenCode stores the model with the first answer
+        found = opencode_settings(record.session) if record.session else None
+        return Worker(found[0], found[1], SOURCES["opencode"]) if found else Worker(None, None, None)
     if runtime == "claude":
         if not (record.answered or final):
             return None  # the transcript entry follows the first answer

@@ -11,14 +11,14 @@ Cheap workers do the repository work; you keep the decisions.
 
 ## Your job as orchestrator
 
-- You are the orchestrator the manager gave one to three related features (use-agents, section 6): a strong worker for a high feature, or a cheap model that can start helpers for a medium one. You split the work, write the briefs, start the workers, make the decisions your task allows, and stop or escalate.
-- As a depth-1 orchestrator, start workers with `subagent_start`, then `subagent_wait`, `subagent_status` and `subagent_result`, never the Agent tool. Inside a subagent, an Agent call blocks until that worker reports, so relays would run your workers one at a time; inside a cheap model's account the relay agents also run on that cheap model and may skip the relay steps. An orchestrator in another CLI never starts your most expensive models unless the user said so.
+- You are the orchestrator the manager gave one to three related features (use-agents, sections 6 and 12): a strong worker for a high feature, or a cheap model that can start helpers for a medium one. You split the work, write the briefs, start the workers, make the decisions your task allows, and stop or escalate.
+- As an orchestrator (a depth-1 subagent or a child session), start workers with `subagent_start`, then `subagent_wait`, `subagent_status` and `subagent_result`, never the Agent tool. Inside a subagent, an Agent call blocks until that worker reports, so relays would run your workers one at a time; inside a cheap model's account the relay agents also run on that cheap model and may skip the relay steps. An orchestrator in another CLI never starts your most expensive models unless the user said so.
 - Where no cheap orchestrator is available, a medium task has none: the manager runs steps 3 to 7 itself, with the same briefs and cards, and reads only the reports.
 - Delegate the building, don't read code a worker can read for you, and don't re-check work whose checks and review passed. A strong orchestrator's tokens cost many times a worker's. Workers make the engineering choices inside a brief.
 - Avoid routine log reading and repeating a passed review for reassurance. When a failure has no clear cause, look at the specific evidence you need.
 - A unit too hard for the cheap builder, marked at the split or given up on in step 7, goes to a strong model from another vendor at the feature's tier, working alone (for example Sol high for a medium feature, Sol xhigh for a high one); that spares your main seats. If it has no room, a Claude orchestrator starts a fresh worker at the feature's tier, and a cheap orchestrator hands the unit back to the manager. A unit harder than its feature's tier goes back to the manager with the Investigator's notes: the feature was given the wrong tier.
 - Several features: run them side by side. If one waits for a decision, keep going with the others. If it gets too much to keep track of, finish what is running, report, and give the rest back to the manager.
-- There is no automatic strong-model review in the loop. If a concrete risk is still open after the loop, say so in your report, or get a focused review under use-agents.
+- The ship gate (step 10) replaces a strong-model review before the PR. If a concrete risk is still open after it, say so in your report, or get a focused review under use-agents.
 - Before the first Builder, do any research your rules require for this work (a prior-art or research step in your instructions) and put its findings in the brief. Workers can't do that research themselves.
 
 ## Cheap pools
@@ -40,8 +40,8 @@ Start each worker on the free tier. Move it to a pool you pay for when one of th
 
 ## Timeouts and check-ins
 
-- **Timeout on every worker,** as a safety net: for example Builders `timeout=3600`, Investigators and Reviewers `timeout=1800` (`timeout_seconds` with `subagent_start`).
-- **Two check-ins per worker,** at a third and two thirds of its timeout: a Builder at 20 and 40 minutes, the others at 10 and 20. Don't poll: call `subagent_wait` with `job_ids` and `timeout_seconds` set to the time until the next check-in. It returns early for a result or message. Codex caps each wait at 240 seconds: if it returns before the check-in, wait again for the remaining time without checking status. Then read `subagent_status` once (tool count, last activity) and, for a Builder, `git -C <its checkout> status --short`. `subagent_start` returns each job's id.
+- **Timeout on every worker,** as a safety net: for example Builders `timeout=3600`, Investigators and Reviewers `timeout=1800`, ship-gate Reviewers 2700 (`timeout_seconds` with `subagent_start`).
+- **Two check-ins per worker,** at a third and two thirds of its timeout: a Builder at 20 and 40 minutes, the others at 10 and 20 (ship-gate Reviewers at 15 and 30). Don't poll: call `subagent_wait` with `job_ids` and `timeout_seconds` set to the time until the next check-in. It returns early for a result or message. Codex caps each wait at 240 seconds: if it returns before the check-in, wait again for the remaining time without checking status. Then read `subagent_status` once (tool count, last activity) and, for a Builder, `git -C <its checkout> status --short`. `subagent_start` returns each job's id.
 - **Making progress:** the tool count rose since the last check, and by the second check a Builder has changed files. Let it run.
 - **Stuck:** no new tool calls since the last check, or a Builder with no changed files at the second check. Get its findings note (Rules) and move the unit to a fresh Builder, or to a strong model from another vendor at the feature's tier.
 - **Timed out:** if the last check showed progress, continue the same session with a follow-up, "continue where you stopped and finish"; it keeps its whole context. Otherwise treat it as stuck.
@@ -57,7 +57,7 @@ The same cheap model often runs in more than one pool. The rows below are exampl
 | Builder | the cheap model, free or paid by the rule above, `access=edit` in the real checkout, or in its own worktree when units build in parallel | the cheap model, free, `access=edit` in the real checkout, or in its own worktree when units build in parallel |
 | Reviewer | whichever cheap reviewer you set up, here a small fast model on `account=<your-api-account>`: `model=haiku`, `effort=max`, `access=edit` in a scratch copy | a fresh cheap-model session, free, `access=edit` in a scratch copy |
 
-Pools you pay for, and the API account, are for whatever you allowed them for. Keep a shared or company key inside the boundary its owner set. Elsewhere use them only when the user says so.
+The ship gate (step 10) uses both the cheap model and a Reviewer from another model family. Pools you pay for, and the API account, are for whatever you allowed them for. Keep a shared or company key inside the boundary its owner set. Elsewhere use them only when the user says so.
 
 **Optional second Reviewer.** A bigger unit (several files, or more than about 200 lines) may also get a second, independent Reviewer from a different pool, for example a fresh small model on `<your-second-codex-account>` (`account=<your-second-codex-account>`, `model=gpt-6-luna`, `effort=high`), in its own scratch copy, next to the first. Its free quota is small: if it is refused or fails, skip it and go on with the first Reviewer's verdict. Never start it on an account that costs money you haven't allowed. A concrete defect from either Reviewer starts a fix round.
 
@@ -88,7 +88,7 @@ Run independent work at the same time: it finishes sooner and costs no more.
 - **Builders.** Units can build at the same time when their Files don't overlap and none needs another's result. Each gets its own worktree (below). Units that share a file, or where one needs another's result, run one after the other.
 - **Reviewers.** Each unit gets its fresh Reviewer as soon as its Builder reports. Make its scratch copy from the unit's worktree, running the scratch-copy commands inside it.
 - **Landing.** Bring passed units into the real checkout one at a time, then run step 9 on the combined change.
-- **How many at once.** Respect the depth line you were started with (use-agents, section 11: `<helper limit>` helpers for a depth-1 orchestrator, counting the ones on your own accounts) and the pool table's `max_jobs` for the rest.
+- **How many at once.** Respect the depth line you were started with (use-agents, section 11: `<helper limit>` helpers for a depth-1 orchestrator, counting the ones on your own accounts, and fewer for a child session, section 12) and the pool table's `max_jobs` for the rest.
 
 A Builder's worktree starts from the real checkout's current state, uncommitted work included. In Git Bash, from the real checkout, with `$WT` a new folder outside the repository:
 
@@ -127,8 +127,9 @@ git worktree remove --force "$WT" && rm -f "$WT.patch" "$WT.base" "$WT.unit.patc
    Then the unit goes to a stronger model (see "Your job as orchestrator"), with the brief, the current diff and the open findings.
 8. **Next units.** Start a unit once the units it needs have landed. Independent units run steps 3 to 7 at the same time, each in its own worktree; in any one checkout there's one writer at a time.
 9. **Combined check.** A fresh Reviewer runs, in a scratch copy of the whole change, every unit's checks plus the full test suite; with one unit, that is the unit's checks plus the full suite. It reviews the whole change in phase-review mode only when units connect to each other (one calls, imports or configures another) or the combined checks fail. It covers only this loop's work; pieces built outside the loop (UI done by Claude, for example) are not part of it. If the combined diff is too big for one review, review it in parts by area. Defects it finds go back to the Builder that owns that unit, through steps 4 to 7, and end with a new combined check.
-10. **Ship,** only when your task says to (see "Shipping").
-11. **Report** to whoever started you: what changed, the check results, what the Reviewers found and fixed, and anything still open.
+10. **Ship gate.** A Builder brings the change up to date with its target branch (renumbering migrations if needed), and you run the full suite once on the result. Then two fresh Reviewers at once, in phase-review mode, get only the brief's Request, Goal and Checks plus the suite output: the cheap model, and a Reviewer from another model family (for example the small fast model on `account=<your-api-account>`, `effort=max`). If that one can't run, a Reviewer from a third family replaces it (for example the small model on `<your-second-codex-account>`); with neither, nothing ships. Both must PASS. A defect goes to its unit's Builder for one fix, then the gate repeats; after a second failed gate, escalate with both reports and ship nothing. Rerun the gate before merging if a later merge of the target branch touches files this change edits.
+11. **Ship,** only when your task says to (see "Shipping").
+12. **Report** to whoever started you: what changed, the check results, the ship gate's verdicts with who gave them and each one's time and cost, what the Reviewers found and fixed, and anything still open.
 
 ## Shipping
 
@@ -213,5 +214,5 @@ Say what you could not verify. End with PASS or FAIL, then the defects, most sev
 - **DECISION_REQUIRED:** decide it if it's within your task. Otherwise ask whoever started you; the main session asks the user. Then continue the same Builder with the decision.
 - **Interrupted Builder:** first ask the same session, as a follow-up and without tools, for at most 600 characters: where the problem is, its best guess, and what it ruled out. Then treat its changes as suspect: have a Reviewer or Investigator classify the diff before you reuse or revert it.
 - **No self-approval:** a Builder never reviews its own work, and a Reviewer never fixes what it found.
-- **A pool refuses or runs out mid-loop:** inside the loop these rules decide, not the "next pool" rule in use-agents, section 7. A refused Reviewer is replaced by a fresh one from another allowed pool for that round. If the Builder's pool runs out (the free daily limit, for example), start a new Builder on the next pool with the brief, the current diff and the open findings; it can't continue the old session.
+- **A pool refuses or runs out mid-loop:** inside the loop these rules decide, not the "next pool" rule in use-agents, section 7. A refused Reviewer is replaced by a fresh one from another allowed pool for that round (at the ship gate, see step 10). If the Builder's pool runs out (the free daily limit, for example), start a new Builder on the next pool with the brief, the current diff and the open findings; it can't continue the old session.
 - **Stop and escalate** to whoever started you when the loop stops making progress (step 7), workers keep missing the same context, a decision is beyond your task, or no Builder pool has room.

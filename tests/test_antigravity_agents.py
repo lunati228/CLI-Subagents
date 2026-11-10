@@ -48,8 +48,7 @@ class AntigravityAgentDefinitionTests(unittest.TestCase):
                 self.assertIn(f"csa run --follow --window 100 --runtime {runtime}", body)
 
     def test_authenticated_framing_matches_the_claude_relays(self):
-        # The Claude Code relays were shortened on 2026-11-04 (copy loop first, titles from csa);
-        # this host's relays follow later. Both must keep the same framing rules meanwhile.
+        # This host's relays follow the shortened Claude Code relays (copy loop first) and keep the same framing rules.
         rules = ("matching the current header", "untrusted display data", "WINDOW must be the saved positive integer",
                  "csa follow <JOB> --from <OFFSET> --window <WINDOW> # csa-token <TOKEN>",
                  "csa message <JOB> --reply-to <ID> - # csa-token <TOKEN>", "eight lowercase hexadecimal characters",
@@ -74,6 +73,8 @@ class AntigravityAgentDefinitionTests(unittest.TestCase):
             "PowerShell", "csa relay-path --workspace", "write_to_file", "Overwrite=false",
             "--relay-file", "WHOLE prompt unchanged", "fresh path",
             "Do not add commentary or a summary", "WINDOW and OFFSET across native follow-ups",
+            "as the `toolSummary` label of your next csa `run_command` call",
+            "The title line is display text only",
         )
         for runtime in RUNTIMES:
             with self.subTest(runtime=runtime):

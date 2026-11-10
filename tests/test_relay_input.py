@@ -96,7 +96,20 @@ class RelayRunTests(TempHome):
         self.assertTrue(record["stdin"].endswith(task), repr(record["stdin"]))
         self.assertNotIn("cwd=", record["stdin"])
         self.assertEqual(record["env"]["CLI_SUBAGENTS_JOB_ID"], job_id)
-        self.assertIn("[csa] DONE", result.stdout.splitlines()[-1])
+        self.assertIn("[csa] DONE", self.until_done(result.stdout))
+
+    def until_done(self, output):
+        """Follow continuations like a relay: a job that ended first returns its last messages."""
+
+        for _ in range(3):
+            last = output.splitlines()[-1]
+            if "[csa] STILL RUNNING" not in last:
+                return last
+            command = next(line for line in output.splitlines() if line.startswith("csa follow "))
+            args = command.split(" # ")[0].split()[1:]
+            output = subprocess.run([sys.executable, "-m", "cli_subagents", *args], text=True, encoding="utf-8",
+                                    capture_output=True, timeout=60).stdout
+        return output.splitlines()[-1]
 
     def test_relay_defaults_access_and_overrides_window_without_shell_arguments(self):
         for runtime, access in (("claude", "edit"), ("codex", "read"), ("antigravity", "read"), ("opencode", "read")):
@@ -161,7 +174,7 @@ class RelayRunTests(TempHome):
         job_id = re.search(r" · job ([a-z0-9-]+) · token", result.stdout).group(1)
         self.assertEqual(jobs.read_spec(job_id).prompt, task)
         self.assertTrue(self.records()[-1]["stdin"].endswith(task))
-        self.assertIn("[csa] DONE", result.stdout.splitlines()[-1])
+        self.assertIn("[csa] DONE", self.until_done(result.stdout))
 
     def test_file_options_use_existing_defaults_window_and_admission(self):
         for runtime, access in (("claude", "edit"), ("codex", "read"), ("antigravity", "read")):

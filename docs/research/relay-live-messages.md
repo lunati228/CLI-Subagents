@@ -217,6 +217,41 @@ Copy rates so far: 2 of 6 and 3 of 6 (Luna, efforts low and medium), 8 of 13 (De
 (Codex Sol, another session, with false re-asks on every block), 3 of 8 here. The detection is now right;
 Haiku's compliance varies widely between runs and drops as the relay's run gets longer.
 
+## 0.2.40: titles as the reliable layer, a shorter prompt for copying
+
+Owner's call on 2026-11-04: do what makes most sense long term, without the early-access mod API. The model is the
+weak point, so the design now has two layers:
+
+- Reliable: csa prints `[csa] title: <start of the newest message>` (sanitized, at most 100 characters) and the
+  relay uses it as its next Bash description, the field Haiku filled in 56 of 56 calls in the old relay. The
+  rows of the relay view then name each message even when the text isn't copied.
+- Best effort: the Claude Code relay prompt went from about 11,100 to 7,000 characters (frontmatter included),
+  copy loop first, the safety rules kept but shorter. Every relay turn re-reads it, so this also lowers cost.
+  Re-asks stay; blocks are now matched by their whole text, not their first line (a Gemini review found two
+  blocks sharing a first line, such as a code fence, could be confused).
+
+Codex and Antigravity host relays keep their longer prompts for now; tests check both families keep the same
+framing rules. The live measurement after release goes below.
+
+## Incident: relay calls moved to the background after 180 s (2026-11-10)
+
+A Claude Code relay (Haiku, csa 0.2.39) for a paid DeepSeek builder, job 20261110-134610-29fe14, in a CegTec
+session. Relay transcript `agent-a6ba1078df81f1522.jsonl`
+(`baa179d5211f2c114bb4ca1d2674b03acae7d0ae5b551760906192a25af052fd`). Its first four follow calls returned within
+20 s each because the worker wrote messages. Then the worker went quiet in a long step: the call started at
+12:47:09 UTC came back as "Command was moved to the background (ID: b70zp0lr6) after running for 180s", although
+the relay had set `timeout: 600000`. Its retry at 12:50:13 used the same window and was moved at 12:53:13. The
+relay never saw a status line, wrote its own "BLOCKED" report and stopped; the worker kept running.
+
+Cause: 0.2.32 raised the relay window from 60 to 180 s, and a silent worker makes a call last the whole window
+plus start-up, just over the 180 s after which Claude Code moved this background subagent's command. My live tests
+never hit it because their workers wrote often.
+
+Fix (0.2.40): default window 100 s; csa caps every relay call at 150 s whatever `--window` says (the continuation
+keeps the given value); the Claude Code relays re-run the same validated continuation when a call is moved to the
+background, instead of reading the output file or giving up. Before: 2 of 6 follow calls in this relay were moved
+to the background. After: to be checked in the next live run (longest relay call must stay under 150 s).
+
 ## Alternatives
 
 - Mod-driven relay (`turn.step` answers a subagent's model requests with chunks built locally; see

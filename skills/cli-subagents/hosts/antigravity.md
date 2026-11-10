@@ -15,7 +15,7 @@ Prefer native `invoke_subagent` with the matching custom agent over
 `subagent_start`. Use the current workspace so the relay can find `csa`; put an
 explicit worker folder in its `cwd` option when needed. Begin its prompt with
 optional `model=...`, `access=...`, `account=...`, `effort=...`, `cwd=...`,
-`timeout=...`, `window=...` (default 180 seconds), `override=...` lines, followed
+`timeout=...`, `window=...` (default 100 seconds), `override=...` lines, followed
 by the complete task. For example, send this prompt to `cli-subagents-codex`:
 
 ```text

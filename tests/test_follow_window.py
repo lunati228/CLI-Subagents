@@ -47,6 +47,21 @@ class FollowWindowTests(TempHome):
         command = next(line for line in out.getvalue().splitlines() if line.startswith("csa follow"))
         self.assertNotIn("--window", command)
 
+    def test_a_relay_call_never_outlasts_claude_codes_background_move(self):
+        # 2026-11-10: Claude Code moved a background relay's 180-second follow call to the background
+        # (despite a 600 s timeout), and the relay lost the call's status. Relay calls stop at 150 s.
+        job_id = self.job()
+        self.assertEqual(Follower(job_id, None, 540, window=300).max_wait, 150)
+        self.assertEqual(Follower(job_id, None, 540, window=100).max_wait, 100)
+        out = io.StringIO()
+        follow(job_id, max_wait=0, out=out, window=300)
+        self.assertRegex(out.getvalue(), rf"csa follow {job_id} --from 0 --window 300 #")  # the protocol keeps the option
+        root = Path(__file__).resolve().parents[1]
+        for runtime in ("claude", "codex", "antigravity", "opencode"):
+            text = (root / "agents" / f"cli-subagents-{runtime}.md").read_text(encoding="utf-8")
+            self.assertIn("If Claude Code moves a csa call to the background", text)
+            self.assertIn("run the same validated command again", text)
+
     def test_all_three_commands_forward_window(self):
         job_id = self.job()
         for argv in (["run", "--follow", "--window", "23", "p"],
@@ -60,7 +75,7 @@ class FollowWindowTests(TempHome):
 
     def test_window_default_and_invalid_values(self):
         parser = cli.build_parser()
-        self.assertEqual(parser.parse_args(["follow", "job", "--window"]).window, 180)
+        self.assertEqual(parser.parse_args(["follow", "job", "--window"]).window, 100)
         self.assertIsNone(parser.parse_args(["follow", "job"]).window)
         for value in ("0", "-1", "0.5", "nan"):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
@@ -84,7 +99,7 @@ class FollowWindowTests(TempHome):
         root = Path(__file__).resolve().parents[1]
         for runtime in ("claude", "codex", "antigravity", "opencode"):
             text = (root / "agents" / f"cli-subagents-{runtime}.md").read_text(encoding="utf-8")
-            self.assertIn("csa run --follow --window 180", text)
+            self.assertIn("csa run --follow --window 100", text)
             self.assertIn("csa follow <JOB> --from <OFFSET> --window <WINDOW> # csa-token <TOKEN>", text)
             self.assertIn("csa message <JOB> --follow --from <OFFSET> --window <WINDOW> -", text)
             self.assertIn("WINDOW must be the saved positive integer", text)

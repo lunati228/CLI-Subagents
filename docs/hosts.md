@@ -89,7 +89,7 @@ Ask the main agent to use native `invoke_subagent` with
 `cli-subagents-claude`, `cli-subagents-codex`, `cli-subagents-antigravity` or
 `cli-subagents-opencode`.
 Pass the same option lines as the Claude relays, then the complete task. The
-relay calls `csa run --follow --window 180` and copies the authenticated result
+relay calls `csa run --follow --window 100` and copies the authenticated result
 unchanged. In the app, open its conversation in the subagent panel; in the CLI,
 use `/agents` and Enter to inspect tool output. Send follow-ups to that same
 native agent, including after it finishes. Prefer these relays over

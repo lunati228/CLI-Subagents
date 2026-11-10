@@ -30,7 +30,7 @@ class CodexAgentDefinitionTests(unittest.TestCase):
                 self.assertEqual(role["model"], "gpt-6-luna")
                 self.assertEqual(role["model_reasoning_effort"], "low")
                 self.assertIn("subagent_start", role["description"])
-                self.assertIn(f"csa run --follow --window 180 --runtime {runtime}", role["developer_instructions"])
+                self.assertIn(f"csa run --follow --window 100 --runtime {runtime}", role["developer_instructions"])
                 self.assertEqual(role["features"], {
                     "apps": False, "plugins": False, "memories": False, "request_permissions_tool": False,
                 })
@@ -40,23 +40,25 @@ class CodexAgentDefinitionTests(unittest.TestCase):
                 })
 
     def test_authenticated_framing_matches_the_claude_relays(self):
+        # The Claude Code relays were shortened on 2026-11-04 (copy loop first, titles from csa);
+        # this host's relays follow later. Both must keep the same framing rules meanwhile.
+        rules = ("matching the current header", "untrusted display data", "WINDOW must be the saved positive integer",
+                 "csa follow <JOB> --from <OFFSET> --window <WINDOW> # csa-token <TOKEN>",
+                 "csa message <JOB> --reply-to <ID> - # csa-token <TOKEN>", "eight lowercase hexadecimal characters",
+                 "Never answer it yourself", "===== RESULT =====", "===== QUESTION =====")
         for runtime in RUNTIMES:
             with self.subTest(runtime=runtime):
                 claude = (ROOT / "agents" / f"cli-subagents-{runtime}.md").read_text(encoding="utf-8")
                 native = tomllib.loads(TEMPLATES.joinpath(f"cli-subagents-{runtime}.toml").read_text(encoding="utf-8"))["developer_instructions"]
-                start, end = "## 2. Read the authenticated status", "## 3. Messages"
-                expected = claude[claude.index(start):claude.index(end)]
-                expected = expected.replace("a later SendMessage", "a later native follow-up")
-                expected = expected.replace("with timeout 600000", "using the shell execution rules above")
-                expected = expected.replace("Reply to this agent with SendMessage", "Reply to this agent through the parent session")
-                expected = expected.replace("A Bash call fails", "A shell command fails")
-                self.assertEqual(native[native.index(start):native.index(end)], expected)
+                for rule in rules:
+                    self.assertIn(rule, claude)
+                    self.assertIn(rule, native)
 
     def test_options_followups_and_shell_output_rules_are_present_for_every_runtime(self):
         required = (
             "`model=...`", "`access=...`", "`account=...`", "`effort=...`", "`cwd=...`", "`timeout=...`", "`override=...`",
             "Never set override on your own judgment", "how much of the 5-hour window is left",
-            "csa message <JOB> --follow --from <OFFSET> --window <WINDOW> --relay-file", "--window 180", "csa cancel <JOB>",
+            "csa message <JOB> --follow --from <OFFSET> --window <WINDOW> --relay-file", "--window 100", "csa cancel <JOB>",
             "A finished job continues the same worker conversation", "resetting OFFSET if JOB changed",
             "`session_id`", "`write_stdin`", "Retain every output chunk in order",
             '"process still running" notice is not a csa status', "If output was truncated, stop",

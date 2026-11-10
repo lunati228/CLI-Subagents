@@ -156,6 +156,28 @@ class ReaskTests(TempHome):
         self.assertEqual(lines[lines.index(MESSAGES_RULE) + 1:lines.index(MESSAGES_END_RULE)], ["| " + MESSAGE])
         self.assertIn(f"--from {second_end} --window 1 #", lines[lines.index(REASK_LINE) - 1])
 
+    def test_blocks_sharing_a_first_line_are_told_apart(self):
+        # Found by a Gemini review of 0.2.39: matching on the first line alone bound an older
+        # block to a newer block's tool result.
+        first_text, second_text = "```\nfirst code\n```", "```\nsecond code\n```"
+        first_end = self.add(says(first_text))
+        self.watch(start=self.events.stat().st_size)  # nothing new yet
+        (jobs.job_dir(self.job) / RELAY_PENDING).unlink(missing_ok=True)
+        first = self.watch(start=self.offset_before(first_text))
+        self.transcribe(tool_result(first))
+        second_end = self.add(says(second_text))
+        second = self.watch(start=first_end)
+        self.assertIn("| second code", second)
+        self.transcribe(wrote(first_text), calls(), tool_result(second))  # the first was written
+        third = self.watch(start=second_end)
+        self.assertNotIn(REASK_LINE, third)  # not confused with the second block's result
+
+    def offset_before(self, text):
+        """The byte offset of the event that carries `text`."""
+
+        data = self.events.read_bytes()
+        return data.rfind(b"\n", 0, data.find(json.dumps(text).encode())) + 1
+
     def test_no_reask_without_a_relay_transcript_or_after_the_job_ended(self):
         end = self.events.stat().st_size
         self.transcribe(tool_result(self.watch()))

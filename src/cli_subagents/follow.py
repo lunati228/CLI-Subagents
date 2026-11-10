@@ -45,7 +45,11 @@ from cli_subagents.runtimes.base import SUCCESS
 
 POLL_SECONDS = 0.5
 DEFAULT_MAX_WAIT = 540.0  # keeps one Bash call under Claude Code's 10-minute ceiling
-DEFAULT_WINDOW = 180  # a relay call returns earlier as soon as the worker has a new message
+DEFAULT_WINDOW = 100  # a relay call returns earlier as soon as the worker has a new message
+# Claude Code moved a background relay's `csa follow` to the background after 180 s although it
+# asked for a 600 s timeout (2026-11-10), and the relay lost the call's status line. No relay
+# call waits longer than this, whatever --window says; the default stays under Bash's 120 s too.
+RELAY_MAX_WAIT = 150
 SUMMARY_CHARS = 200
 RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
 RESULT_RULE = "===== RESULT ====="
@@ -56,6 +60,11 @@ WORKER_PREFIX = "| "
 MESSAGES_RULE = "===== MESSAGES ====="
 MESSAGES_END_RULE = "===== END MESSAGES ====="
 COPY_LINE = "Now write the block below as your message, word for word, then run the command above."
+# The relay uses this as its next Bash description, so each row is titled with the start of the
+# newest message even when the relay doesn't copy it (relays filled the description in 56 of 56
+# calls in the 2026-11-03 transcript, against 1 of 67 free-text copies).
+TITLE_PREFIX = "[csa] title: "
+TITLE_CHARS = 100
 REASK_LINE = ("You didn't write the block below. Write it now as your message, word for word, "
               "then run the command above again.")
 RELAY_PENDING = "relay-pending.json"  # blocks a relay was given, until its transcript shows whether it wrote them
@@ -122,6 +131,18 @@ _TERMINAL_SEQUENCES = re.compile(
     r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b[ -/]*[@-Z\\-_]",
     re.DOTALL,
 )
+
+
+def title_text(value: str) -> str:
+    """Display-only text for a Bash description, with no framing, token or shell-comment syntax."""
+
+    value = _TERMINAL_SEQUENCES.sub("", value)
+    value = "".join(" " if ch.isspace() else ch for ch in value
+                    if ch.isspace() or not unicodedata.category(ch).startswith("C"))
+    value = re.sub(r"\[csa\]", "", value, flags=re.IGNORECASE).replace("[", "").replace("]", "")
+    value = re.sub(r"\b(?:csa-)?token\b\s*[:=]?\s*\S*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"[0-9a-f]{32,}", "", value, flags=re.IGNORECASE)
+    return short(" ".join(value.split("#", 1)[0].split()), TITLE_CHARS)
 
 
 def display_text(value: str) -> str:
@@ -662,7 +683,7 @@ class Follower:
         self.max_wait = max(0.0, float(max_wait))
         self.window = window
         if window is not None:
-            self.max_wait = min(self.max_wait, window)
+            self.max_wait = min(self.max_wait, window, RELAY_MAX_WAIT)
         self.out = out
         self.token = secrets.token_hex(16)  # never stored in worker-readable job files
         self.describer = describer_for(self.spec.runtime)
@@ -704,6 +725,12 @@ class Follower:
     def command(self, text: str) -> str:
         # A shell comment preserves the existing CLI arguments.
         return f"{text} # csa-token {self.token}"
+
+    def emit_title(self, newest: str | None) -> None:
+        """Relay mode: the next Bash description, the start of the newest message (display text only)."""
+
+        title = title_text(newest or "")
+        self.emit(TITLE_PREFIX + (title or f"{RUNTIME_LABELS.get(self.spec.runtime, 'Worker')}: working"))
 
     def emit_messages(self) -> str:
         """The identity line and new messages, newest kept when the block would grow too long; returns the body."""
@@ -755,7 +782,8 @@ class Follower:
                 if missed is not None:
                     keep.append(item)
                     continue
-                needle = WORKER_PREFIX + text.split("\n", 1)[0].translate(_DISPLAY_ESCAPES)
+                # The whole block as printed: two blocks can share a first line (a code fence, a bullet).
+                needle = "\n".join(WORKER_PREFIX + line.translate(_DISPLAY_ESCAPES) for line in text.split("\n"))
                 written = identity.written_after(transcript, needle)
                 if written is None:
                     keep.append(item)  # its turn isn't closed yet
@@ -785,6 +813,7 @@ class Follower:
             pass  # then this block just isn't checked
 
     def reask(self, text: str) -> int:
+        self.emit_title(text.rsplit("\n\n", 1)[-1])
         self.emit("Keep watching with:", self.command(self.follow_command()), REASK_LINE, MESSAGES_RULE)
         self.emit_worker(text)
         self.emit(MESSAGES_END_RULE)
@@ -1056,6 +1085,8 @@ class Follower:
         return 1
 
     def still_running(self) -> int:
+        if self.relay:
+            self.emit_title(self.news[-1] if self.news else self.identity_line)
         self.emit("Keep watching with:", self.command(self.follow_command()))
         if self.relay and (self.news or self.identity_line):
             # Last before the status, so copying it is the relay's next step, not a detail it skips.

@@ -158,8 +158,14 @@ def _result_text(content: Any) -> str:
 
 
 def _results(content: list[Any]) -> list[str]:
-    return [_result_text(item.get("content")) for item in content
+    return [_block_key(_result_text(item.get("content"))) for item in content
             if isinstance(item, dict) and item.get("type") == "tool_result"]
+
+
+def _block_key(text: str) -> str:
+    """Text as compared with a tool result: Windows line endings and trailing spaces don't count."""
+
+    return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n"))
 
 
 def written_after(path: Path, needle: str) -> str | None:
@@ -185,6 +191,7 @@ def written_after(path: Path, needle: str) -> str | None:
         content = message.get("content") if isinstance(message, dict) else None
         if isinstance(content, list) and entry.get("type") in ("user", "assistant"):
             entries.append((entry["type"], content))
+    needle = _block_key(needle)
     start = next((index for index in range(len(entries) - 1, -1, -1) if entries[index][0] == "user"
                   and any(needle in text for text in _results(entries[index][1]))), None)
     if start is None:

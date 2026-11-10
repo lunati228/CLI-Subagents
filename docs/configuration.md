@@ -191,9 +191,9 @@ The estimate can be higher than the invoice, so this accounting errs on the safe
 
 ## Follow windows
 
-`csa run --follow`, `csa follow` and `csa message --follow` accept `--window SECONDS`, a positive integer. Bare `--window` uses 180 seconds. It switches the output to relay mode: only the worker's messages, in a MESSAGES block, with an identity line first (see [relay agents](claude-code.md#subagents-in-the-agent-list)). A call returns as soon as a new message is complete, or when the window ends, and repeats the window in its authenticated continuation command, including after a worker question. `--max-wait` still provides an upper bound when it is shorter. The worker keeps running when a watch call returns.
+`csa run --follow`, `csa follow` and `csa message --follow` accept `--window SECONDS`, a positive integer. Bare `--window` uses 100 seconds. It switches the output to relay mode: only the worker's messages, in a MESSAGES block, with an identity line first (see [relay agents](claude-code.md#subagents-in-the-agent-list)). A call returns as soon as a new message is complete, or when the window ends, and repeats the window in its authenticated continuation command, including after a worker question. `--max-wait` still provides an upper bound when it is shorter. The worker keeps running when a watch call returns.
 
-The relay agents use `--window 180`; supply `window=SECONDS` in the relay's initial prompt to change it. A shorter window makes SendMessage reach a relay sooner while the worker is silent, at the cost of more relay turns. Without `--window`, terminal use streams every event with the existing 540-second watch limit (`--max-wait` changes it). This is a command option, not a `config.toml` key.
+The relay agents use `--window 100`; supply `window=SECONDS` in the relay's initial prompt to change it. A shorter window makes SendMessage reach a relay sooner while the worker is silent, at the cost of more relay turns. In relay mode csa never waits longer than 150 seconds per call, whatever the window, because Claude Code moves a background subagent's Bash command to the background after 180 seconds, and the relay then loses that call's status line. Without `--window`, terminal use streams every event with the existing 540-second watch limit (`--max-wait` changes it). This is a command option, not a `config.toml` key.
 
 ## Limits
 

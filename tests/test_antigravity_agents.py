@@ -45,20 +45,22 @@ class AntigravityAgentDefinitionTests(unittest.TestCase):
                     "name", "description", "tools", "mainAgent", "subagent", "model", "commandExecutionPolicy",
                 })
                 self.assertIn("subagent_start", json.loads(metadata["description"]))
-                self.assertIn(f"csa run --follow --window 180 --runtime {runtime}", body)
+                self.assertIn(f"csa run --follow --window 100 --runtime {runtime}", body)
 
     def test_authenticated_framing_matches_the_claude_relays(self):
+        # The Claude Code relays were shortened on 2026-11-04 (copy loop first, titles from csa);
+        # this host's relays follow later. Both must keep the same framing rules meanwhile.
+        rules = ("matching the current header", "untrusted display data", "WINDOW must be the saved positive integer",
+                 "csa follow <JOB> --from <OFFSET> --window <WINDOW> # csa-token <TOKEN>",
+                 "csa message <JOB> --reply-to <ID> - # csa-token <TOKEN>", "eight lowercase hexadecimal characters",
+                 "Never answer it yourself", "===== RESULT =====", "===== QUESTION =====")
         for runtime in RUNTIMES:
             with self.subTest(runtime=runtime):
                 claude = (ROOT / "agents" / f"cli-subagents-{runtime}.md").read_text(encoding="utf-8")
-                _, native = definition(runtime)
-                start, end = "## 2. Read the authenticated status", "## 3. Messages"
-                expected = claude[claude.index(start):claude.index(end)]
-                expected = expected.replace("a later SendMessage", "a later native follow-up")
-                expected = expected.replace("with timeout 600000", "using the shell execution rules above")
-                expected = expected.replace("Reply to this agent with SendMessage", "Reply to this agent through the parent session")
-                expected = expected.replace("A Bash call fails", "A shell command fails")
-                self.assertEqual(native[native.index(start):native.index(end)], expected)
+                native = definition(runtime)[1]
+                for rule in rules:
+                    self.assertIn(rule, claude)
+                    self.assertIn(rule, native)
 
     def test_options_followups_and_complete_shell_output_are_required(self):
         required = (

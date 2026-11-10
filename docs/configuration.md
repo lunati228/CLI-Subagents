@@ -1,6 +1,6 @@
 # Configuration
 
-CLI Subagents keeps everything under `~/.cli-subagents/` (or `CLI_SUBAGENTS_HOME`). `csa accounts add` writes the config for you; edit it by hand for the other options. When csa saves the file (`csa accounts add`, `remove`, `enable` or `disable`, and `csa setup --account`), it writes it again from the settings it knows, so comments and keys it doesn't recognize are dropped.
+CLI Subagents keeps everything under `~/.cli-subagents/` (or `CLI_SUBAGENTS_HOME`). `csa accounts add` writes the config for you; edit it by hand for the other options. When csa saves the file (`csa accounts add`, `remove`, `enable` or `disable`, and `csa setup --account`), it writes it again from the settings it knows, so comments and keys it doesn't recognize are dropped. Before each save that changes the file, csa copies the old version to `config.toml.<YYYYMMDD-HHMMSS-microseconds>.bak` in the same folder and keeps the five newest of these backups, so you can copy comments or keys back from there.
 
 ## Model capacity retries
 
@@ -165,7 +165,7 @@ Before starting an attempt, csa subtracts settled spend and running reservations
 
 csa reserves that budget under a lock and passes it to Claude as `--max-budget-usd`. The reservation counts against every cap until settlement. Concurrent starts see that reservation and can use only room left under every cap; increasing `max_jobs` or using `override` cannot allocate the same money twice. All running reservations count even as windows advance or `spend_since` changes. A budget stop has outcome `budget` and ends without retry or failover. `when_full = "queue"` and `override` cannot bypass spend checks.
 
-`csa accounts list`, `subagent_accounts`, `csa doctor` and the `Room:` line show every cap with its spent, reserved and remaining USD. Remaining is the amount available after reservations. `csa accounts reset NAME` clears cooldowns; use `spend_since` to reset spend accounting. A future `spend_since` refuses jobs until that time. A new start that resumes an explicit-only account's job must name the account again; a follow-up message to a finished job (`subagent_message`, or SendMessage to its relay) stays on the account the job was pinned to.
+`csa accounts list`, `subagent_accounts`, `csa doctor` and the `Room:` line show every cap with its spent, reserved and remaining USD. Remaining is the amount available after reservations. `csa accounts reset NAME` clears cooldowns; use `spend_since` to reset spend accounting. A future `spend_since` refuses jobs until that time. Continuing a job that was started by naming an explicit-only account counts as naming it again: a follow-up message to the finished job (`subagent_message`, or SendMessage to its relay) and a start with `resume_job` but no `account` both run on that account, under its spend caps, cooldowns and other limits. A continuation that names a different account is refused.
 
 ### OpenRouter weekly soft cap
 

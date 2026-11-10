@@ -84,6 +84,7 @@ class Runner:
         self.warnings: list[str] = []
         self._early: AttemptResult | None = None  # set when check_stderr stops a worker early
         self._spend_error: str | None = None
+        self.follow_ups = 0  # follow-up turns taken from the inbox
 
     # Helpers ---------------------------------------------------------------
 
@@ -129,6 +130,12 @@ class Runner:
             self.attempts[-1]["account"] if self.attempts else self.spec.resume_account,
         )
         text = result.text if result else ""
+        # The inbox is closed now: whatever the worker never got is reported, in the warnings
+        # and in the result, since a relay shows only the result.
+        dropped = self._undelivered_note(outcome, result)
+        if dropped:
+            self.warnings.append(dropped)
+            text = f"{text}\n\n{dropped}" if text else dropped
         if text:
             write_text(self.folder / "result.md", text)
         total_cost = sum(float(item.get("cost_usd") or 0) for item in self.attempts) or None
@@ -161,6 +168,32 @@ class Runner:
                 time.sleep(0.2)
         return 0 if outcome == SUCCESS else 1
 
+    def _undelivered_note(self, outcome: str, result: AttemptResult | None) -> str | None:
+        """A note naming the follow-ups and answers the worker never read, or None."""
+
+        try:
+            dropped = messages.undelivered(self.job_id)
+        except (OSError, ValueError) as exc:
+            return f"Note from CLI Subagents: could not check for undelivered follow-up messages ({exc})."
+        if not dropped:
+            return None
+        if outcome != SUCCESS:
+            why = f"the job ended with outcome {outcome}"
+        elif self.follow_ups >= MAX_FOLLOW_UP_TURNS:
+            why = f"the job already took its {MAX_FOLLOW_UP_TURNS} follow-up turns"
+        elif not (result and result.session_id):
+            why = "the run ended without a session to continue"
+        else:
+            why = "the run ended before the worker read them"
+        hint = " (shown to the worker only as a hook hint)"
+        quoted = "; ".join(
+            f"[{item.get('id')}]{hint if item.get('hinted') else ''} " + " ".join(str(item.get("text") or "").split())[:300]
+            for item in dropped
+        )
+        count = "1 message sent to this job was" if len(dropped) == 1 else f"{len(dropped)} messages sent to this job were"
+        return (f"Note from CLI Subagents: {count} never read by the worker, because {why}: {quoted}. Resend "
+                "with subagent_message (a finished job with a session continues in a new job) or start a new job.")
+
     # Main loop -------------------------------------------------------------
 
     def run(self) -> int:
@@ -175,7 +208,6 @@ class Runner:
         # The conversation to continue and the account folder that holds it.
         session = self.spec.resume_session
         owner = self.spec.resume_account
-        follow_ups = 0
 
         while True:
             if self.cancelled():
@@ -199,11 +231,11 @@ class Runner:
             if last.outcome == SUCCESS:
                 pending = messages.close_or_continue(
                     self.job_id, last.session_id, lease.account.name,
-                    can_continue=bool(last.session_id) and follow_ups < MAX_FOLLOW_UP_TURNS,
+                    can_continue=bool(last.session_id) and self.follow_ups < MAX_FOLLOW_UP_TURNS,
                 )
                 if pending:
                     # Follow-ups sent while the worker was busy: continue the same conversation.
-                    follow_ups += 1
+                    self.follow_ups += 1
                     session, owner = last.session_id, lease.account.name
                     follow_up = "\n\n".join(item["text"] for item in pending)
                     prompt = (
@@ -211,7 +243,7 @@ class Runner:
                         "if you already handled it, just confirm briefly):\n\n" + follow_up
                     )
                     task += "\n\nFollow-up from the main session:\n\n" + follow_up
-                    self.status(follow_up_turns=follow_ups)
+                    self.status(follow_up_turns=self.follow_ups)
                     continue
             if last.outcome == AUTH and failover and last.before_start:
                 # The account has no login yet and nothing ran: try the next account.

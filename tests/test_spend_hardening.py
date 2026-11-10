@@ -124,16 +124,52 @@ class SpendHardeningTests(SpendHome):
         self.assertEqual(status["outcome"], "usage_limit")
         self.assertEqual([attempt["account"] for attempt in status["attempts"]], ["primary"])
 
-    def test_resuming_explicit_only_requires_the_start_to_name_it_again(self):
+    def test_resuming_a_job_started_on_an_explicit_only_account_continues_there(self):
+        # Continuing a conversation that was started by naming the account counts as naming it.
+        self.account.explicit_only = True
+        save_config(self.config)
+        first = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), account="paid", access="read", start=False)
+        self.assertEqual(Runner(first["job_id"]).run(), 0)
+        follow_up = jobs.create_job(runtime="claude", prompt="continue", cwd=str(self.project),
+                                    resume_job=first["job_id"], access="read", start=False)
+        self.assertEqual(jobs.read_spec(follow_up["job_id"]).account, "paid")
+        self.assertEqual(Runner(follow_up["job_id"]).run(), 0)
+        self.assertEqual(jobs.read_status(follow_up["job_id"])["account"], "paid")
+        # The continuation of a continuation too; naming the account still works.
+        again = jobs.create_job(runtime="claude", prompt="more", cwd=str(self.project), resume_job=follow_up["job_id"],
+                                access="read", start=False)
+        self.assertEqual(jobs.read_spec(again["job_id"]).account, "paid")
+        named = jobs.create_job(runtime="claude", prompt="more", cwd=str(self.project), account="paid",
+                                resume_job=first["job_id"], access="read", start=False)
+        self.assertEqual(jobs.read_spec(named["job_id"]).account, "paid")
+
+    def test_resuming_explicit_only_still_refuses_other_accounts_and_unnamed_starts(self):
         self.account.explicit_only = True
         save_config(self.config)
         first = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), account="paid", access="read", start=False)
         self.assertEqual(Runner(first["job_id"]).run(), 0)
         with self.assertRaisesRegex(ValueError, "explicit-only.*requires"):
+            jobs.create_job(runtime="claude", prompt="continue", cwd=str(self.project), account="other",
+                            resume_job=first["job_id"], start=False)
+        # A job that ran there without naming it (not possible today) gives no such consent.
+        spec_path = jobs.job_dir(first["job_id"]) / "spec.json"
+        write_json(spec_path, {**read_json(spec_path), "account": None})
+        with self.assertRaisesRegex(ValueError, "explicit-only.*requires"):
             jobs.create_job(runtime="claude", prompt="continue", cwd=str(self.project), resume_job=first["job_id"], start=False)
-        follow_up = jobs.create_job(runtime="claude", prompt="continue", cwd=str(self.project), account="paid",
+
+    def test_resumed_explicit_only_job_keeps_the_account_spend_cap(self):
+        self.account.explicit_only = True
+        save_config(self.config)
+        first = jobs.create_job(runtime="claude", prompt="task", cwd=str(self.project), account="paid", access="read", start=False)
+        self.assertEqual(Runner(first["job_id"]).run(), 0)
+        self.history(cost=12)  # over the account's 10 USD cap
+        with self.assertRaisesRegex(ValueError, "spend cap"):
+            jobs.create_job(runtime="claude", prompt="continue", cwd=str(self.project), resume_job=first["job_id"],
+                            access="read")
+        follow_up = jobs.create_job(runtime="claude", prompt="continue", cwd=str(self.project),
                                     resume_job=first["job_id"], access="read", start=False)
-        self.assertEqual(Runner(follow_up["job_id"]).run(), 0)
+        self.assertEqual(Runner(follow_up["job_id"]).run(), 1)
+        self.assertEqual(jobs.read_status(follow_up["job_id"])["outcome"], "budget")
 
     def test_follow_up_message_continues_on_the_pinned_explicit_only_account(self):
         from cli_subagents import tools

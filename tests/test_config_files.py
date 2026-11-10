@@ -71,6 +71,44 @@ class SaveConfigTests(TempFolder):
         self.assertEqual(str(again.runtime("claude").accounts[0].home), home)
         self.assertEqual(again.runtime("claude").primary_models, [model])
 
+    def backups(self, path):
+        return sorted(item.name for item in path.parent.iterdir() if item.name.startswith("config.toml.") and item.name.endswith(".bak"))
+
+    def test_a_save_keeps_the_replaced_file_with_its_comments_as_a_timestamped_backup(self):
+        path = self.root / "config.toml"
+        original = b"# my notes\njob_retention_days = 3\nmy_own_key = 1\n\n[claude]\nmax_jobs_per_account = 2\n"
+        path.write_bytes(original)
+        config = load_config(path)
+        config.job_retention_days = 4
+        save_config(config, path)
+        names = self.backups(path)
+        self.assertEqual(len(names), 1, names)
+        self.assertRegex(names[0], r"^config\.toml\.\d{8}-\d{6}-\d{6}\.bak$")
+        self.assertEqual((self.root / names[0]).read_bytes(), original)
+        self.assertNotIn(b"# my notes", path.read_bytes())
+        self.assertEqual(load_config(path).job_retention_days, 4)
+
+    def test_only_the_newest_backups_are_kept_and_unchanged_saves_add_none(self):
+        from cli_subagents import config as config_module
+
+        path = self.root / "config.toml"
+        save_config(load_config(path), path)  # no file yet: nothing to back up
+        self.assertEqual(self.backups(path), [])
+        unrelated = self.root / "config.toml.mine.bak"
+        unrelated.write_text("keep me", encoding="utf-8")
+        written = []
+        for days in range(1, config_module.CONFIG_BACKUPS + 4):
+            config = load_config(path)
+            config.job_retention_days = days
+            save_config(config, path)
+            written.append(path.read_bytes())
+            save_config(load_config(path), path)  # the same text again
+        names = [name for name in self.backups(path) if name != unrelated.name]
+        self.assertEqual(len(names), config_module.CONFIG_BACKUPS, names)
+        # The newest backup holds the file before the last change.
+        self.assertEqual((self.root / names[-1]).read_bytes(), written[-2])
+        self.assertTrue(unrelated.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

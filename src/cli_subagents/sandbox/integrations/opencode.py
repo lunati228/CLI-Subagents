@@ -87,7 +87,11 @@ def prepare(event: dict[str, Any], context_path: Path) -> dict[str, str]:
 
 
 def hook_source() -> str:
-    """Fail closed even if a host version catches callback exceptions."""
+    """Fail closed even if a host version catches callback exceptions.
+
+    Inserted into the plugin's setup by opencode_review.plugin_source, which defines
+    `check`, `settings` and `takeApproval`.
+    """
 
     return '''if (settings.context) {
       const safeShell = SAFE_SHELL;
@@ -98,10 +102,13 @@ def hook_source() -> str:
         invocation.command = SAFE_FAILURE;
         try {
         if (!settings.sandbox) {
-          const answer = JSON.parse(await check(JSON.stringify({tool: "shell", input: {
-            command: original.command, cwd: original.cwd
-          }})));
-          if (!answer || answer.decision !== "auto_approve") return;
+          // One use of the tool hook's approval for this exact command and folder, or a full check.
+          if (!takeApproval(original.command, original.cwd)) {
+            const answer = JSON.parse(await check(JSON.stringify({tool: "shell", input: {
+              command: original.command, cwd: original.cwd
+            }})));
+            if (!answer || answer.decision !== "auto_approve") return;
+          }
           invocation.shell = original.shell;
           invocation.command = original.command;
           return;

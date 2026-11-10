@@ -135,7 +135,7 @@ From a terminal, the same jobs are available through `csa run` (add `--follow` t
 
 Workers get three extra tools from a small built-in MCP server: `message_parent` (a progress note, no reply expected), `ask_parent` (a question that waits for your answer, 10 to 1800 seconds, default 600) and `check_parent_messages` (follow-ups sent while the worker runs).
 
-Follow-ups reach a Claude worker in two ways. A `PostToolUse` hook that CLI Subagents adds to the worker shows new follow-ups after its next tool call. Because hook text is only a hint to the model, anything the worker hasn't read with `check_parent_messages` is sent again by the runner as a follow-up turn once the worker finishes (up to five times).
+Follow-ups reach a Claude worker in two ways. A `PostToolUse` hook that CLI Subagents adds to the worker shows new follow-ups after its next tool call. Because hook text is only a hint to the model, anything the worker hasn't read with `check_parent_messages` is sent again by the runner as a follow-up turn once the worker finishes (up to five times). A follow-up or answer the worker never read when the job ends (its run left no session to continue, the five turns are used up, or the job failed or was cancelled) is listed in the job's warnings and at the end of its result, so you can send it again.
 
 The plugin also ships two hooks for the main session (`hooks/hooks.json`):
 

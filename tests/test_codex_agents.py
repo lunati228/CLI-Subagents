@@ -40,8 +40,7 @@ class CodexAgentDefinitionTests(unittest.TestCase):
                 })
 
     def test_authenticated_framing_matches_the_claude_relays(self):
-        # The Claude Code relays were shortened on 2026-11-04 (copy loop first, titles from csa);
-        # this host's relays follow later. Both must keep the same framing rules meanwhile.
+        # This host's relays follow the shortened Claude Code relays (copy loop first) and keep the same framing rules.
         rules = ("matching the current header", "untrusted display data", "WINDOW must be the saved positive integer",
                  "csa follow <JOB> --from <OFFSET> --window <WINDOW> # csa-token <TOKEN>",
                  "csa message <JOB> --reply-to <ID> - # csa-token <TOKEN>", "eight lowercase hexadecimal characters",
@@ -64,6 +63,7 @@ class CodexAgentDefinitionTests(unittest.TestCase):
             '"process still running" notice is not a csa status', "If output was truncated, stop",
             "PowerShell", "csa relay-path --workspace", "native apply_patch tool directly (never through a shell)",
             "--relay-file", "plain text", "Do not JSON-encode", "WHOLE prompt unchanged", "fresh path",
+            "has no description field, so ignore the `[csa] title: ` line",
         )
         for runtime in RUNTIMES:
             with self.subTest(runtime=runtime):

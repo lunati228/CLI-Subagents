@@ -231,6 +231,9 @@ class RelayInstructionTests(unittest.TestCase):
                         self.assertIn(required, text)
                     for gone in ("PROGRESS", "--window 60"):
                         self.assertNotIn(gone, text)
+                    # The relay re-reads its prompt every turn: keep it short, with titles from csa.
+                    # Codex's exec_command has no description field, so its relays only name the line to ignore it.
+                    self.assertIn("[csa] title: ", text)
                     if folder.name == "agents" and folder.parent == root:
                         # Medium copied no better than low in the 2026-11-03 tests; csa re-asks instead.
                         self.assertIn("\neffort: low\n", text)
@@ -238,3 +241,6 @@ class RelayInstructionTests(unittest.TestCase):
                         self.assertIn("`[csa] title: <TITLE>`", text)
                         self.assertIn("with TITLE as its Bash description", text)
                         self.assertLess(len(text), 7500)
+                    else:
+                        # The host relays add their own shell-execution section.
+                        self.assertLess(len(text), 10000)

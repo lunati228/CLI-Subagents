@@ -142,7 +142,12 @@ def _create_job(
         resume_account = closed.get("account") or previous.get("account")
         resume_config = runtime_config.find(resume_account) if resume_account else None
         if resume_config and resume_config.explicit_only and account != resume_account:
-            raise ValueError(f"Resuming explicit-only account '{resume_account}' requires account='{resume_account}'")
+            # Continuing a conversation that was started by naming this account names it again.
+            # The account's limits, spend caps and cooldowns still apply below and in the runner.
+            started_there = (read_json(job_dir(resume_job) / "spec.json", {}) or {}).get("account") == resume_account
+            if account or not started_there:
+                raise ValueError(f"Resuming explicit-only account '{resume_account}' requires account='{resume_account}'")
+            account = resume_account
         if not hasattr(get_runtime(runtime), "transfer_session"):
             # The session lives in one account's folder and can't be moved: stay there.
             account = resume_account or account

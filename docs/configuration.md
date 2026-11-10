@@ -1,6 +1,6 @@
 # Configuration
 
-CLI Subagents keeps everything under `~/.cli-subagents/` (or `CLI_SUBAGENTS_HOME`). `csa accounts add` writes the config for you; edit it by hand for the other options. When csa saves the file (`csa accounts add`, `remove`, `enable` or `disable`, and `csa setup --account`), it writes it again from the settings it knows, so comments and keys it doesn't recognize are dropped.
+CLI Subagents keeps everything under `~/.cli-subagents/` (or `CLI_SUBAGENTS_HOME`). `csa accounts add` writes the config for you; edit it by hand for the other options. When csa saves the file (`csa accounts add`, `remove`, `enable` or `disable`, and `csa setup --account`), it writes it again from the settings it knows, so comments and keys it doesn't recognize are dropped. Before each save that changes the file, csa copies the old version to `config.toml.<YYYYMMDD-HHMMSS-microseconds>.bak` in the same folder and keeps the five newest of these backups, so you can copy comments or keys back from there.
 
 ## Model capacity retries
 

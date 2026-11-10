@@ -12,7 +12,7 @@ import re
 import tomllib
 from typing import Any
 
-from cli_subagents.fsutil import write_text
+from cli_subagents.fsutil import write_private, write_text
 
 RUNTIMES = ("claude", "codex", "antigravity", "opencode")
 # Runtimes whose extra accounts are "use at your own risk" (Antigravity: Google's FAQ says
@@ -756,5 +756,44 @@ def dump_config(config: Config) -> str:
     return "\n".join(lines) + "\n"
 
 
+# save_config keeps the file it replaces as config.toml.<YYYYMMDD-HHMMSS-micro>.bak beside it.
+CONFIG_BACKUPS = 5
+BACKUP_STAMP_RE = re.compile(r"\d{8}-\d{6}-\d{6}")
+
+
 def save_config(config: Config, path: Path | None = None) -> None:
-    write_text(path or config_path(), dump_config(config))
+    """Write the config from the settings csa knows, after backing up the file it replaces.
+
+    The rewrite drops comments and keys csa doesn't know; the backup keeps them. A save
+    that doesn't change the file needs no backup. If the backup fails, the file is left alone.
+    """
+
+    target = path or config_path()
+    text = dump_config(config)
+    try:
+        current = target.read_bytes()
+    except FileNotFoundError:
+        current = None
+    if current is not None and current != text.encode("utf-8"):
+        _backup_config(target, current)
+    write_text(target, text)
+
+
+def _backup_config(target: Path, data: bytes) -> None:
+    """Save `data` as a timestamped backup beside `target` and keep the newest CONFIG_BACKUPS."""
+
+    now = datetime.now()
+    backup = target.with_name(f"{target.name}.{now:%Y%m%d-%H%M%S-%f}.bak")
+    while backup.exists():  # a coarse clock: two saves in the same tick
+        now += timedelta(microseconds=1)
+        backup = target.with_name(f"{target.name}.{now:%Y%m%d-%H%M%S-%f}.bak")
+    write_private(backup, data)
+    prefix = target.name + "."
+    backups = sorted(item for item in target.parent.iterdir()
+                     if item.name.startswith(prefix) and item.name.endswith(".bak")
+                     and BACKUP_STAMP_RE.fullmatch(item.name[len(prefix):-len(".bak")]))
+    for old in backups[:-CONFIG_BACKUPS]:
+        try:
+            old.unlink()
+        except OSError:
+            pass  # an old backup that can't be removed now goes on a later save

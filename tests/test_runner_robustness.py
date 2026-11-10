@@ -1,5 +1,6 @@
 """Runner regressions: process trees, continuations, caps, budgets and live events."""
 
+import contextlib
 import io
 import json
 import os
@@ -216,6 +217,76 @@ class InboxFinalizationTests(RobustnessBase):
         finally:
             jobs.update_status(continued, state="done")
             jobs.update_status(runner.job_id, state="done")
+
+    def run_queueing(self, results, turns=None, hook=False):
+        """Run a job whose every attempt queues a follow-up, then ends with the next result."""
+
+        runner = self.runner()
+        sent = []
+
+        def attempt(lease, prompt, session, owner, fallback):
+            record = messages.queue_for_worker(runner.job_id, f"follow-up {len(sent) + 1}")
+            self.assertIsNotNone(record)
+            sent.append(record)
+            if hook:
+                messages.take_for_hook(runner.job_id)
+            return results[len(sent) - 1]
+
+        from cli_subagents import runner as runner_module
+
+        limit = patch.object(runner_module, "MAX_FOLLOW_UP_TURNS", turns) if turns is not None else contextlib.nullcontext()
+        with patch.object(runner, "_attempt", side_effect=attempt), limit:
+            runner.run()
+        status = jobs.read_status(runner.job_id)
+        result = jobs.read_result(runner.job_id)["result"]
+        return sent, status, result
+
+    def test_follow_up_queued_during_a_run_without_a_session_is_reported(self):
+        sent, status, result = self.run_queueing([AttemptResult(SUCCESS, text="done")])
+        self.assertEqual(status["outcome"], "success")
+        note = [item for item in status["warnings"] if "never read by the worker" in item]
+        self.assertEqual(len(note), 1, status["warnings"])
+        self.assertIn("without a session to continue", note[0])
+        self.assertIn(f"[{sent[0]['id']}] follow-up 1", note[0])
+        self.assertTrue(result.startswith("done\n\n"))
+        self.assertIn(note[0], result)
+        self.assertIn(note[0], tools.call("subagent_result", {"job_id": status["job_id"]})["warnings"])
+
+    def test_follow_up_past_the_turn_limit_is_reported(self):
+        sent, status, result = self.run_queueing(
+            [AttemptResult(SUCCESS, text="first", session_id="s1"), AttemptResult(SUCCESS, text="second", session_id="s1")],
+            turns=1)
+        self.assertEqual(status.get("follow_up_turns"), 1)
+        note = [item for item in status["warnings"] if "never read by the worker" in item]
+        self.assertEqual(len(note), 1, status["warnings"])
+        self.assertIn("1 follow-up turns", note[0])
+        self.assertIn("follow-up 2", note[0])
+        self.assertNotIn("follow-up 1", note[0])  # that one had its own turn
+        self.assertIn(note[0], result)
+
+    def test_follow_up_queued_before_a_failure_is_reported(self):
+        from cli_subagents.runtimes.base import ERROR
+
+        sent, status, result = self.run_queueing([AttemptResult(ERROR, message="worker crashed", session_id="s1")],
+                                                 hook=True)
+        self.assertEqual(status["outcome"], "error")
+        # The inbox hook's text is only a hint, so a message it showed still counts as unread.
+        self.assertTrue(any("outcome error" in item and "hook hint) follow-up 1" in item for item in status["warnings"]),
+                        status["warnings"])
+        self.assertIn("follow-up 1", result)
+
+    def test_follow_ups_the_worker_read_are_not_reported(self):
+        runner = self.runner()
+
+        def attempt(lease, prompt, session, owner, fallback):
+            messages.queue_for_worker(runner.job_id, "read during the run")
+            messages.take_for_worker(runner.job_id)  # check_parent_messages
+            return AttemptResult(SUCCESS, text="done")
+
+        with patch.object(runner, "_attempt", side_effect=attempt):
+            runner.run()
+        self.assertEqual(jobs.read_status(runner.job_id)["warnings"], [])
+        self.assertEqual(jobs.read_result(runner.job_id)["result"], "done")
 
     def test_message_accepted_before_closure_becomes_an_internal_turn(self):
         runner = self.runner()

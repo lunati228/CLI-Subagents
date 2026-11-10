@@ -113,6 +113,21 @@ def close_or_continue(job_id: str, session_id: str | None, account: str | None,
     return []
 
 
+def undelivered(job_id: str) -> list[dict[str, Any]]:
+    """Inbox entries the worker never read: not taken by the runner or check_parent_messages and
+    not matched to a question by ask_parent. Entries the inbox hook showed (only a hint to the
+    model, which the runner's follow-up turn would have repeated) get `"hinted": True`.
+
+    Call it after close_or_continue closed the inbox; then the list can't grow.
+    """
+
+    folder = channel_dir(job_id)
+    read = set(read_json(folder / "inbox-read.json", []) or [])
+    hinted = set(read_json(folder / "inbox-hooked.json", []) or [])
+    return [{**record, "hinted": record.get("id") in hinted}
+            for record in _read(folder / "inbox.jsonl") if record.get("id") not in read]
+
+
 def queue_for_worker(job_id: str, text: str, reply_to: str | None = None) -> dict[str, Any] | None:
     """Accept a message only while the runner can still drain its inbox."""
 

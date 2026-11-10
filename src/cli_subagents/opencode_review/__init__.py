@@ -358,9 +358,33 @@ def run(raw: bytes, context_path: Path, *, on_record: Callable[[dict[str, Any]],
                 store.log_append(Path(context["log"]), record)
             if answer.get("decision") != "auto_approve":
                 return answer
+        approved = _approved_command(payloads)
+        if approved:
+            answer["approved"] = approved
         return answer
     except Exception as exc:
         return {"decision": "deny", "reason": f"CLI Subagents review failed closed ({type(exc).__name__})"}
+
+
+def _approved_command(payloads: list[dict[str, Any]]) -> dict[str, str] | None:
+    """The shell command and folder an approval judged, for the plugin's one-time shell approval.
+
+    Only an absolute folder is returned: a relative workdir was judged against the
+    workspace, and OpenCode may resolve it against another folder.
+    """
+
+    if len(payloads) != 1 or payloads[0]["toolCall"]["name"] != "run_command":
+        return None
+    args = payloads[0]["toolCall"]["args"]
+    command, cwd = args.get("CommandLine"), args.get("Cwd")
+    if not isinstance(command, str) or not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return None
+    return {"command": command, "cwd": cwd}
+
+
+# How long the tool hook's approval of a shell command waits for its shell invocation (non-sandboxed jobs).
+# OpenCode starts the shell right after the tool hook returns; a later start is reviewed again.
+SHELL_APPROVAL_SECONDS = 15
 
 
 def plugin_source(python: str, script: Path, context: Path | None, *, steps: int | None = None,
@@ -395,11 +419,12 @@ def plugin_source(python: str, script: Path, context: Path | None, *, steps: int
                            "steps": steps, "model": model, "variant": variant, "fallback": fallback,
                            "restricted": list(restricted), "permissions": permissions or [],
                            "id": plugin_id, "guarded": guarded, "reviewMs": max(1, int(review_seconds)) * 1000,
-                           "sandbox": sandbox,
+                           "sandbox": sandbox, "approvalMs": SHELL_APPROVAL_SECONDS * 1000,
                            "sandboxScript": str(Path(__file__).resolve().parents[1] / "sandbox" / "integrations" / "opencode.py")},
                           ensure_ascii=False)
     return '''// Generated per job by CLI Subagents for OpenCode v2.
 import { spawn } from "node:child_process";
+import { isAbsolute as absolutePath, resolve as resolvePath } from "node:path";
 const settings = SETTINGS;
 // The gate check: csa's Python hook reads the call on stdin and prints its decision.
 const check = (input, script = settings.script) => new Promise((resolve, reject) => {
@@ -437,10 +462,37 @@ const restricted = model => model.providerID === "opencode" &&
 export default {
   id: settings.id,
   async setup(ctx) {
+    // Without the sandbox, the shell hook checks the command the tool hook approved a moment
+    // earlier. Each approval lets one shell invocation of exactly that command, in exactly
+    // that folder, start within approvalMs without a second review. Kept in this process only.
+    const approvals = new Map();
+    const approvalKey = (command, cwd) => typeof command === "string" && typeof cwd === "string" && absolutePath(cwd)
+      ? JSON.stringify([command, resolvePath(cwd)]) : null;
+    const grantApproval = approved => {
+      const key = approved && approvalKey(approved.command, approved.cwd);
+      if (!key) return;
+      const now = Date.now();
+      for (const [other, ends] of approvals) {
+        const left = ends.filter(end => end > now);
+        left.length ? approvals.set(other, left) : approvals.delete(other);
+      }
+      approvals.set(key, [...(approvals.get(key) || []), now + settings.approvalMs]);
+    };
+    const takeApproval = (command, cwd) => {
+      const key = approvalKey(command, cwd);
+      if (!key || !approvals.has(key)) return false;
+      const now = Date.now();
+      const left = approvals.get(key).filter(end => end > now);
+      const found = left.length > 0;
+      if (found) left.shift();
+      left.length ? approvals.set(key, left) : approvals.delete(key);
+      return found;
+    };
     // A thrown Error rejects only this tool call (Tool.Error).
     if (settings.context) await ctx.tool.hook("execute.before", async event => {
       // The shell hook authorizes the actual invocation, including non-tool shell routes.
-      if (settings.sandbox && ["shell", "bash"].includes(event.tool)) return;
+      const shell = ["shell", "bash"].includes(event.tool);
+      if (settings.sandbox && shell) return;
       let answer;
       try {
         answer = JSON.parse(await check(JSON.stringify({ tool: event.tool, input: event.input })));
@@ -449,6 +501,7 @@ export default {
       }
       if (!answer || answer.decision !== "auto_approve")
         throw new Error((answer && answer.reason) || "CLI Subagents review denied this tool call.");
+      if (shell && !settings.sandbox) grantApproval(answer.approved);
     });
     SANDBOX_HOOK
     let selected;

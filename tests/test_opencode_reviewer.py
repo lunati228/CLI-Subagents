@@ -649,5 +649,86 @@ console.log(JSON.stringify({ outcome, ticks, ms: Date.now() - started }));
                 self.assertIn("CLI Subagents review", outcome)
 
 
+@unittest.skipUnless(shutil.which("node"), "Node is needed to execute the generated JS plugin")
+class ShellApprovalReuseTests(GateBase):
+    """Non-sandboxed edit jobs: the shell hook reuses the tool hook's approval once, for the same command and folder.
+
+    The real gate entry point runs, with the fake reviewer counting its calls.
+    """
+
+    run_js = PluginCheckTests.run_js
+
+    def setUp(self):
+        super().setUp()
+        folder = self.root / "plugin"
+        folder.mkdir()
+        source = opencode_review.plugin_source(sys.executable, Path(opencode_review.__file__).with_name("__main__.py"),
+                                               self.context, review_seconds=60, sandbox=False)
+        (folder / "package.json").write_text('{"type":"module","main":"server.js"}', encoding="utf-8")
+        (folder / "server.js").write_text(source, encoding="utf-8")
+        self.plugin_file = folder / "server.js"
+
+    # run(command, {cwd, input, toolCalls, later}) calls the tool hook (unless toolCalls is 0), then the shell
+    # hook in `cwd`, `later` ms from now. It prints whether the tool hook approved and whether the original ran.
+    STEPS = '''
+const ctx = makeContext(); await plugin.setup(ctx);
+let offset = 0;
+const realNow = Date.now;
+Date.now = () => realNow() + offset;
+const run = async (command, options = {}) => {
+  let tool = "skipped";
+  if (options.toolCalls !== 0) {
+    try { await ctx.hooks["tool:execute.before"]({ tool: "bash", input: options.input || { command } }); tool = "approved"; }
+    catch (error) { tool = "denied"; }
+  }
+  offset += options.later || 0;
+  const invocation = { command, cwd: options.cwd || CWD, shell: "ORIGINAL_SHELL", env: {}, timeout: 1000 };
+  await ctx.hooks["shell:create.before"](invocation);
+  console.log(JSON.stringify({ tool, ran: invocation.command === command && invocation.shell === "ORIGINAL_SHELL" }));
+};
+'''
+
+    def steps(self, script):
+        lines = self.run_js(self.plugin_file, self.STEPS.replace("CWD", json.dumps(str(self.project))) + script)
+        return [json.loads(line) for line in lines]
+
+    def test_one_approved_command_costs_one_reviewer_call(self):
+        self.write(reviewer=self.fake())
+        got = self.steps('await run("python build.py");')
+        self.assertEqual(got, [{"tool": "approved", "ran": True}])
+        self.assertEqual(self.calls(), 1)
+
+    def test_the_approval_covers_one_run_of_the_same_command_in_the_same_folder(self):
+        self.write(reviewer=self.fake())
+        other = self.project / "sub"
+        other.mkdir()
+        got = self.steps('''
+await run("python build.py");                                                     // 1 call
+await run("python build.py", { toolCalls: 0 });                                   // approval used up: 1 more
+await ctx.hooks["tool:execute.before"]({ tool: "bash", input: { command: "python build.py" } });  // 1 more
+await run("python other.py", { toolCalls: 0 });                                   // another command: 1 more
+await run("python build.py", { toolCalls: 0 });                                   // the waiting approval: none
+await run("python build.py", { cwd: OTHER });                                     // another folder: 2
+await run("python build.py", { later: 60000 });                                   // expired: 2
+'''.replace("OTHER", json.dumps(str(other))))
+        self.assertEqual([item["ran"] for item in got], [True] * 6)
+        self.assertEqual(self.calls(), 1 + 1 + 1 + 1 + 0 + 2 + 2)
+
+    def test_a_denied_command_stays_denied_in_the_shell_hook(self):
+        self.write(reviewer=self.fake(DENY))
+        got = self.steps('await run("python build.py");\nawait run("python build.py", { toolCalls: 0 });')
+        self.assertEqual(got, [{"tool": "denied", "ran": False}, {"tool": "skipped", "ran": False}])
+        self.assertEqual(self.calls(), 3)
+
+    def test_a_relative_workdir_gets_its_own_shell_review(self):
+        # The gate judged it against the workspace; only an absolute folder can be matched exactly.
+        self.write(reviewer=self.fake())
+        (self.project / "sub").mkdir()
+        got = self.steps('await run("python build.py", { input: { command: "python build.py", workdir: "sub" }, '
+                         'cwd: SUB });'.replace("SUB", json.dumps(str(self.project / "sub"))))
+        self.assertEqual(got, [{"tool": "approved", "ran": True}])
+        self.assertEqual(self.calls(), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

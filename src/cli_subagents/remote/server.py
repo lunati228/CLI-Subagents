@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Run one Claude Code job for an SSH user on one of that user's own accounts.
 
-Started by sshd as the forced command of the user's key (see docs/remote-agent.md):
+Started by sshd as the forced command of the user's key (see docs/remote.md):
 
-    server.py --user NAME [--config PATH]           reads SSH_ORIGINAL_COMMAND
-    server.py --cleanup [--config PATH]             deletes old transcripts (timer)
+    csa remote serve --user NAME [--config PATH]    reads SSH_ORIGINAL_COMMAND
+    csa remote serve --cleanup [--config PATH]      deletes old transcripts (timer)
+
+`python -m cli_subagents.remote.server` takes the same options.
 
 SSH_ORIGINAL_COMMAND (what the client asked for):
     job (or empty)      run one job over stdin/stdout, NDJSON
@@ -43,7 +45,7 @@ if __package__ in (None, ""):
 from cli_subagents.remote import protocol  # noqa: E402
 from cli_subagents.remote.protocol import ProtocolError  # noqa: E402
 
-DEFAULT_CONFIG = "/etc/remote-agent/config.toml"
+DEFAULT_CONFIG = "/etc/cli-subagents/remote.toml"
 # Built-in tools that would act on the server's disk. A job works on the
 # user's PC through the pc_* tools instead, and a job without a project has no
 # file tools at all.
@@ -108,7 +110,7 @@ def load_config(path: Path) -> Config:
     with open(path, "rb") as handle:
         data = tomllib.load(handle)
     server = data.get("server") or {}
-    state_dir = Path(server.get("state_dir") or "/var/lib/remote-agent")
+    state_dir = Path(server.get("state_dir") or "/var/lib/cli-subagents-remote")
     claude = server.get("claude") or "claude"
     claude_cmd = tuple(claude) if isinstance(claude, list) else tuple(shlex.split(str(claude)))
     if not claude_cmd or not all(isinstance(part, str) and part for part in claude_cmd):
@@ -879,7 +881,7 @@ def run_status(config: Config, user: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Claude Code jobs for an SSH user on their own accounts.")
     parser.add_argument("--user", help="the person this SSH key belongs to")
-    parser.add_argument("--config", default=os.environ.get("REMOTE_AGENT_CONFIG", DEFAULT_CONFIG))
+    parser.add_argument("--config", default=os.environ.get("CSA_REMOTE_CONFIG", DEFAULT_CONFIG))
     parser.add_argument("--cleanup", action="store_true", help="delete transcripts older than transcript_days and exit")
     parser.add_argument("command", nargs="*", help="for local testing; over SSH the client's command is used")
     args = parser.parse_args(argv)

@@ -1,6 +1,6 @@
 """Wire format between the client on the PC and the server: one JSON object per line.
 
-See docs/remote-agent.md for every message type.
+See docs/remote.md for every message type.
 """
 
 from __future__ import annotations

@@ -206,6 +206,26 @@ class ServerProtocolTest(unittest.TestCase):
         names = [tool["name"] for tool in json.loads(urllib.request.urlopen(request).read())["result"]["tools"]]
         self.assertEqual(sorted(names), ["pc_list", "pc_read"])
 
+    def test_csa_remote_serve_runs_the_server(self):
+        import contextlib
+        from unittest import mock
+
+        from cli_subagents import cli
+
+        path = self.tmp / "remote.toml"
+        path.write_text("\n".join([
+            "[server]", f"state_dir = {json.dumps(str(self.config.state_dir))}",
+            f"claude = {json.dumps([sys.executable, str(FAKE)])}",
+            "[[account]]", 'name = "alice-1"', 'owner = "alice"', f"home = {json.dumps(str(self.homes['alice-1']))}",
+        ]) + "\n", encoding="utf-8")
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": "status"}), contextlib.redirect_stdout(out):
+            code = cli.main(["remote", "serve", "--config", str(path), "--user", "alice"])
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("alice-1: 20% of the tightest window used", out.getvalue())
+        with mock.patch.dict(os.environ, {"SSH_ORIGINAL_COMMAND": "rm -rf /"}), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["remote", "serve", "--config", str(path), "--user", "alice"]), 2)
+
     def test_usage_parsing(self):
         text = "Current session: 0% used\nCurrent week (all models): 100% used · resets Nov 12"
         self.assertEqual(server.parse_usage(text), 100)

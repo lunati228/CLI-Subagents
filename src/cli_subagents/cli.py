@@ -683,6 +683,13 @@ def build_parser() -> argparse.ArgumentParser:
     launcher.add_argument("--runtime", default="claude", choices=RUNTIMES)
     launcher.add_argument("--account")
 
+    remote = sub.add_parser(
+        "remote", help="Server side of the remote runtime: `csa remote serve --user NAME` (see docs/remote.md).",
+        description="Run on the server as the forced command of a person's ssh key. "
+        "`csa remote serve --help` lists its options.",
+    )
+    remote.add_argument("action", choices=("serve",))
+
     hook = sub.add_parser("hook", help="Claude Code hook commands (see hooks/hooks.json).")
     hook.add_argument(
         "action", choices=("await", "pending", "inbox", "relay-write", "claude-sandbox",
@@ -704,6 +711,11 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    if argv[:2] == ["remote", "serve"]:
+        # The server side, started by sshd as a key's forced command. It has its own options.
+        from cli_subagents.remote.server import main as serve_remote
+
+        return serve_remote(argv[2:])
     # Everything after `csa launch [options] --` goes to the launched CLI.
     extra: list[str] = []
     if argv[:1] == ["launch"] and "--" in argv:

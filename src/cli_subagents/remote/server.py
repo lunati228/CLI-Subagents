@@ -341,17 +341,27 @@ def pick_account(config: Config, state: State, user: str) -> Account:
     return choices[0][2]
 
 
-def resume_account(config: Config, state: State, user: str, name: str) -> Account:
-    """The account a session ran on. A resume stays on it, even when it is near its limit."""
+def named_account(config: Config, state: State, user: str, name: str, *, conversation: bool = False) -> Account:
+    """The account a job names: one of the sender's own, not paused after a limit, with a free slot.
+
+    The client chose it (csa picks by its own usage records); the server only
+    checks that it may run there. It never substitutes another account.
+    """
     for account in owned_accounts(config, user):
         if account.name == name:
             note = state.read().get(name, {})
             if isinstance(note, dict) and note.get("limited_until", 0) > time.time():
-                raise ServerError("all_limited", f"account {name} is at its usage limit; this conversation stays on it, try again after the reset")
+                stays = "; this conversation stays on it" if conversation else ""
+                raise ServerError("all_limited", f"account {name} is at its usage limit{stays}, try again after the reset")
             if running_jobs(user_dir(config, user), name) >= MAX_JOBS_PER_ACCOUNT:
                 raise ServerError("session_account_busy", f"account {name} is running its maximum of jobs; try again shortly")
             return account
     raise ServerError("account_not_owned", f"account {name} is not one of your accounts")
+
+
+def resume_account(config: Config, state: State, user: str, name: str) -> Account:
+    """The account a session ran on. A resume stays on it, even when it is near its limit."""
+    return named_account(config, state, user, name, conversation=True)
 
 
 # --------------------------------------------------------------------------
@@ -506,14 +516,18 @@ def build_mcp_config(job: dict, installed, path: Path) -> None:
     if installed is not None and installed.mcp_config_path and Path(installed.mcp_config_path).is_file():
         data = json.loads(Path(installed.mcp_config_path).read_text(encoding="utf-8"))
         servers.update((data or {}).get("mcpServers") or {})
-    servers.pop("pc", None)
     workspace = job["workspace"]
+    proxies = workspace.get("proxies") or []
+    # The PC's servers win over bundle servers of the same name.
+    for name in ("pc", *proxies):
+        servers.pop(name, None)
     if workspace["mode"] == "pc":
-        servers["pc"] = {
-            "type": "http",
-            "url": f"http://127.0.0.1:{workspace['bridge_port']}/mcp",
-            "headers": {"Authorization": f"Bearer {workspace['bridge_token']}"},
-        }
+        headers = {"Authorization": f"Bearer {workspace['bridge_token']}"}
+        servers["pc"] = {"type": "http", "url": f"http://127.0.0.1:{workspace['bridge_port']}/mcp", "headers": headers}
+        # Stdio servers that stay on the PC (csa-parent and the like), through the same bridge.
+        for name in proxies:
+            servers[name] = {"type": "http", "url": f"http://127.0.0.1:{workspace['bridge_port']}/mcp/{name}",
+                             "headers": dict(headers)}
     fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump({"mcpServers": servers}, handle)
@@ -535,7 +549,7 @@ def claude_argv(config: Config, job: dict, installed, mcp_path: Path, session: t
         "--append-system-prompt", PC_NOTE if workspace_pc else NO_PROJECT_NOTE,
     ]
     if workspace_pc:
-        argv += ["--allowedTools", "mcp__pc"]
+        argv += ["--allowedTools", ",".join(["mcp__pc", *(f"mcp__{name}" for name in job["workspace"].get("proxies") or [])])]
     if installed is not None:
         if installed.settings_path and Path(installed.settings_path).is_file():
             argv += ["--settings", str(installed.settings_path)]
@@ -656,12 +670,17 @@ def run_job(config: Config, user: str, stdin: IO[bytes], stdout: IO[bytes]) -> i
             known = _read_sessions(folder).get(resume["session_id"])
             if not isinstance(known, dict):
                 raise ServerError("bad_request", "this server doesn't know that conversation; start a new one")
-            if known.get("account") != resume["account"]:
+            if known.get("account") != resume["account"] or job["account"] not in (None, resume["account"]):
                 raise ServerError("account_not_owned", "that conversation runs on another account and stays there")
         # Choosing the account and claiming its slot happen under one lock, so
         # two jobs started together can't both take the last slot.
         with FileLock(folder / "start.lock"):
-            account = resume_account(config, state, user, resume["account"]) if resume else pick_account(config, state, user)
+            if resume:
+                account = resume_account(config, state, user, resume["account"])
+            elif job["account"]:
+                account = named_account(config, state, user, job["account"])
+            else:
+                account = pick_account(config, state, user)
             check_folder_owner(account)
             job_key = str(uuid.uuid4())
             marker = _private_dir(folder / "running" / account.name) / job_key
@@ -742,10 +761,15 @@ def run_job(config: Config, user: str, stdin: IO[bytes], stdout: IO[bytes]) -> i
                 if kind == "message" and isinstance(message.get("text"), str) and message["text"].strip():
                     with feed:
                         pending[0] += 1
-                    if not write_user(message["text"]):
+                    delivered = write_user(message["text"])
+                    if not delivered:
                         with feed:
                             pending[0] -= 1
                         out.send({"type": "warning", "text": "the job had already finished; message not delivered"})
+                    message_id = protocol.message_id(message)
+                    if message_id:
+                        # The PC marks a follow-up read only when it went in.
+                        out.send({"type": "message_status", "id": message_id, "delivered": delivered})
                 elif kind == "cancel":
                     kill_tree(proc)
                     return
@@ -865,9 +889,31 @@ def run_login(config: Config, user: str, name: str) -> int:
     return 1
 
 
-def run_status(config: Config, user: str) -> int:
+def read_login(config: Config, account: Account) -> bool | None:
+    """Whether Claude Code says the account is logged in (`claude auth status --json`, no model call).
+
+    Claude Code reads its own login; this code only reads its yes or no.
+    """
+    try:
+        done = subprocess.run([*config.claude, "auth", "status", "--json"], env=claude_env(account), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+        data = json.loads(done.stdout[done.stdout.index("{"):])
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    return bool(data.get("loggedIn")) if isinstance(data, dict) else None
+
+
+def run_status(config: Config, user: str, as_json: bool = False) -> int:
     state = State(user_dir(config, user))
     accounts = owned_accounts(config, user)
+    if as_json:
+        report = []
+        for account in accounts:
+            report.append({"name": account.name, "logged_in": read_login(config, account),
+                           "usage_percent": read_usage(config, state, account),
+                           "running": running_jobs(user_dir(config, user), account.name)})
+        print(json.dumps({"user": user, "accounts": report}))
+        return 0
     if not accounts:
         print(f"no Claude account on this server belongs to {user}")
         return 1
@@ -901,9 +947,9 @@ def main(argv: list[str] | None = None) -> int:
         return run_job(config, args.user, sys.stdin.buffer, sys.stdout.buffer)
     if words[0] == "login" and len(words) == 2:
         return run_login(config, args.user, words[1])
-    if words[0] == "status" and len(words) == 1:
-        return run_status(config, args.user)
-    print("error: allowed commands are: job, login ACCOUNT, status", file=sys.stderr)
+    if words[0] == "status" and words[1:] in ([], ["--json"]):
+        return run_status(config, args.user, as_json=words[1:] == ["--json"])
+    print("error: allowed commands are: job, login ACCOUNT, status [--json]", file=sys.stderr)
     return 2
 
 

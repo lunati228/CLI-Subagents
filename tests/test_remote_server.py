@@ -206,6 +206,75 @@ class ServerProtocolTest(unittest.TestCase):
         names = [tool["name"] for tool in json.loads(urllib.request.urlopen(request).read())["result"]["tools"]]
         self.assertEqual(sorted(names), ["pc_list", "pc_read"])
 
+    def test_a_named_account_is_used_when_it_is_the_senders(self):
+        self.with_all_accounts()
+        code, lines = self.run_job(self.job(account="alice-2"))
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(lines[0]["account"], "alice-2")
+        code, lines = self.run_job(self.job(account="bob-1", job_id="82345678-1234-4234-8234-123456789abc"))
+        self.assertEqual(lines[-1]["code"], "account_not_owned")
+        self.assertEqual(self.job_calls("bob-1"), [])
+
+    def test_a_named_account_at_its_limit_is_not_swapped_for_another(self):
+        self.with_all_accounts()
+        code, lines = self.run_job(self.job(account="alice-1", prompt="LIMIT"))
+        code, lines = self.run_job(self.job(account="alice-1", job_id="92345678-1234-4234-8234-123456789abc"))
+        self.assertEqual(lines[-1]["code"], "all_limited")
+        self.assertEqual(len(self.job_calls("alice-1")), 1)
+        self.assertEqual(self.job_calls("alice-2"), [])
+
+    def test_a_resume_naming_another_account_is_refused(self):
+        self.with_all_accounts()
+        code, lines = self.run_job(self.job(account="alice-1"))
+        resume = {"session_id": lines[0]["session_id"], "account": "alice-1"}
+        code, lines = self.run_job(self.job(job_id="a2345678-1234-4234-8234-123456789abc", account="alice-2", resume=resume))
+        self.assertEqual(lines[-1]["code"], "account_not_owned")
+        code, lines = self.run_job(self.job(job_id="b2345678-1234-4234-8234-123456789abc", account="alice-1", resume=resume))
+        self.assertEqual(code, 0, lines)
+        self.assertTrue(lines[0]["resumed"])
+
+    def test_a_live_message_with_an_id_is_confirmed(self):
+        code, lines = self.run_job(self.job(prompt="SLOW first"), {"type": "message", "id": "m1", "text": "second"})
+        self.assertEqual(code, 0, lines)
+        self.assertIn({"type": "message_status", "id": "m1", "delivered": True}, lines)
+
+    def test_proxied_pc_servers_are_offered_and_allowed(self):
+        workspace = {"mode": "pc", "label": "app", "bridge_port": 4321, "bridge_token": "t" * 24, "proxies": ["csa-parent"]}
+        code, lines = self.run_job(self.job(workspace=workspace))
+        self.assertEqual(code, 0, lines)
+        init = next(line["event"] for line in lines if line["type"] == "event" and line["event"].get("subtype") == "init")
+        self.assertEqual(sorted(server["name"] for server in init["mcp_servers"]), ["csa-parent", "pc"])
+        argv = self.job_calls("alice-1")[-1]["argv"]
+        self.assertEqual(argv[argv.index("--allowedTools") + 1], "mcp__pc,mcp__csa-parent")
+        self.assertEqual(argv[argv.index("--tools") + 1], server.ALLOWED_BUILTIN_TOOLS)
+
+    def test_the_wire_format_checks_the_new_fields(self):
+        pc = {"mode": "pc", "label": "app", "bridge_port": 4321, "bridge_token": "t" * 24}
+        for fields in ({"account": "-x"}, {"account": "a b"},
+                       {"workspace": {**pc, "proxies": ["pc"]}},
+                       {"workspace": {**pc, "proxies": ["a", "a"]}},
+                       {"workspace": {**pc, "proxies": [f"s{n}" for n in range(9)]}},
+                       {"workspace": {"mode": "none", "proxies": ["csa-parent"]}}):
+            with self.subTest(fields=fields), self.assertRaises(protocol.ProtocolError):
+                protocol.validate_job(self.job(**fields))
+        job = protocol.validate_job(self.job(account="alice.max-2", workspace={**pc, "proxies": ["csa-parent"]}))
+        self.assertEqual((job["account"], job["workspace"]["proxies"]), ("alice.max-2", ["csa-parent"]))
+        self.assertIsNone(protocol.message_id({"id": "bad id"}))
+
+    def test_status_json_lists_login_usage_and_running_jobs(self):
+        self.with_all_accounts()
+        (self.homes["alice-2"] / "fake-logged-out").write_text("", encoding="utf-8")
+        import contextlib
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(server.run_status(self.config, "alice", as_json=True), 0)
+        report = json.loads(out.getvalue())
+        self.assertEqual([item["name"] for item in report["accounts"]], ["alice-1", "alice-2"])
+        self.assertEqual([item["logged_in"] for item in report["accounts"]], [True, False])
+        self.assertEqual(report["accounts"][0]["usage_percent"], 20)
+        self.assertEqual(report["accounts"][0]["running"], 0)
+
     def test_csa_remote_serve_runs_the_server(self):
         import contextlib
         from unittest import mock

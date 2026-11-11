@@ -26,6 +26,11 @@ ERROR_CODES = (
 _JOB_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _SESSION_ID = re.compile(r"^[0-9A-Za-z][0-9A-Za-z_-]{7,79}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_ACCOUNT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# Names of stdio MCP servers on the PC that the bridge serves at /mcp/<name>.
+_PROXY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+MAX_PROXIES = 8
+_MESSAGE_ID = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
 _LABEL = re.compile(r"^[^\x00-\x1f/\\]{1,80}$")
 
 
@@ -100,6 +105,16 @@ def validate_job(job: dict) -> dict:
             raise ProtocolError("workspace.bridge_token must be 16 to 200 printable ASCII characters")
         if not isinstance(label, str) or not _LABEL.match(label):
             raise ProtocolError("workspace.label must be a short name without slashes")
+    proxies = workspace.get("proxies") or []
+    if (not isinstance(proxies, list) or len(proxies) > MAX_PROXIES or len(set(map(str, proxies))) != len(proxies)
+            or not all(isinstance(name, str) and _PROXY.match(name) and name != "pc" for name in proxies)):
+        raise ProtocolError(f"workspace.proxies must be up to {MAX_PROXIES} distinct server names other than pc")
+    if proxies and workspace["mode"] != "pc":
+        raise ProtocolError("workspace.proxies needs workspace.mode pc")
+
+    account = job.get("account")
+    if account is not None and (not isinstance(account, str) or not _ACCOUNT.match(account)):
+        raise ProtocolError("account must be an account name")
 
     bundle = job.get("bundle")
     if bundle is not None:
@@ -122,10 +137,17 @@ def validate_job(job: dict) -> dict:
     return {
         **job,
         "permission_mode": mode,
-        "workspace": workspace,
+        "workspace": {**workspace, "proxies": list(proxies)},
+        "account": account,
         "model": _optional_str(job, "model"),
         "effort": _optional_str(job, "effort", 20),
     }
+
+
+def message_id(message: dict) -> str | None:
+    """The id a live message asks the server to confirm, or None."""
+    value = message.get("id")
+    return value if isinstance(value, str) and _MESSAGE_ID.match(value) else None
 
 
 def user_message(text: str) -> dict:

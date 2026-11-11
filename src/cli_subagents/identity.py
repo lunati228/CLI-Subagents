@@ -26,9 +26,10 @@ from cli_subagents.fsutil import read_json
 TAIL_BYTES = 4_000_000  # read from the end of a transcript or rollout file
 SEARCH_BYTES = 64_000_000  # read from the end of one relay transcript when looking for its marker
 CANDIDATES = 40  # newest subagent transcripts of the session that are searched
-LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
+LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode",
+          "remote": "Claude Code on the server"}
 SOURCES = {"claude": "the worker's transcript", "codex": "Codex's session log", "antigravity": "the worker's start event",
-           "opencode": "OpenCode's session store"}
+           "opencode": "OpenCode's session store", "remote": "the worker's start event"}
 
 _NOT_TOKEN = re.compile(r"[^A-Za-z0-9._:/@+-]")
 _CLAUDE_MODEL = re.compile(r"claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?")
@@ -272,7 +273,7 @@ class WorkerRecord:
 
     def observe(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
-        if self.runtime == "claude":
+        if self.runtime in ("claude", "remote"):
             if kind == "system" and event.get("subtype") == "init":
                 self.model = clean(event.get("model"))
                 self.session = str(event.get("session_id") or "")
@@ -334,6 +335,11 @@ def worker_identity(record: WorkerRecord, account: str | None, final: bool = Fal
                 if found:
                     return Worker(found[0], found[1], SOURCES["claude"])
         return Worker(record.model, None, "the worker's start event" if record.model else None)
+    if runtime == "remote":
+        # The transcript stays on the server; the start event names the model.
+        if not (record.answered or final):
+            return None
+        return Worker(record.model, None, SOURCES["remote"] if record.model else None)
     if runtime == "codex":
         if record.session:
             from cli_subagents.runtimes.codex import find_rollout

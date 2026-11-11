@@ -67,7 +67,8 @@ def normalize_plan(plan: str | None) -> str | None:
 
 
 def preset_for(runtime: str, plan: str | None) -> Preset | None:
-    return PRESETS.get(runtime, {}).get(normalize_plan(plan) or "")
+    # A remote account is a Claude account on a server: same plans, same presets.
+    return PRESETS.get("claude" if runtime == "remote" else runtime, {}).get(normalize_plan(plan) or "")
 
 
 @dataclass

@@ -94,6 +94,9 @@ def _create_job(
     runtime_config = config.runtime(runtime)
     if runtime == "opencode" and not get_runtime(runtime).find_binary(runtime_config):
         raise ValueError("OpenCode is disabled or not installed; install OpenCode v2 (@opencode/cli) to use this worker")
+    if runtime == "remote" and not (runtime_config.server and runtime_config.accounts):
+        raise ValueError('the remote runtime needs a server and accounts: set server = "user@host" under [remote] '
+                         "and add accounts with csa accounts add NAME --runtime remote (docs/remote.md)")
     depth = int(os.environ.get("CLI_SUBAGENTS_DEPTH", "0") or 0)
     if depth >= config.max_depth:
         raise ValueError(
@@ -173,6 +176,7 @@ def _create_job(
         add_dirs=directories,
         resume_session=resume_session,
         resume_account=resume_account,
+        resume_job=resume_job or None,
         parent=host_context(host or detect_host(), str(path.resolve())),
         depth=depth + 1,
         can_delegate=depth + 1 < config.max_depth,

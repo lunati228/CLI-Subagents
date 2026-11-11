@@ -51,7 +51,8 @@ DEFAULT_WINDOW = 100  # a relay call returns earlier as soon as the worker has a
 # call waits longer than this, whatever --window says; the default stays under Bash's 120 s too.
 RELAY_MAX_WAIT = 150
 SUMMARY_CHARS = 200
-RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
+RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode",
+                  "remote": "Claude Code (server)"}
 RESULT_RULE = "===== RESULT ====="
 RESULT_END_RULE = "===== END RESULT ====="
 QUESTION_RULE = "===== QUESTION ====="
@@ -579,8 +580,29 @@ class OpenCodeDescriber(Describer):
         return []
 
 
+class RemoteDescriber(ClaudeDescriber):
+    """Claude Code's events from the server, plus the relay's own `csa.remote` events."""
+
+    def describe(self, event: dict[str, Any], offset: int = 0) -> list[str]:
+        if event.get("type") != "csa.remote":
+            return super().describe(event, offset)
+        what = event.get("event")
+        if what == "accepted":
+            session = "continues its session" if event.get("resumed") else "new session"
+            return [f"server took the job on account {short(str(event.get('account') or '?'))} ({session})"]
+        if what == "delivered":
+            return ["follow-up went into the running conversation"]
+        if what == "warning":
+            return block("server: ", str(event.get("text") or ""))
+        if what == "error":
+            return [f"server refused the job ({short(str(event.get('code') or '?'))}): "
+                    + first_line(str(event.get("message") or ""), 200)]
+        return []
+
+
 DESCRIBERS: dict[str, Callable[[], Describer]] = {
     "claude": ClaudeDescriber,
+    "remote": RemoteDescriber,
     "codex": CodexDescriber,
     "antigravity": AntigravityDescriber,
     "opencode": OpenCodeDescriber,

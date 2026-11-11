@@ -75,7 +75,8 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
         options, prompt = _relay_prompt(prompt)
         for key, value in options.items():
             setattr(args, key, value)
-    access = args.access or ("read" if relay and args.runtime != "claude" else "edit")
+    # Claude Code relays (local or on the server) default to edit, the other CLIs' relays to read.
+    access = args.access or ("read" if relay and args.runtime not in ("claude", "remote") else "edit")
     return jobs.create_job(
         runtime=args.runtime,
         prompt=prompt,
@@ -172,6 +173,9 @@ def cmd_accounts(args: argparse.Namespace) -> int:
         print("Give the account a short name: letters, digits, dot, dash or underscore ('primary' is reserved).")
         return 2
 
+    if args.runtime == "remote" and action in ("add", "sync"):
+        return _remote_account(config, runtime_config, runtime, action, args)
+
     if action == "add":
         if runtime_config.find(args.name):
             print(f"{args.runtime} account '{args.name}' already exists.")
@@ -219,6 +223,35 @@ def cmd_accounts(args: argparse.Namespace) -> int:
         return 0
     print(f"Unknown action: {action}")
     return 2
+
+
+def _remote_account(config, runtime_config, runtime, action: str, args: argparse.Namespace) -> int:
+    """`accounts add|sync --runtime remote`: the account folder is on the server, so nothing is made here."""
+
+    if action == "sync":
+        print("Remote accounts need no sync: each job takes your current Claude setup to the server.")
+        report = runtime.prepare(runtime_config, runtime_config.find(args.name) or Account(args.name, Path()),
+                                 _probe_spec("remote", args.cwd))
+        _print_setup(report)
+        return 0
+    if runtime_config.find(args.name):
+        print(f"remote account '{args.name}' already exists.")
+        return 1
+    if args.home:
+        print("A remote account has no folder on this PC; leave out --home.")
+        return 2
+    account = Account(name=args.name, home=homes_dir() / "remote" / args.name)
+    runtime_config.accounts.append(account)
+    save_config(config)
+    print(f"Added remote account '{args.name}' on {runtime_config.server or '(no server set yet)'}")
+    print(runtime.add_note)
+    if not runtime_config.server:
+        print('Set the server under [remote] in the config, e.g. server = "me@ai-server", then log in.')
+        return 0
+    if args.no_login:
+        print(f"Log in later with: csa accounts login {args.name} --runtime remote")
+        return 0
+    return _login(runtime_config, runtime, account)
 
 
 def _probe_spec(runtime: str, cwd: str | None = None) -> JobSpec:
@@ -355,7 +388,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     cwd = str(Path(args.cwd).resolve())
     # Claude's cheapest model is a known alias; other runtimes use their default unless asked.
-    model = args.model or ("haiku" if args.runtime == "claude" else None)
+    model = args.model or ("haiku" if args.runtime in ("claude", "remote") else None)
     started = []
     for account in runtime_config.pool_accounts():
         status = jobs.create_job(
@@ -526,6 +559,9 @@ def cmd_launch(args: argparse.Namespace, extra: list[str]) -> int:
     config = load_config()
     runtime_config = config.runtime(args.runtime)
     runtime = get_runtime(args.runtime)
+    if not hasattr(runtime, "interactive"):
+        print(f"csa launch can't open an interactive {args.runtime} session; start jobs with csa run or subagent_start.")
+        return 2
     if args.account:
         account = runtime_config.find(args.account)
         if account is None:

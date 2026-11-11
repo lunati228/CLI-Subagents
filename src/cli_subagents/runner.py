@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from cli_subagents import accounts, limits, messages, openrouter, plans, quota, sandbox, spend
-from cli_subagents.config import OPT_IN_FAILOVER, Account, RuntimeConfig, load_config
+from cli_subagents.config import OPT_IN_FAILOVER, REMOTE_RUNTIMES, Account, RuntimeConfig, load_config
 from cli_subagents.fsutil import kill_tree, open_private, process_start_time, unlock, worker_process, write_text
 from cli_subagents.jobs import job_dir, mark_pending, read_spec, update_status
 from cli_subagents.runtimes import get_runtime
@@ -204,7 +204,9 @@ class Runner:
         task = self.spec.prompt
         excluded: set[str] = set()
         last: AttemptResult | None = None
-        failover = self.runtime_config.failover == "on-limit" and not self.spec.account
+        # A remote job and its follow-ups stay on one account (config.REMOTE_RUNTIMES).
+        failover = (self.runtime_config.failover == "on-limit" and not self.spec.account
+                    and self.spec.runtime not in REMOTE_RUNTIMES)
         # The conversation to continue and the account folder that holds it.
         session = self.spec.resume_session
         owner = self.spec.resume_account

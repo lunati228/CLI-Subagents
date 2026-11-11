@@ -101,6 +101,7 @@ class JobSpec:
     add_dirs: list[str] = field(default_factory=list)
     resume_session: str | None = None
     resume_account: str | None = None  # account folder that holds resume_session
+    resume_job: str | None = None  # the finished job this one continues (remote workers rebuild the transcript from it)
     parent: dict[str, Any] | None = None  # host CLI of the main session and its context paths
     depth: int = 1
     can_delegate: bool = False  # depth < max_depth: the worker keeps csa's tools and may start helpers

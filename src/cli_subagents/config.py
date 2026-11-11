@@ -14,7 +14,9 @@ from typing import Any
 
 from cli_subagents.fsutil import write_private, write_text
 
-RUNTIMES = ("claude", "codex", "antigravity", "opencode")
+RUNTIMES = ("claude", "codex", "antigravity", "opencode", "remote")
+# Runtimes whose accounts live elsewhere: no local primary account, and a job never changes account.
+REMOTE_RUNTIMES = ("remote",)
 # Runtimes whose extra accounts are "use at your own risk" (Antigravity: Google's FAQ says
 # consumer plans don't support automated account rotation). Failover is on by default, as for
 # the others; with failover = "off", unpinned jobs run on the primary account only.
@@ -34,6 +36,8 @@ WINDOWS_SANDBOX_MODES = ("unelevated", "elevated", "off")
 REASONING_SUMMARY_MODES = ("detailed", "concise", "auto", "none", "off")
 SPEND_PERIODS = ("day", "week", "month", "total")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# An ssh destination: [user@]host or a Host alias from ~/.ssh/config. Never an option.
+SERVER_RE = re.compile(r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,63}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
 
 
 def home() -> Path:
@@ -64,7 +68,7 @@ def homes_dir() -> Path:
 
 
 def default_primary(runtime: str) -> Path:
-    if runtime == "claude":
+    if runtime in ("claude", "remote"):  # remote: the Claude setup that goes to the server
         configured = os.environ.get("CLAUDE_CONFIG_DIR")
         return Path(configured).expanduser() if configured else Path.home() / ".claude"
     if runtime == "codex":
@@ -177,6 +181,8 @@ class RuntimeConfig:
     network_access: bool = True  # [codex] only: network inside the sandbox for edit jobs (local test sockets too)
     accounts: list[Account] = field(default_factory=list)
     enabled: bool = True  # [opencode]: auto-discover unless explicitly disabled
+    server: str | None = None  # [remote]: ssh destination of the server, user@host or a Host alias
+    ssh_key: str | None = None  # [remote]: private key file for that server (ssh -i)
 
     def review_chain(self) -> tuple[list[ReviewerEntry], bool]:
         """(reviewers in order, True when they are the built-in defaults). An empty list means off."""
@@ -201,6 +207,8 @@ class RuntimeConfig:
     def worker_accounts(self) -> list[Account]:
         """Accounts that unpinned jobs may use, in configuration order."""
 
+        if self.runtime in REMOTE_RUNTIMES:
+            return [account for account in self.accounts if account.enabled and not account.explicit_only]
         if self.runtime in OPT_IN_FAILOVER and self.failover == "off":
             return [self.primary_account()]
         accounts = [account for account in self.accounts if account.enabled and not account.explicit_only]
@@ -211,6 +219,8 @@ class RuntimeConfig:
     def pool_accounts(self) -> list[Account]:
         """Accounts that may run workers, pinned or not (doctor --live checks these)."""
 
+        if self.runtime in REMOTE_RUNTIMES:
+            return [account for account in self.accounts if account.enabled]
         if self.runtime in OPT_IN_FAILOVER:
             return [self.primary_account(), *(account for account in self.accounts if account.enabled)]
         accounts = [account for account in self.accounts if account.enabled]
@@ -221,12 +231,14 @@ class RuntimeConfig:
     def listed_accounts(self) -> list[Account]:
         """Configured accounts, including disabled and explicit-only accounts, plus the active primary."""
 
+        if self.runtime in REMOTE_RUNTIMES:
+            return list(self.accounts)
         show_primary = self.runtime in OPT_IN_FAILOVER or any(account.is_primary for account in self.worker_accounts())
         return ([self.primary_account()] if show_primary else []) + self.accounts
 
     def find(self, name: str) -> Account | None:
         if name == "primary":
-            return self.primary_account()
+            return None if self.runtime in REMOTE_RUNTIMES else self.primary_account()
         return next((account for account in self.accounts if account.name == name), None)
 
 
@@ -447,9 +459,10 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
         )
     opt_in = name in OPT_IN_FAILOVER
     # On by default everywhere; for Antigravity, "off" keeps unpinned jobs on the primary account.
-    failover = str(data.get("failover", "off" if name == "opencode" else "on-limit"))
+    failover = str(data.get("failover", "off" if name in ("opencode", *REMOTE_RUNTIMES) else "on-limit"))
     if failover not in FAILOVER_MODES:
         raise ValueError(f"[{name}] failover must be one of {FAILOVER_MODES}")
+    server, ssh_key = _remote_target(name, data)
     connectors = str(data.get("connectors", "account"))
     if connectors not in ("account", "off"):
         raise ValueError(f"[{name}] connectors must be 'account' or 'off'")
@@ -529,7 +542,29 @@ def _runtime_from(name: str, data: dict[str, Any]) -> RuntimeConfig:
         web_search=web_search,
         network_access=network_access,
         accounts=accounts,
+        server=server,
+        ssh_key=ssh_key,
     )
+
+
+def _remote_target(name: str, data: dict[str, Any]) -> tuple[str | None, str | None]:
+    """[remote] server and ssh_key, checked. Other runtimes may not set them."""
+
+    if name not in REMOTE_RUNTIMES:
+        if "server" in data or "ssh_key" in data:
+            raise ValueError(f"[{name}] server and ssh_key belong under [remote]")
+        return None, None
+    if data.get("failover", "off") != "off":
+        raise ValueError(f'[{name}] failover must be "off": a remote job and its follow-ups stay on one account')
+    if data.get("include_primary", False) is not False:
+        raise ValueError(f"[{name}] has no primary account; list the server accounts under [[{name}.accounts]]")
+    server = data.get("server")
+    if server is not None and (not isinstance(server, str) or not SERVER_RE.fullmatch(server.strip())):
+        raise ValueError(f'[{name}] server must be an ssh destination such as "me@ai-server" or a Host alias')
+    key = data.get("ssh_key")
+    if key is not None and (not isinstance(key, str) or not key.strip() or "\0" in key):
+        raise ValueError(f"[{name}] ssh_key must be the path of a private key file")
+    return (server.strip() if server else None), (str(Path(os.path.expandvars(key)).expanduser()) if key else None)
 
 
 def _sandbox_from(data: Any) -> SandboxSettings:
@@ -661,8 +696,9 @@ def dump_config(config: Config) -> str:
             "",
             f"[{name}]",
             f"primary = {_toml_value(str(runtime.primary))}",
-            f"include_primary = {_toml_value(runtime.include_primary)}",
-            f"failover = {_toml_value(runtime.failover)}",
+            f"include_primary = {_toml_value(runtime.include_primary and name not in REMOTE_RUNTIMES)}",
+            # A remote job never changes account, whatever was set in memory.
+            f"failover = {_toml_value('off' if name in REMOTE_RUNTIMES else runtime.failover)}",
             f"max_jobs_per_account = {runtime.max_jobs_per_account}",
             f"connectors = {_toml_value(runtime.connectors)}",
             f"edit_permission_mode = {_toml_value(runtime.edit_permission_mode)}",
@@ -672,6 +708,10 @@ def dump_config(config: Config) -> str:
         ]
         if runtime.binary:
             lines.append(f"binary = {_toml_value(runtime.binary)}")
+        if runtime.server:
+            lines.append(f"server = {_toml_value(runtime.server)}")
+        if runtime.ssh_key:
+            lines.append(f"ssh_key = {_toml_value(runtime.ssh_key)}")
         if not runtime.enabled:
             lines.append("enabled = false")
         if runtime.default_model:

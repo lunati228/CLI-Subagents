@@ -22,7 +22,7 @@ ACTIVE_STATES = ("queued", "starting", "running")
 LIMIT = "limit"
 STALE_RUNNER_SECONDS = 15
 IGNORE_JOBS_OLDER_THAN = 7 * 3600  # a job can run 6 hours at most
-NAMES = {"claude": "Claude", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode"}
+NAMES = {"claude": "Claude", "codex": "Codex", "antigravity": "Antigravity", "opencode": "OpenCode", "remote": "Remote Claude"}
 WAIT = "wait for one to finish"
 OVERRIDE_HINT = (
     "Only if the user explicitly asked for more parallel jobs, start again with override=<their words>; "
@@ -231,13 +231,16 @@ def room(config: Config, runtime_name: str, counts: Counts, *, pinned: str | Non
 
 
 def _available_runtime(runtime_name: str) -> bool:
-    """True if the runtime's CLI is installed (an alternative must be usable)."""
+    """True if the runtime's CLI is installed (an alternative must be usable). Remote also needs its server."""
 
     from cli_subagents.config import load_config
     from cli_subagents.runtimes import get_runtime
 
     try:
-        return bool(get_runtime(runtime_name).find_binary(load_config().runtime(runtime_name)))
+        runtime = load_config().runtime(runtime_name)
+        if runtime_name == "remote" and not (runtime.server and runtime.accounts):
+            return False
+        return bool(get_runtime(runtime_name).find_binary(runtime))
     except Exception:
         return False
 

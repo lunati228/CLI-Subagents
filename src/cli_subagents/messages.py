@@ -150,6 +150,27 @@ def take_for_hook(job_id: str) -> list[dict[str, Any]]:
     return [item for item in _take_unseen(job_id, "inbox.jsonl", "inbox-hooked.json") if item.get("id") not in read]
 
 
+def unread_follow_ups(job_id: str) -> list[dict[str, Any]]:
+    """Follow-ups (not answers) the worker hasn't read, oldest first. Marks nothing.
+
+    A remote worker's relay sends these into the running conversation and marks
+    each one read only when the server confirms it went in (`mark_read`).
+    Answers stay with ask_parent, which matches them to its question.
+    """
+
+    folder = channel_dir(job_id)
+    read = set(read_json(folder / "inbox-read.json", []) or [])
+    return [record for record in _read(folder / "inbox.jsonl")
+            if record.get("id") not in read and not record.get("reply_to")]
+
+
+def mark_read(job_id: str, ids: set[str]) -> None:
+    """The worker got these inbox entries: the runner's follow-up turn skips them."""
+
+    if ids:
+        _mark_seen(job_id, "inbox-read.json", set(ids))
+
+
 def wait_for_reply(job_id: str, question_id: str, timeout: float) -> dict[str, Any] | None:
     """The answer to one question. Marks only that answer read: other inbox entries
     stay for check_parent_messages, the inbox hook and the runner's follow-up turn."""

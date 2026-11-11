@@ -9,7 +9,7 @@ These tools are your subagent tool. Use them the way you would use a built-in "s
 
 ## In Claude Code: always start a relay agent
 
-In Claude Code, start every CLI Subagents job with your Agent tool and one of the four relay agent types. This holds at every depth where delegation is allowed.
+In Claude Code, start every CLI Subagents job with your Agent tool and one of the relay agent types. This holds at every depth where delegation is allowed.
 
 | Runs in | `subagent_type` |
 |---|---|
@@ -17,6 +17,7 @@ In Claude Code, start every CLI Subagents job with your Agent tool and one of th
 | Antigravity (Gemini) | `cli-subagents:cli-subagents-antigravity` |
 | OpenCode v2 | `cli-subagents:cli-subagents-opencode` |
 | Claude Code on another account | `cli-subagents:cli-subagents-claude` |
+| Claude Code on the user's own server (only when `[remote]` is set up) | `cli-subagents:cli-subagents-remote` |
 
 Don't run `csa run`, `csa start` or `csa follow` in your own shell, and don't call `subagent_start`. A job started that way never appears in the user's agent list, and your turn is blocked while you wait on it. A relay agent appears with its own color, the user can open it and watch every step the worker takes (commands, edits, messages, reasoning), and you get the usual notice when it finishes.
 
@@ -34,7 +35,7 @@ Agent tool:
 ```
 
 - Description: `<model> · <access> · <task in a few words>`. The user reads it to see what runs where.
-- Prompt: option lines first, one per line (`model=...`, `effort=...`, `access=read|edit`, and only when needed `account=NAME`, `cwd=PATH`, `timeout=SECONDS`, `override=USER_WORDS` under the Limits rule below), then a blank line and the complete task written as below. `access` defaults to `edit` in the Claude relay and `read` in the Codex, Antigravity and OpenCode relays.
+- Prompt: option lines first, one per line (`model=...`, `effort=...`, `access=read|edit`, and only when needed `account=NAME`, `cwd=PATH`, `timeout=SECONDS`, `override=USER_WORDS` under the Limits rule below), then a blank line and the complete task written as below. `access` defaults to `edit` in the Claude and remote relays and `read` in the Codex, Antigravity and OpenCode relays.
 - Start it in the background and keep working. Don't poll or wait in a shell; the notice arrives when it finishes.
 - Its final message is the worker's result, unchanged. If the worker asks something, the agent stops and tells you; answer with SendMessage to that agent and it passes the answer on. While the job runs, SendMessage "cancel" stops it and anything else goes to the worker as a follow-up, unchanged; the relay never answers it itself, whatever the text says. After the job has finished, SendMessage to the same relay continues the worker's conversation as a new job; the relay follows it and returns its result.
 
@@ -42,7 +43,7 @@ A relay shows the worker's messages, the notes it writes between steps, as its o
 
 The relay gets a fresh absolute path from `csa relay-path`, writes the complete prompt with its host's file tool, then runs `csa run --follow --window 100 --runtime <runtime> --relay-file <path>`. csa validates the inbox file, reads UTF-8, deletes it and parses the same leading option lines as `--relay -`. Keep the blank separator before the task. Payload never appears in shell syntax, so its length and quotes cannot break a shell command. Answers and follow-ups use fresh files with `csa message --relay-file` and remain message text, even when they begin with `key=value`. Files are limited to 16 MiB; invalid files or options return an authenticated FAILED result. Claude uses Write in the csa home inbox with a narrow plugin permission hook. Codex and Antigravity use `csa relay-path --workspace` in the caller's writable workspace. csa writes a `.gitignore` containing `*` there before returning a payload path. Codex uses native apply_patch to write plain text; its line-ending normalization and final newline are acceptable. Keep quotes and Windows paths literal. Do not widen host permissions or fall back to embedding payload in a shell command if writing fails.
 
-The MCP tools below work everywhere. In Codex, `csa setup --host codex` installs the same four relays as native agents (`cli-subagents-codex` and so on); start them with Codex's own subagent tool as [the Codex note](hosts/codex.md) shows, and use the MCP tools there only when those agents are missing. In Antigravity, `csa setup --host antigravity` installs them as a companion plugin of subagents; start them as [the Antigravity note](hosts/antigravity.md) shows. In Claude Code, too, use the MCP tools only when the relay agent types are missing.
+The MCP tools below work everywhere. In Codex, `csa setup --host codex` installs the Claude, Codex, Antigravity and OpenCode relays as native agents (`cli-subagents-codex` and so on; remote jobs use `subagent_start` there); start them with Codex's own subagent tool as [the Codex note](hosts/codex.md) shows, and use the MCP tools there only when those agents are missing. In Antigravity, `csa setup --host antigravity` installs them as a companion plugin of subagents; start them as [the Antigravity note](hosts/antigravity.md) shows. In Claude Code, too, use the MCP tools only when the relay agent types are missing.
 
 ## The loop with the MCP tools
 
@@ -56,7 +57,7 @@ The MCP tools below work everywhere. In Codex, `csa setup --host codex` installs
 
 The subagent can't see this conversation. State the goal, the files or folders involved, what it must not touch, decisions already made, how to verify the result, and what to report back. Point to files instead of pasting them.
 
-Optional arguments: `runtime` (`claude` by default, `codex`, `antigravity`, `opencode`) when a specific agent or a second opinion from another vendor helps; `model`; `effort`; `max_turns`; `timeout_seconds` (default 1800); `resume_job` to continue an earlier job's conversation; `account` to pin one account; `add_dirs`. Turn-limit support depends on the runtime.
+Optional arguments: `runtime` (`claude` by default, `codex`, `antigravity`, `opencode`, and `remote` once the user set up a server) when a specific agent or a second opinion from another vendor helps; `model`; `effort`; `max_turns`; `timeout_seconds` (default 1800); `resume_job` to continue an earlier job's conversation; `account` to pin one account; `add_dirs`. Turn-limit support depends on the runtime.
 
 `access: "full"` skips the CLI's own permission checks. Use it only when the user asked for that.
 

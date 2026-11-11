@@ -553,5 +553,78 @@ class RunToolTests(BridgeTestBase):
         self.assertIn("['BRIDGE_TEST_PLAIN']", text)
 
 
+FAKE_STDIO = Path(__file__).resolve().with_name("fake_stdio_mcp.py")
+
+
+class ReadOnlyAndProxyTests(unittest.TestCase):
+    """read_only=True and stdio servers proxied at /mcp/<name>."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="bridge-proxy-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / "a.txt").write_text("hello\n")
+        self.events = []
+        self.bridge = Bridge(self.tmp, TOKEN, read_only=True, audit=self.events.append,
+                             proxies={"echo": {"command": sys.executable, "args": [str(FAKE_STDIO)]}})
+        self.port = self.bridge.start()
+        self.addCleanup(self.bridge.stop)
+
+    def call(self, path, method, params=None, msg_id=7, **kw):
+        message = {"jsonrpc": "2.0", "id": msg_id, "method": method, **({"params": params} if params is not None else {})}
+        return _post(self.port, message, path=path, **kw)
+
+    def test_read_only_offers_and_runs_only_the_read_tools(self):
+        status, _, body = self.call("/mcp", "tools/list")
+        self.assertEqual(sorted(tool["name"] for tool in body["result"]["tools"]),
+                         ["pc_glob", "pc_grep", "pc_list", "pc_read"])
+        status, _, body = self.call("/mcp", "tools/call", {"name": "pc_write", "arguments": {"path": "b.txt", "content": "x"}})
+        self.assertIn("error", body)
+        self.assertFalse((self.tmp / "b.txt").exists())
+        status, _, body = self.call("/mcp", "tools/call", {"name": "pc_read", "arguments": {"path": "a.txt"}})
+        self.assertIn("hello", body["result"]["content"][0]["text"])
+        with self.assertRaises(ValueError):
+            Bridge(self.tmp, TOKEN, read_only=True, tools=("pc_read", "pc_run"))
+
+    def test_a_proxied_server_answers_with_the_clients_ids(self):
+        status, headers, body = self.call("/mcp/echo", "initialize", {"protocolVersion": "2025-06-18"}, msg_id="init-1")
+        self.assertEqual((status, body["id"]), (200, "init-1"))
+        self.assertTrue(headers.get("Mcp-Session-Id"))
+        self.assertEqual(_post(self.port, {"jsonrpc": "2.0", "method": "notifications/initialized"}, path="/mcp/echo")[0], 202)
+        status, _, body = self.call("/mcp/echo", "tools/list", msg_id=42)
+        self.assertEqual(body["id"], 42)
+        self.assertEqual([tool["name"] for tool in body["result"]["tools"]], ["echo", "slow", "needs_client"])
+        status, _, body = self.call("/mcp/echo", "tools/call", {"name": "echo", "arguments": {"text": "hi"}}, msg_id=43)
+        self.assertEqual(body["result"]["content"][0]["text"], "hi")
+        self.assertIn({"server": "echo", "tool": "echo", "allowed": True, "reason": "proxied"}, self.events)
+
+    def test_concurrent_calls_with_the_same_id_get_their_own_answers(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        def ask(seconds, text):
+            return self.call("/mcp/echo", "tools/call", {"name": "slow", "arguments": {"seconds": seconds, "text": text}},
+                             msg_id=1)[2]
+
+        with ThreadPoolExecutor(2) as pool:
+            slow = pool.submit(ask, 1.5, "slow one")
+            time.sleep(0.2)
+            quick = pool.submit(ask, 0, "quick one")
+            self.assertEqual(quick.result()["result"]["content"][0]["text"], "quick one")
+            self.assertEqual(slow.result()["result"]["content"][0]["text"], "slow one")
+
+    def test_a_request_from_the_server_to_the_client_is_answered_not_left_hanging(self):
+        status, _, body = self.call("/mcp/echo", "tools/call", {"name": "needs_client", "arguments": {}})
+        self.assertIn("-32601", body["result"]["content"][0]["text"])
+
+    def test_proxy_paths_keep_the_token_path_and_origin_checks(self):
+        self.assertEqual(self.call("/mcp/echo", "tools/list", token="wrong")[0], 401)
+        self.assertEqual(self.call("/mcp/echo", "tools/list", token=None)[0], 401)
+        self.assertEqual(self.call("/mcp/other", "tools/list")[0], 404)
+        self.assertEqual(self.call("/mcp/echo/x", "tools/list")[0], 404)
+        self.assertEqual(self.call("/mcp/echo", "tools/list", headers={"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(_post(self.port, b"", path="/mcp/echo", method="GET")[0], 405)
+        with self.assertRaises(ValueError):
+            Bridge(self.tmp, TOKEN, proxies={"pc": {"command": sys.executable}})
+
+
 if __name__ == "__main__":
     unittest.main()

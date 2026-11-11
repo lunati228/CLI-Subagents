@@ -13,6 +13,10 @@ files that usually hold secrets. pc_run refuses commands on a deny list.
 The command deny list is a guard against obvious mistakes, not a sandbox: a
 command that is allowed runs with the full rights of the user on this PC.
 
+`read_only=True` serves only pc_read, pc_list, pc_glob and pc_grep. `proxies`
+serves stdio MCP servers of this PC at /mcp/<name> (csa-parent for a csa
+worker), behind the same token and origin checks (remote/stdio_proxy.py).
+
 Standard library only.
 """
 
@@ -38,6 +42,9 @@ from typing import Any, Callable, Iterable, Iterator
 __all__ = ["Bridge", "PROTOCOL_VERSIONS", "TOOL_NAMES"]
 
 IS_WINDOWS = os.name == "nt"
+# The tools a read-only job gets (Bridge(read_only=True)).
+READ_ONLY_TOOLS = ("pc_read", "pc_list", "pc_glob", "pc_grep")
+_PROXY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
 
 # Newest first. The answer to initialize echoes the client's version when it
 # is in this list, otherwise it offers the newest.
@@ -513,23 +520,26 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
         self._send_json(status, {"error": error}, headers)
 
-    def _gate(self) -> bool:
+    def _gate(self) -> str | None:
         """Check token, path and origin. Sends the error response and returns
-        False when the request may not go on."""
+        None when the request may not go on; otherwise "" for the pc tools at
+        /mcp or the name of a proxied server at /mcp/<name>."""
         header = self.headers.get("Authorization", "")
         scheme, _, given = header.partition(" ")
         if scheme.lower() != "bearer" or not hmac.compare_digest(
                 given.strip().encode("utf-8"), self.bridge._token_bytes):
             self._reject(401, "unauthorized", [("WWW-Authenticate", "Bearer")])
-            return False
-        if self.path.split("?", 1)[0] != "/mcp":
+            return None
+        path = self.path.split("?", 1)[0]
+        target = path[len("/mcp/"):] if path.startswith("/mcp/") else None
+        if path != "/mcp" and target not in self.bridge._proxies:
             self._reject(404, "not found")
-            return False
+            return None
         origin = self.headers.get("Origin")
         if origin and not _LOCAL_ORIGIN_RE.match(origin):
             self._reject(403, "origin not allowed")
-            return False
-        return True
+            return None
+        return target or ""
 
     def _read_body(self) -> bytes | None:
         if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
@@ -560,21 +570,25 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return self.rfile.read(n)
 
     def do_POST(self) -> None:  # noqa: N802
-        if not self._gate():
+        target = self._gate()
+        if target is None:
             return
         body = self._read_body()
         if body is None:
             self.close_connection = True
             self._send_json(413, {"error": "missing, malformed or too large body"})
             return
-        status, payload, headers = self.bridge._handle_body(body)
+        if target:
+            status, payload, headers = self.bridge._handle_proxy_body(target, body)
+        else:
+            status, payload, headers = self.bridge._handle_body(body)
         if payload is None:
             self._send(status, b"", headers)
         else:
             self._send_json(status, payload, headers)
 
     def _not_allowed(self) -> None:
-        if not self._gate():
+        if self._gate() is None:
             return
         self._reject(405, "method not allowed", [("Allow", "POST")])
 
@@ -596,7 +610,12 @@ class Bridge:
     def __init__(self, root: str | Path, token: str, *, run_timeout_max: int = 1800,
                  output_cap: int = 100_000, extra_deny: Iterable[str] = (),
                  audit: Callable[[dict[str, Any]], None] | None = None,
-                 tools: Iterable[str] | None = None) -> None:
+                 tools: Iterable[str] | None = None, read_only: bool = False,
+                 proxies: dict[str, dict[str, Any]] | None = None) -> None:
+        if read_only:
+            if tools is not None and not set(tools) <= set(READ_ONLY_TOOLS):
+                raise ValueError("read_only allows only " + ", ".join(READ_ONLY_TOOLS))
+            tools = READ_ONLY_TOOLS if tools is None else tools
         real = os.path.realpath(os.fspath(root))
         if not os.path.isdir(real):
             raise ValueError("root must be an existing folder")
@@ -634,6 +653,14 @@ class Bridge:
             # A smaller tool set, e.g. read-only jobs or jobs without pc_run.
             self._handlers = {name: handler for name, handler in self._handlers.items() if name in wanted}
         self._schemas = {t["name"]: t["inputSchema"] for t in _TOOLS}
+        # Stdio MCP servers on this PC, served at /mcp/<name> behind the same token and origin checks.
+        from cli_subagents.remote.stdio_proxy import StdioProxy
+
+        self._proxies: dict[str, StdioProxy] = {}
+        for name, definition in (proxies or {}).items():
+            if not isinstance(name, str) or not _PROXY_NAME_RE.match(name) or name == "pc":
+                raise ValueError(f"proxied server name {name!r} must be a short name other than pc")
+            self._proxies[name] = StdioProxy(name, definition)
 
     # -- lifecycle --------------------------------------------------------
 
@@ -672,8 +699,36 @@ class Bridge:
         for proc in procs:
             if proc.poll() is None:
                 _kill_tree(proc)
+        for proxy in self._proxies.values():
+            proxy.close()
 
     # -- JSON-RPC ---------------------------------------------------------
+
+    def _handle_proxy_body(self, name: str, body: bytes) -> tuple[int, Any, list[tuple[str, str]]]:
+        """One POST to /mcp/<name>: each message goes to that stdio server, its replies come back."""
+        try:
+            msg = json.loads(body.decode("utf-8-sig"))
+        except (UnicodeDecodeError, ValueError):
+            return 400, _rpc_error(None, -32700, "Parse error"), []
+        items = msg if isinstance(msg, list) else [msg]
+        if not items:
+            return 400, _rpc_error(None, -32600, "Invalid Request"), []
+        replies, headers = [], []
+        for item in items:
+            if isinstance(item, dict) and item.get("method") == "tools/call" and self._audit is not None:
+                params = item.get("params") if isinstance(item.get("params"), dict) else {}
+                try:  # the tool name only: arguments may hold message text
+                    self._audit({"server": name, "tool": str(params.get("name")), "allowed": True, "reason": "proxied"})
+                except Exception:  # noqa: BLE001
+                    pass
+            reply = self._proxies[name].handle(item)
+            if isinstance(item, dict) and item.get("method") == "initialize":
+                headers.append(("Mcp-Session-Id", secrets.token_hex(16)))
+            if reply is not None:
+                replies.append(reply)
+        if not replies:
+            return 202, None, headers
+        return 200, (replies if isinstance(msg, list) else replies[0]), headers
 
     def _handle_body(self, body: bytes) -> tuple[int, Any, list[tuple[str, str]]]:
         try:

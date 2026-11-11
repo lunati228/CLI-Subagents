@@ -275,6 +275,51 @@ class ServerProtocolTest(unittest.TestCase):
         self.assertEqual(report["accounts"][0]["usage_percent"], 20)
         self.assertEqual(report["accounts"][0]["running"], 0)
 
+    def with_tier(self, **fields):
+        tier = server.Tier("standard", **fields)
+        self.config = server.Config(self.config.state_dir, self.config.claude, 7, self.config.accounts,
+                                    180, {"standard": tier}, {"alice": "standard"})
+
+    def test_a_tier_limits_the_models(self):
+        self.with_tier(models=("claude-haiku-5-5", "claude-sonnet-5-5"), default_model="claude-haiku-5-5")
+        code, lines = self.run_job(self.job(model="claude-opus-5-5"))
+        self.assertEqual(lines[-1]["code"], "model_not_allowed")
+        code, lines = self.run_job(self.job(job_id="52345678-1234-4234-8234-123456789abc"))
+        self.assertEqual(code, 0, lines)
+        argv = self.job_calls("alice-1")[-1]["argv"]
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-5-5")
+
+    def test_a_tier_caps_the_weekly_cost(self):
+        self.with_tier(weekly_cost_usd=5)
+        year, week, _ = __import__("datetime").date.today().isocalendar()
+        folder = server.user_dir(self.config, "alice")
+        (folder / "usage.jsonl").write_text(json.dumps({"week": f"{year}-W{week:02d}", "cost_usd": 5.5}) + "\n")
+        code, lines = self.run_job(self.job())
+        self.assertEqual(lines[-1]["code"], "cap_reached")
+
+    def test_a_tier_limits_jobs_at_once(self):
+        self.with_tier(max_jobs=1)
+        folder = server.user_dir(self.config, "alice")
+        marker = folder / "running" / "alice-1" / "other-job"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(str(os.getpid()))
+        code, lines = self.run_job(self.job(account="alice-1"))
+        self.assertEqual(lines[-1]["code"], "session_account_busy")
+
+    def test_tiers_are_read_from_the_config(self):
+        path = self.tmp / "tiers.toml"
+        home = json.dumps(str(self.config.accounts[0].home))
+        path.write_text(
+            "[server]\n[[account]]\nname = \"alice-1\"\nowner = \"alice\"\nhome = " + home + "\n"
+            "[tier.light]\nmodels = [\"claude-haiku-5-5\"]\nmax_jobs = 1\nweekly_cost_usd = 20\n"
+            "[users]\nalice = \"light\"\n", encoding="utf-8")
+        config = server.load_config(path)
+        tier = server.tier_for(config, "alice")
+        self.assertEqual((tier.models, tier.max_jobs, tier.weekly_cost_usd), (("claude-haiku-5-5",), 1, 20.0))
+        path.write_text(path.read_text(encoding="utf-8").replace('alice = "light"', 'alice = "missing"'), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            server.load_config(path)
+
     def test_csa_remote_serve_runs_the_server(self):
         import contextlib
         from unittest import mock

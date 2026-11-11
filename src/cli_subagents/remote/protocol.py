@@ -21,6 +21,8 @@ ERROR_CODES = (
     "account_not_owned",
     "session_account_busy",
     "claude_failed",
+    "model_not_allowed",
+    "cap_reached",
     "internal",
 )
 _JOB_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")

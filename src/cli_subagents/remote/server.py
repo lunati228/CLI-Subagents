@@ -35,7 +35,7 @@ import threading
 import time
 import tomllib
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 
@@ -90,12 +90,26 @@ class Account:
 
 
 @dataclass(frozen=True)
+class Tier:
+    """What one group of people may use: models, jobs at once, job length, weekly cost."""
+
+    name: str
+    models: tuple[str, ...] = ()  # empty: any model
+    default_model: str | None = None
+    max_jobs: int | None = None  # jobs at once across the person's accounts
+    max_job_minutes: int | None = None
+    weekly_cost_usd: float | None = None  # list-price cost per ISO week, from the usage log
+
+
+@dataclass(frozen=True)
 class Config:
     state_dir: Path
     claude: tuple[str, ...]
     transcript_days: int
     accounts: tuple[Account, ...]
     max_job_minutes: int = 180
+    tiers: dict = field(default_factory=dict)  # name -> Tier
+    users: dict = field(default_factory=dict)  # person -> tier name
 
 
 class ServerError(Exception):
@@ -135,7 +149,71 @@ def load_config(path: Path) -> Config:
     minutes = server.get("max_job_minutes", 180)
     if not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= 1440:
         raise ValueError("server.max_job_minutes must be 1 to 1440")
-    return Config(state_dir, claude_cmd, days, tuple(accounts), minutes)
+    tiers: dict[str, Tier] = {}
+    for tier_name, entry in (data.get("tier") or {}).items():
+        if not NAME.match(tier_name) or not isinstance(entry, dict):
+            raise ValueError(f"tier {tier_name!r} must be a [tier.<name>] table with a lowercase name")
+        models = entry.get("models") or []
+        if not isinstance(models, list) or not all(isinstance(m, str) and m for m in models):
+            raise ValueError(f"tier {tier_name}: models must be a list of model names")
+        default = entry.get("default_model")
+        if default is not None and (not isinstance(default, str) or (models and default not in models)):
+            raise ValueError(f"tier {tier_name}: default_model must be one of its models")
+        numbers = {}
+        for key, low, high in (("max_jobs", 1, 50), ("max_job_minutes", 1, 1440)):
+            value = entry.get(key)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high):
+                raise ValueError(f"tier {tier_name}: {key} must be {low} to {high}")
+            numbers[key] = value
+        cap = entry.get("weekly_cost_usd")
+        if cap is not None and (isinstance(cap, bool) or not isinstance(cap, (int, float)) or cap <= 0):
+            raise ValueError(f"tier {tier_name}: weekly_cost_usd must be a positive number")
+        tiers[tier_name] = Tier(tier_name, tuple(models), default, numbers["max_jobs"], numbers["max_job_minutes"],
+                                float(cap) if cap is not None else None)
+    users = data.get("users") or {}
+    if not isinstance(users, dict):
+        raise ValueError("[users] must map each person to a tier")
+    for person, tier_name in users.items():
+        if not NAME.match(person) or tier_name not in tiers:
+            raise ValueError(f"[users] {person!r} must name a defined tier")
+    return Config(state_dir, claude_cmd, days, tuple(accounts), minutes, tiers, dict(users))
+
+
+def tier_for(config: Config, user: str) -> Tier | None:
+    """The person's tier, or the tier named "default", or None (no extra limits)."""
+    name = config.users.get(user, "default")
+    return config.tiers.get(name)
+
+
+def week_cost(folder: Path) -> float:
+    """List-price cost of the person's jobs in the current ISO week, from their usage log."""
+    year, week, _ = datetime.date.today().isocalendar()
+    current = f"{year}-W{week:02d}"
+    total = 0.0
+    try:
+        lines = (folder / "usage.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0.0
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("week") == current:
+            total += float(entry.get("cost_usd") or 0.0)
+    return total
+
+
+def apply_tier(job: dict, tier: Tier | None, folder: Path) -> dict:
+    """Check the job against the person's tier and fill in its model; raise ServerError when refused."""
+    if tier is None:
+        return job
+    model = job.get("model") or tier.default_model or (tier.models[0] if tier.models else None)
+    if tier.models and model not in tier.models:
+        raise ServerError("model_not_allowed", f"model {model} is not allowed for you; allowed: {', '.join(tier.models)}")
+    if tier.weekly_cost_usd is not None and week_cost(folder) >= tier.weekly_cost_usd:
+        raise ServerError("cap_reached", f"you reached your weekly cap of ${tier.weekly_cost_usd:.0f}; it resets on Monday")
+    return {**job, "model": model}
 
 
 def user_dir(config: Config, user: str) -> Path:
@@ -672,9 +750,15 @@ def run_job(config: Config, user: str, stdin: IO[bytes], stdout: IO[bytes]) -> i
                 raise ServerError("bad_request", "this server doesn't know that conversation; start a new one")
             if known.get("account") != resume["account"] or job["account"] not in (None, resume["account"]):
                 raise ServerError("account_not_owned", "that conversation runs on another account and stays there")
+        tier = tier_for(config, user)
+        job = apply_tier(job, tier, folder)
         # Choosing the account and claiming its slot happen under one lock, so
         # two jobs started together can't both take the last slot.
         with FileLock(folder / "start.lock"):
+            if tier is not None and tier.max_jobs is not None:
+                running = sum(running_jobs(folder, a.name) for a in owned_accounts(config, user))
+                if running >= tier.max_jobs:
+                    raise ServerError("session_account_busy", f"you already run {running} job(s), your limit is {tier.max_jobs}")
             if resume:
                 account = resume_account(config, state, user, resume["account"])
             elif job["account"]:
@@ -781,10 +865,11 @@ def run_job(config: Config, user: str, stdin: IO[bytes], stdout: IO[bytes]) -> i
             kill_tree(proc)
 
     def watchdog() -> None:
-        deadline = time.monotonic() + config.max_job_minutes * 60
+        minutes = min(config.max_job_minutes, (tier.max_job_minutes if tier and tier.max_job_minutes else config.max_job_minutes))
+        deadline = time.monotonic() + minutes * 60
         while not finished.wait(1):
             if time.monotonic() > deadline:
-                out.send({"type": "warning", "text": f"stopped after {config.max_job_minutes} minutes"})
+                out.send({"type": "warning", "text": f"stopped after {minutes} minutes"})
                 kill_tree(proc)
                 return
             # Claude Code may answer two quick messages in one turn. When the

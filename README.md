@@ -148,6 +148,7 @@ Never read or copy credential files, and never edit files inside `~/.cli-subagen
 | Codex (`codex exec`) | Works | [Codex](docs/codex.md) |
 | Antigravity (`agy`, Gemini) | Works; extra accounts at your own risk | [Gemini](docs/gemini.md) |
 | OpenCode v2 (`opencode run`) | First version; fake-CLI tests, live verification pending | [OpenCode](docs/opencode.md) |
+| Claude Code on your own server (`remote`) | First version; tests with a fake ssh, live check on a real server pending | [Remote](docs/remote.md) |
 | Cursor, Gemini CLI, Copilot, others | Researched | [CLI comparison](docs/research/cli-permissions-and-headless.md) |
 
 Tested live on Windows with Claude Code 2.1.299, Codex 0.162.1 and Antigravity 1.4.0; the test suite also runs on macOS and Linux in CI.
@@ -206,6 +207,7 @@ docs/                   Guides, design and research
 | [Hosts](docs/hosts.md) | Install and use from Claude Code, Codex, Antigravity and other MCP clients |
 | [Claude Code](docs/claude-code.md) | Accounts, what is shared, switching, troubleshooting |
 | [Codex](docs/codex.md), [Gemini](docs/gemini.md) and [OpenCode](docs/opencode.md) | The other subagent CLIs |
+| [Remote](docs/remote.md) | Claude Code on your own server, in your own accounts there, with the job's tools on your PC |
 | [Configuration](docs/configuration.md) | `config.toml`, files, environment |
 | [Sandbox](docs/sandbox.md) | The Windows sandbox for workers: what it allows, setup, limits |
 | [Delegation rules](docs/delegation.md) | Optional model tiers, work folders and helper limits |

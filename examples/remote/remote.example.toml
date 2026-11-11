@@ -1,0 +1,35 @@
+# /etc/cli-subagents/remote.toml: the server side of csa's remote runtime (docs/remote.md).
+# Every person's server user must be able to read this file.
+[server]
+state_dir = "/var/lib/cli-subagents-remote"   # state_dir/users/<person>/ belongs to that person's user
+claude = "claude"
+# Transcripts on the server are deleted after this many days; the PC keeps its copy.
+transcript_days = 7
+# A job stops after this long.
+max_job_minutes = 180
+
+# One entry per Claude account. A job only runs on accounts whose owner is the
+# ssh user that sent it, and only in folders that user owns (mode 0700).
+# Each owner logs in to their own accounts:
+#   csa accounts login <account> --runtime remote    (runs ssh -t <server> login <account>)
+[[account]]
+name = "person-a-1"
+owner = "person-a"
+home = "/home/csa-person-a/accounts/person-a-1"
+
+[[account]]
+name = "person-a-2"
+owner = "person-a"
+home = "/home/csa-person-a/accounts/person-a-2"
+
+# Optional tiers: what a group of people may use. A person without an entry under
+# [users] gets the tier named "default" if there is one, else no extra limits.
+[tier.standard]
+models = ["claude-sonnet-5-5", "claude-haiku-5-5"]   # leave out for any model; csa must send these exact names
+default_model = "claude-sonnet-5-5"
+max_jobs = 2              # jobs at once across the person's accounts
+max_job_minutes = 120
+weekly_cost_usd = 300     # list-price cost per ISO week, from the usage log
+
+[users]
+person-a = "standard"

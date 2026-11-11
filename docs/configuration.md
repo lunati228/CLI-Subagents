@@ -128,6 +128,25 @@ home = "~/.cli-subagents/homes/antigravity/google-2"
 
 When every extra account is disabled or explicit-only, workers without an `account` run on the primary account. That is still useful from another host (for example Codex delegating to Claude Code), and with `include_primary = true` the primary account joins the pool.
 
+`[remote]` sets up accounts that live on your own server ([Remote](remote.md)):
+
+```toml
+[remote]
+server = "csa-alice@ai-server"   # ssh destination: user@host or a Host alias from ~/.ssh/config
+# ssh_key = "~/.ssh/ai_server_ed25519"   # passed to ssh as -i
+# primary = "~/.claude"          # the Claude setup that goes to the server (default: as for [claude])
+# binary = "C:/Windows/System32/OpenSSH/ssh.exe"   # only if ssh isn't found
+# default_model = "sonnet"
+
+[[remote.accounts]]
+name = "alice-max"               # the account's name on the server
+# plan = "max-5x"                # Claude plan presets apply, as do max_jobs, max_effort, models and explicit_only
+```
+
+A remote account has no folder on your PC, so it needs no `home`. `failover` is always `"off"` and there is no
+primary account: a job and its follow-ups stay on the account csa chose. Spend caps and the OpenRouter keys are for
+`[claude]` accounts only. `server` and `ssh_key` are only allowed under `[remote]`.
+
 `max_jobs_per_account` defaults to 1 (see Limits for per-account caps) because several Claude Code processes writing the same state file at once have corrupted it in the past. Raise it if you know your version handles it.
 
 ## Explicit-only accounts
@@ -373,6 +392,8 @@ the modes, required Claude Code version and command boundary.
 | `state/<runtime>-spend.json` | Durable per-attempt spend and running budget reservations; job retention does not remove this history |
 | `state/leases/` | Lock files for per-account job slots |
 | `cache/claude/<account>/` | Generated `settings.json` overlay and MCP config passed to workers |
+| `jobs/<job_id>/remote/` | Remote jobs: `job.json` for the relay, the setup bundle while it is sent, `pc-tools.jsonl` (every PC tool call) |
+| `state/remote/status.json` | The remote server's last `status` answer, kept for two minutes |
 
 Job records and generated files contain your prompts, results and MCP server settings. They stay on your machine and are created with owner-only permissions where the OS supports it.
 
@@ -385,5 +406,7 @@ Job records and generated files contain your prompts, results and MCP server set
 | `CLAUDE_CONFIG_DIR` | Default for `[claude] primary` when the config doesn't set it. A save by csa writes the primary in use at that time into the config |
 | `CODEX_HOME` | Default for `[codex] primary` when the config doesn't set it, with the same note |
 | `CLI_SUBAGENTS_SANDBOX_COMMAND` | For tests: a JSON list (`["python", "fake_wxc.py"]`) that stands in for `wxc-exec.exe` and counts as a supported system |
+| `CLI_SUBAGENTS_SSH_COMMAND` | For tests: a JSON list that stands in for `ssh` in the remote runtime (`tests/fake_ssh.py`) |
+| `CSA_REMOTE_CONFIG` | On the server: the config file `csa remote serve` reads instead of `/etc/cli-subagents/remote.toml` |
 
 Workers start from a cleaned environment. Variables that identify or authenticate the host session (`ANTHROPIC_*`, `CLAUDE*`, `CODEX_COMPANION_*` and similar) are removed, so a worker can only use its own account's login. Put environment settings you want workers to have into the `env` block of your primary `settings.json`; it is passed on, minus login-related keys.

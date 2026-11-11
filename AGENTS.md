@@ -14,7 +14,7 @@ csa setup --account <name>=<folder> ...
 csa doctor --runtime <runtime>   # repeat for each runtime set up
 ```
 
-Plain `csa doctor` checks Claude only. Run `csa doctor --runtime <runtime>` for each runtime set up (`claude`, `codex`, `antigravity`).
+Plain `csa doctor` checks Claude only. Run `csa doctor --runtime <runtime>` for each runtime set up (`claude`, `codex`, `antigravity`, `remote`).
 
 `csa setup` installs the plugin into every installed host (`--host claude|codex|antigravity` limits it), registers and syncs account folders that are already logged in, and prints a "Still needed from you" list. It is safe to run again. Use a `codex:` or `claude:` prefix on `--account` when the folder's runtime is ambiguous.
 
@@ -62,7 +62,8 @@ The tests use fake CLIs (`tests/fake_claude.py`, `fake_codex.py`, `fake_agy.py`,
 | `src/cli_subagents/accounts.py`, `config.py` | Account pool, cooldowns, `~/.cli-subagents/config.toml` |
 | `src/cli_subagents/sync.py`, `fsutil.py` | Linking the shared setup into account folders |
 | `src/cli_subagents/mcp_server.py`, `tools.py`, `messages.py`, `hooks.py` | MCP server, tools, parent messages, Claude Code hooks |
-| `src/cli_subagents/runtimes/` | Claude Code, Codex and Antigravity adapters |
+| `src/cli_subagents/runtimes/` | Claude Code, Codex, Antigravity, OpenCode and remote adapters |
+| `src/cli_subagents/remote/` | The remote runtime ([docs/remote.md](docs/remote.md)): wire format, PC bridge and stdio proxy, setup bundle, the server (`csa remote serve`) and the relay the runner starts. Tests use `tests/fake_ssh.py` and `tests/fake_remote_claude.py`, never a real ssh or server |
 | `src/cli_subagents/agy_review/` | The review gate for Antigravity workers (PreToolUse hook, fixed rules, reviewer, policy). Self-contained: no imports from the rest of the package |
 | `src/cli_subagents/sandbox/` | The MXC sandbox for workers on Windows: pinned release and probe (`mxc.py`), install for setup/update/doctor (`install.py`), policy generator (`policy.py`), neutral policy model (`model.py`), backend adapters (`backends/`), shared launcher (`launcher.py`), agent integrations (`integrations/`) and the in-container `taskkill` stand-in. Tests use `tests/fake_wxc.py`, never the real `wxc-exec.exe` |
 | `.claude-plugin/`, `plugin.json`, `mcp_config.json`, `hooks/`, `commands/`, `skills/` | Plugin files for Claude Code, Codex and Antigravity |

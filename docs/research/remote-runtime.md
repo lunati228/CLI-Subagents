@@ -64,4 +64,5 @@ Decisions and why:
   the bridge directly, without ssh; the tests here use a fake ssh.
 - PC-only MCP servers of the user (stdio servers with local paths) are left out of the bundle. The proxy can carry them
   under their own names later.
-- Live check with a real server and real accounts: pending, needs the user's go (it uses quota).
+- Live check with the real Claude Code through csa's whole path: passed on 2026-11-12
+  ([report](../evidence/remote-live-check.md)). A real server with real ssh is still to do.

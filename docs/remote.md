@@ -195,9 +195,11 @@ Server to PC:
 - Hooks, the status line and other settings that run commands on your PC are left out.
 - The server runs at most two jobs per account at once, and stops a job after `max_job_minutes`.
 - csa's spend caps are for local Claude accounts only.
-- Not yet checked against a real server: OpenSSH reporting the allocated port for `-R 127.0.0.1:0:...` under a forced
-  command. The tests use a fake ssh; the bridge and the server's Claude Code flags were checked with the real Claude
-  Code.
+- Checked live with the real Claude Code on 2026-11-12 ([report](evidence/remote-live-check.md)): csa's runner and
+  relay, the server module, PC tools, csa-parent through the proxy and a live follow-up. Claude Code answers a task
+  and a follow-up queued during it with one result, so such a job ends about 10 seconds after its last answer, when
+  the server's idle close ends the input. Not yet checked: OpenSSH reporting the allocated port for
+  `-R 127.0.0.1:0:...` under a forced command; the live check used the fake ssh.
 
 ## Files
 

@@ -23,10 +23,10 @@ Don't run `csa run`, `csa start` or `csa follow` in your own shell, and don't ca
 ```text
 Agent tool:
   subagent_type: cli-subagents:cli-subagents-codex
-  description: Sol 6.1 high · edit · fix the login test
+  description: Sol 6.2 high · edit · fix the login test
   run_in_background: true
   prompt: |
-    model=gpt-6.1-sol
+    model=gpt-6.2-sol
     effort=high
     access=edit
 

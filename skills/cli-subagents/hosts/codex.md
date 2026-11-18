@@ -22,7 +22,7 @@ task. For the default v1 tool schema, a Codex worker example is:
 ```json
 {
   "agent_type": "cli-subagents-codex",
-  "message": "model=gpt-6.1-sol\neffort=high\naccess=read\n\nReview the authentication module and report correctness risks with file references.",
+  "message": "model=gpt-6.2-sol\neffort=high\naccess=read\n\nReview the authentication module and report correctness risks with file references.",
   "fork_context": false
 }
 ```

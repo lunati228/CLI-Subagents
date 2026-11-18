@@ -105,8 +105,8 @@ If you're the agent, do this. No slash commands are needed.
    Ask whether the user wants it and which home and try-first models they want for each tier. If they agree, preview and install with their choices; otherwise skip it. For example:
 
    ```bash
-   csa rules --show --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 high"
-   csa rules --install --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 high"
+   csa rules --show --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 medium"
+   csa rules --install --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 medium"
    ```
 
    Use the user's models and the host they want. Ask for work folders if the user wants to list them with `--work-folder`. Nothing installs these rules without `--install`.

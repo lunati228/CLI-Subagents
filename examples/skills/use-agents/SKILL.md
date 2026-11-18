@@ -43,13 +43,13 @@ The table is an example. Order the pools so your paid quota goes last on work, a
 | Tier | Work | Personal projects |
 |---|---|---|
 | low | the cheap builder or a small model on `<your-second-codex-account>`; a fast search model after asking (section 9) | the fast search model (for example Gemini Flash), a small model on `<your-second-codex-account>`, or a free cheap builder |
-| medium | the cheap builder loop (section 6), then a strong model from another vendor (for example Sol 6.2 high), then the main vendor | the same as on work |
-| high | a feature to build: the cheap builder loop with a strong orchestrator (section 6). Everything else: your strongest model at high (for example Opus 5.5), or the other vendor's at xhigh (for example Sol 6.2) | the same as on work; the cheap builder loop only when the user asks for it |
-| xhigh | your strongest model at xhigh (for example Opus 5.5) | your strongest model at xhigh (for example Opus 5.5) |
+| medium | the cheap builder loop (section 6), then a strong model from another vendor (for example Sol 6.2 medium), then the main vendor | the same as on work |
+| high | a feature to build: the cheap builder loop with a strong orchestrator (section 6). Everything else: your strongest model at high (for example Opus 5.5), or the other vendor's at high if it is as strong (for example Sol 6.2) | the same as on work; the cheap builder loop only when the user asks for it |
+| xhigh | your strongest model at xhigh (for example Opus 5.5), or the other vendor's at xhigh if it is as strong (for example Sol 6.2) | the same as on work |
 | max | your top model, after asking (section 13) | your top model, after asking (section 13) |
 
 - On work, the cheap builder pool comes before the main vendor at medium and high so your main accounts keep their quota. Drop this rule if you have no cheap pool.
-- **The main vendor** at medium means its default model (for example Sonnet 5.5), or its strong model where the work needs more judgment. The other vendor's strong model at xhigh covers the harder end of medium.
+- **The main vendor** at medium means its default model (for example Sonnet 5.5), or its strong model where the work needs more judgment. The other vendor's strong model at high covers the harder end of medium.
 - **The weakest model** is only an emergency fallback when nothing else has room, apart from loop-building's ship gate if you use it there.
 - UI work and an explicit request for speed go to the main vendor whatever the table says (section 4).
 
@@ -60,7 +60,7 @@ The table is an example. Order the pools so your paid quota goes last on work, a
 - **Animation:** 2D pixel-art sprites and sprite animation for games, and coded animation (CSS, JavaScript, three.js): your top model if it's stronger there (for example Fable 5.2), section 13.
 - **Web research, Reddit, forums:** a CLI whose search reaches those sites, for example Codex or Antigravity, never the main vendor's own search (section 8).
 - **The user asked for speed:** the main vendor. Record the other vendor's speed here, for example: Codex measured at about 4x slower. A cheap builder loop also takes longer than one strong worker.
-- **Two strong models of about equal strength** (for example Opus 5.5 and Sol 6.2 xhigh): take whichever has more room, unless you prefer one for UI and for code review outside the loop. Write that preference here, as an example setting: "prefer Opus 5.5 for UI and for code review outside the loop".
+- **Two strong models of about equal strength** (for example Opus 5.5 and Sol 6.2 at the same effort): take whichever has more room, unless you prefer one for UI and for code review outside the loop. Write that preference here, as an example setting: "prefer Opus 5.5 for UI and for code review outside the loop".
 - **Context size:** free models in an OpenCode or Antigravity pool may have 200K, so give them short jobs. A paid model with 1M gets long build sessions, repo-wide read-only sweeps, big diffs and log analysis.
 - **Fast small models** such as Gemini Flash may often hallucinate: made-up sites, wrong research claims. Check the sources of any fact or link from one before relying on it.
 - **Reports are claims.** Before relying on a subagent's result, check the key facts it rests on yourself. That's reading, not another agent.
@@ -78,7 +78,7 @@ A review or investigation that needs to run tests or try things out shouldn't be
 | Main vendor, primary account | native `worker-*` agents | Reset weekly on `<your reset day and time>` |
 | Main vendor, second account | `cli-subagents:cli-subagents-claude` with `model=<the tier's model>`, `effort=<the tier's effort>`, `access=...` | A separate 5-hour and weekly limit. No desktop-app tools (browser pane, terminal panel) |
 | Cheap reviewer, API account | `cli-subagents:cli-subagents-claude` with `account=<your-api-account>`, `model=haiku` | Billed per token to your own key. Set your own caps, and read section 10 first |
-| Second vendor, strong model | `cli-subagents:cli-subagents-codex` with `model=gpt-6.2-sol`, `effort=high` or `xhigh` | `<your second vendor's account>`; for example Sol 6.2 |
+| Second vendor, strong model | `cli-subagents:cli-subagents-codex` with `model=gpt-6.2-sol`, `effort=medium`, `high` or `xhigh` | `<your second vendor's account>`; for example Sol 6.2 |
 | Second vendor, small model on a second account | `cli-subagents:cli-subagents-codex` with `account=<your-second-codex-account>`, `model=gpt-6-luna` | A second, free account of the same vendor, offering only the small model. A GPT model, so its search reaches Reddit and forums like the strong one's |
 | Fast search model | `cli-subagents:cli-subagents-antigravity` with `model=gemini-3.8-flash-high` | Fast and plentiful, see section 4; for example Gemini 3.8 Flash |
 | Cheap builder, free | `cli-subagents:cli-subagents-opencode` with `model=opencode/deepseek-v4.1-flash-free`, `effort=max` | 200K context. A small daily limit per IP address, shared by parallel jobs, reset at UTC midnight. Use only this free model. CLI Subagents' docs call free models personal-only: check the terms before using one for work |
@@ -91,7 +91,7 @@ A review or investigation that needs to run tests or try things out shouldn't be
 **Models in one line each (example notes, replace with yours):**
 - **Fable 5.2:** stronger than Opus and better at security work; used only on request (section 13).
 - **Opus 5.5** (1M context): the strongest model used without asking. Preferred for hard design, UI and code-review tasks.
-- **Sol 6.2** (`gpt-6.2-sol`, 500K): about 4x slower than the main vendor's models at the same tier. `high` is about Opus medium, `xhigh` about Opus high.
+- **Sol 6.2** (`gpt-6.2-sol`, 500K): about as strong as Opus 5.5 at the same effort, and about 4x slower than the main vendor's models.
 - **GPT-6 Luna** (`gpt-6-luna`): a small, fast GPT model with the same Reddit and forum reach as Sol. Quick lookups and low work.
 - **Sonnet 5.5:** near-Opus results on well-scoped work at a lower cost per task, at medium only.
 - **Haiku 5.5:** cheap and fast, the weakest model of the main vendor.
@@ -103,7 +103,7 @@ A review or investigation that needs to run tests or try things out shouldn't be
 When a cheap model builds or changes code, the work runs as described in the `loop-building` skill. Read that skill if, and only if, you will start and manage the loop's workers yourself.
 
 - The main session is the manager: it hands out features and doesn't run loops itself; its orchestrators do, and a child session can be one (section 12). A depth-2 agent can't orchestrate.
-- **High feature:** the orchestrator is a `worker-high` on your strongest model, or a strong model from another vendor at `xhigh` (for example Sol 6.2) to keep your own quota free.
+- **High feature:** the orchestrator is a `worker-high` on your strongest model, or a strong model from another vendor at `high` (for example Sol 6.2) to keep your own quota free.
 - **Medium feature:** the orchestrator is a cheap model in a runtime that can start helpers: Claude Code with a pay-per-token key (`cli-subagents:cli-subagents-claude` with `account=<your-cheap-model-account>`, `model=<provider/model>`, `effort=max`, `access=edit`), or a second account of that vendor. An OpenCode worker can't start helpers. Without such a pool, the manager starts the Builder and then the Reviewer itself, as `loop-building` describes. Don't make the main vendor's models a medium orchestrator just because they have room; only when the cheap pool and the second vendor have none.
 - Give one orchestrator one to three features: one if it is design-heavy or touches many parts of the app; two if they are related and don't edit the same files; three only if they are small and closely related. Related features share what the orchestrator learns about the code; unrelated ones only fill its context.
 - Start the orchestrator with the depth line `[depth 1 of 2: ...]` (section 11) and tell it to use `loop-building`. Tell the orchestrator to start its workers with `subagent_start`, not the Agent tool: inside a subagent an Agent call blocks until the worker reports.

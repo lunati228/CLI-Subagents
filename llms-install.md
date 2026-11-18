@@ -22,7 +22,7 @@ CLI Subagents is an MCP server with a plugin for Claude Code, Codex and Antigrav
    Ask whether the user wants it and which home and try-first models they want for each tier. If they agree, preview with `csa rules --show` and their values, then install. Otherwise skip it. For example:
 
    ```bash
-   csa rules --install --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 high"
+   csa rules --install --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 medium"
    ```
 
    Use their host and models. Add `--work-folder` for each work folder they want listed. Nothing installs these rules without `--install`.

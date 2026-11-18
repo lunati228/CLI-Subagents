@@ -58,7 +58,7 @@ Quote model text that contains spaces. It can include an effort level.
 For example:
 
 ```bash
-csa rules --show --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 high" --try-high "Sol 6.2 xhigh" --try-max none
+csa rules --show --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 medium" --try-high "Sol 6.2 high" --try-max none
 ```
 
 These model names are examples. Choose models available in your CLIs.
@@ -118,7 +118,7 @@ The command renders from its flags and defaults each time; it does not save mode
 Keep your install command if you want to reuse it after a package update.
 
 ```bash
-csa rules --install --target claude --home-high "Opus 5.5" --try-medium "Sol 6.2 high"
+csa rules --install --target claude --home-high "Opus 5.5" --try-medium "Sol 6.2 medium"
 csa rules --remove --target claude --dry-run
 csa rules --remove --target claude
 ```

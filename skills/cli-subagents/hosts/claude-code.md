@@ -14,6 +14,14 @@ The plugin's MCP tools appear as `mcp__plugin_cli-subagents_cli-subagents__subag
 
 The plugin's hooks also work without a wait. After `subagent_start`, a background hook wakes an idle session when the job finishes or asks a question. After a resume or compact, a hook lists finished jobs whose result nobody collected; read one with `subagent_result`. Each result is delivered once.
 
+## Stopping a job
+
+A relay agent and its worker are two processes. csa starts the worker detached, so it survives a restart of Claude Code. TaskStop, or Stop in the agent list, ends only the relay. The worker keeps running and spending the account's quota, and you lose the one agent that knows its job ID, because the relay's messages never reach you.
+
+To stop the work, SendMessage "cancel" to the relay. It runs `csa cancel` on its job and finishes with the output.
+
+If the relay is already gone, find the job in `subagent_list` by its runtime, `cwd` and start time. The list holds every session's jobs, so don't take the first running one. Then call `subagent_cancel` with that ID. In auto mode, Claude Code's safety check may refuse a cancel the user didn't clearly ask for, for example when they asked you to redo the work another way. Don't look for another route around the refusal: give the user the job ID and `csa cancel <ID>`, or ask them to confirm the cancel.
+
 ## Where the shared setup lives
 
 Subagents on the user's other Claude accounts get everything from the main config folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). When you or the user add something new, put it there and every account has it on the next run:

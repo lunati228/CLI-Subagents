@@ -19,7 +19,7 @@ optional `model=...`, `access=...`, `account=...`, `effort=...`, `cwd=...`,
 by the complete task. For example, send this prompt to `cli-subagents-codex`:
 
 ```text
-model=gpt-6.1-sol
+model=gpt-6.2-sol
 effort=high
 access=read
 

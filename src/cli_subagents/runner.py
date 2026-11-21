@@ -34,6 +34,9 @@ from cli_subagents.runtimes.base import (
 )
 
 QUEUE_TIMEOUT_SECONDS = 15 * 60
+# A continuation waits longer for a slot: giving up would push the caller towards a fresh job.
+# With the 6-hour maximum timeout this stays under limits.IGNORE_JOBS_OLDER_THAN.
+CONTINUATION_QUEUE_SECONDS = 45 * 60
 MAX_FOLLOW_UP_TURNS = 5
 STATUS_INTERVAL = 2.0
 EARLY_DRAIN_SECONDS = 3.0  # most we wait for already-written stdout to be parsed after an early stop
@@ -79,7 +82,8 @@ class Runner:
         self.runtime = get_runtime(self.spec.runtime)
         self.pool = quota.pool_for(self.runtime_config, self.spec.model)
         # The whole job, failovers and queueing included, ends by this time.
-        self.deadline = self.spec.created + self.spec.timeout_seconds + QUEUE_TIMEOUT_SECONDS
+        self.queue_seconds = CONTINUATION_QUEUE_SECONDS if self.spec.resume_session else QUEUE_TIMEOUT_SECONDS
+        self.deadline = self.spec.created + self.spec.timeout_seconds + self.queue_seconds
         self.attempts: list[dict[str, Any]] = []
         self.warnings: list[str] = []
         self._early: AttemptResult | None = None  # set when check_stderr stops a worker early
@@ -351,7 +355,7 @@ class Runner:
             return f"every {self.spec.runtime} account is at its usage limit; the earliest resets around {when}"
         if time.time() >= self.deadline:
             return "the job ran out of time before an account was free"
-        return f"no {self.spec.runtime} account was free within {QUEUE_TIMEOUT_SECONDS // 60} minutes"
+        return f"no {self.spec.runtime} account was free within {self.queue_seconds // 60} minutes"
 
     def _wait_for_account(self, excluded: set[str], prefer: str | None = None,
                           pinned: str | None = None) -> accounts.Lease | None:
@@ -387,7 +391,7 @@ class Runner:
             if not all_busy:
                 return None
             now = time.time()
-            if self.cancelled() or now - queued_since > QUEUE_TIMEOUT_SECONDS or now >= self.deadline:
+            if self.cancelled() or now - queued_since > self.queue_seconds or now >= self.deadline:
                 return None
             self.status(state="queued", message="waiting for a free account slot")
             time.sleep(3)
@@ -668,7 +672,15 @@ class Runner:
                 return None
             if time.monotonic() - last_status > STATUS_INTERVAL:
                 last_status = time.monotonic()
-                self.status(state="running", account=account.name, progress=parser.progress(), init=getattr(parser, "init", None))
+                fields: dict[str, Any] = {}
+                session = getattr(parser, "session_id", None)
+                if session and self.attempts and self.attempts[-1].get("session_id") != session:
+                    # Saved while the worker runs: a runner that dies with the machine still
+                    # leaves the conversation id behind, so the job can be continued.
+                    self.attempts[-1]["session_id"] = session
+                    fields["session_id"] = session
+                self.status(state="running", account=account.name, progress=parser.progress(),
+                            init=getattr(parser, "init", None), **fields)
             if self.cancelled():
                 kill_tree(process.pid)
                 return CANCELLED

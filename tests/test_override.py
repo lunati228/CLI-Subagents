@@ -304,12 +304,16 @@ class OverrideTests(TempHome):
         self.assertEqual(code, 0)
         self.assertIn(f'override="{WORDS}"', output.getvalue().splitlines()[0])
 
-    def test_finished_job_follow_up_does_not_inherit_override(self):
+    def test_finished_job_follow_up_passes_only_a_new_override(self):
+        # create_job itself carries the original override over (see test_always_resume);
+        # the message passes on only an override the follow-up gives.
         status = jobs.create_job(runtime="codex", prompt="x", cwd=str(self.project), override=WORDS, start=False)
         jobs.update_status(status["job_id"], state="done", session_id="s", account="primary")
         with patch.object(jobs, "create_job", return_value={"job_id": "continued"}) as create:
             tools.call("subagent_message", {"job_id": status["job_id"], "text": "continue"})
-        self.assertIsNone(create.call_args.kwargs.get("override"))
+            self.assertIsNone(create.call_args.kwargs.get("override"))
+            tools.call("subagent_message", {"job_id": status["job_id"], "text": "continue", "override": "more words"})
+            self.assertEqual(create.call_args.kwargs.get("override"), "more words")
 
     def test_schema_and_all_relays_document_user_authorization(self):
         schema = next(item for item in tools.DEFINITIONS if item["name"] == "subagent_start")["inputSchema"]

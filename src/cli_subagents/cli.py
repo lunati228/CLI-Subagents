@@ -476,7 +476,14 @@ def _message(args: argparse.Namespace) -> int:
         if args.text is None:
             raise ValueError("message text or --relay-file is required")
         text = _read_stdin() if args.text == "-" else args.text
-    result = tools.call("subagent_message", {"job_id": args.job_id, "text": text, "reply_to": args.reply_to})
+    override = args.override
+    if args.relay_file is not None and args.reply_to is None:
+        found, text = _message_override(text)
+        override = override or found
+    arguments = {"job_id": args.job_id, "text": text, "reply_to": args.reply_to}
+    if override:
+        arguments["override"] = override
+    result = tools.call("subagent_message", arguments)
     if args.follow:
         from cli_subagents.follow import follow
 
@@ -487,6 +494,20 @@ def _message(args: argparse.Namespace) -> int:
         return follow(job_id, start, args.max_wait, window=args.window, marker=_relay_marker(args))
     _print(result)
     return 0
+
+
+_MESSAGE_OVERRIDE = re.compile(r"override=([^\r\n]*)\r?\n(?:\r?\n)?")
+
+
+def _message_override(text: str) -> tuple[str | None, str]:
+    """A follow-up file may begin with one `override=USER_WORDS` line (then a blank line), for a
+    continuation the user authorized beyond the caps. Everything else stays message text."""
+
+    match = _MESSAGE_OVERRIDE.match(text)
+    if not match or not match[1].strip() or any(ord(char) < 32 or ord(char) == 127 for char in match[1]):
+        return None, text
+    rest = text[match.end():]
+    return (match[1], rest) if rest.strip() else (None, text)
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -662,6 +683,11 @@ def build_parser() -> argparse.ArgumentParser:
     message.add_argument("text", nargs="?", help="The message. Use '-' to read it from stdin.")
     message.add_argument("--relay-file", metavar="PATH", help="Consume and delete a UTF-8 csa inbox message file.")
     message.add_argument("--reply-to")
+    message.add_argument(
+        "--override", metavar="USER_WORDS",
+        help="Only when the message continues a stopped job: the user's own words authorizing it beyond csa's "
+        "caps (replaces the original job's override). Never on your own judgment.",
+    )
     message.add_argument("--follow", action="store_true",
                          help="Follow the running job or its new continuation, with an authenticated header and status.")
     message.add_argument("--from", dest="from_offset", type=int, metavar="OFFSET",

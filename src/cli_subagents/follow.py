@@ -1071,8 +1071,17 @@ class Follower:
                 # the last messages of a fast or ending job come first; the next call reports the end.
                 return self.still_running()
         jobs.claim_delivery(self.job_id)  # the forwarder hands the result on: no wake-up or pending notice
+        hint = None
+        if outcome != SUCCESS:
+            from cli_subagents.tools import resume_hint
+
+            # A stopped job is continued, never redone: the caller reads this with the result.
+            hint = resume_hint({**status, "job_id": self.job_id})
         self.emit(RESULT_RULE)
-        self.emit_worker(text)
+        if text or not hint:
+            self.emit_worker(text)
+        if hint:
+            self.emit_worker(("\n" if text.strip() else "") + "Note from CLI Subagents: " + hint)
         self.emit(RESULT_END_RULE)
         if outcome == SUCCESS:
             account = status.get("account") or self.announced or "-"

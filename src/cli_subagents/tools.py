@@ -208,6 +208,8 @@ def summarize(status: dict[str, Any]) -> dict[str, Any]:
         "cwd", "progress", "cost_usd", "cost_note", "warnings", "override", "continues",
     )
     summary = {key: status.get(key) for key in keys if status.get(key) not in (None, [], {})}
+    if hint := resume_hint(status):
+        summary["resume"] = hint
     notes = [*(status.get("warnings") or []), *(status.get("limit_notes") or [])]
     if notes:
         summary["warnings"] = notes

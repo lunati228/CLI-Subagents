@@ -40,7 +40,11 @@ that same relay with native `send_input`, including after it finishes. With v2,
 use `followup_task` to resume an idle relay; `send_message` alone does not start
 an idle agent's next turn. The relay retains the csa job and event offset and
 runs `csa message JOB --follow --from OFFSET --relay-file PATH`. A finished job continues its
-worker conversation, and the relay validates any new job ID. Send `cancel` or
+worker conversation, and the relay validates any new job ID. A stopped job (usage limit, cancel, error, or
+`lost` after a PC restart) is continued the same way; never start a new job for
+the same work. If the relay is gone, spawn a new relay of the same type whose message
+begins with `resume=JOB`, then a blank line and the follow-up (`csa jobs --resumable`
+lists the job ids). Send `cancel` or
 `stop` to cancel its worker before closing the native agent. Keep the native
 thread open while follow-ups are needed.
 

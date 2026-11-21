@@ -52,7 +52,11 @@ to resume the worker, even after DONE or FAILED. Send `cancel` or `stop` to
 that agent to cancel its csa job. Native Stop alone may leave the separate csa
 worker running. If the relay is unavailable or reports a framing or shell
 error, report that and use the MCP tools if appropriate; do not silently start
-a duplicate worker while the original job is still running.
+a duplicate worker while the original job is still running. A stopped job
+(usage limit, cancel, error, or `lost` after a PC restart) is continued, never
+started again: if its relay is gone, start a new relay of the same type whose
+message begins with `resume=JOB`, then a blank line and the follow-up
+(`csa jobs --resumable` lists the job ids).
 
 ## MCP tools
 

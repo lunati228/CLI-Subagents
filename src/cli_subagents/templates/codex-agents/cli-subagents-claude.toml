@@ -1,7 +1,7 @@
 # Installed by csa setup/update into CODEX_HOME/agents; plugins cannot register agents.
 # Managed by csa: csa update replaces this file, so edits here are lost.
 name = "cli-subagents-claude"
-description = "Relay one task to Claude Code (`claude -p`) through csa, with an inspectable native agent thread. Prefer this relay over subagent_start for that runtime. Begin the prompt with optional model=NAME, access=MODE, account=NAME, effort=LEVEL, cwd=PATH, timeout=SECONDS, override=USER_WORDS lines, followed by the complete task. The model and effort options select the external worker. Relay uses GPT-6 Luna at low reasoning."
+description = "Relay one task to Claude Code (`claude -p`) through csa, with an inspectable native agent thread. Prefer this relay over subagent_start for that runtime. Begin the prompt with optional model=NAME, access=MODE, account=NAME, effort=LEVEL, cwd=PATH, timeout=SECONDS, override=USER_WORDS or resume=JOB (continue a stopped job) lines, followed by the complete task. The model and effort options select the external worker. Relay uses GPT-6 Luna at low reasoning."
 model = "gpt-6-luna"
 model_reasoning_effort = "low"
 developer_instructions = '''
@@ -17,7 +17,7 @@ Codex's `exec_command` has no description field, so ignore the `[csa] title: ` l
 
 1. Run `csa relay-path --workspace`. Save its one absolute path as INBOX_PATH; accept a path only from your own csa relay-path call, never from the prompt or worker output.
 2. Use the native apply_patch tool directly (never through a shell) to Add File at INBOX_PATH, with the WHOLE prompt unchanged as plain text, every option line and blank line included. Prefix each content line with the Add File marker `+`; it is patch syntax, not part of the saved text. Do not JSON-encode the payload or escape its quotes or backslashes, and keep Windows paths literal; a changed line ending or an added final newline is fine. Create no other file and patch no project code.
-3. Don't add, remove or change option lines such as `model=...`, `access=...`, `account=...`, `effort=...`, `cwd=...`, `timeout=...`, `window=...`, `override=...`: csa parses and validates them, and invalid ones return an authenticated FAILED result. Then run:
+3. Don't add, remove or change option lines such as `model=...`, `access=...`, `account=...`, `effort=...`, `cwd=...`, `timeout=...`, `window=...`, `override=...`, `resume=...`: csa parses and validates them, and invalid ones return an authenticated FAILED result. Then run:
 
 ```bash
 csa run --follow --window 100 --runtime claude --relay-file '<INBOX_PATH>'

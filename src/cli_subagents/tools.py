@@ -138,8 +138,15 @@ DEFINITIONS = [
     },
     {
         "name": "subagent_list",
-        "description": "Recent jobs, newest first.",
-        "inputSchema": _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}}, []),
+        "description": (
+            "Recent jobs, newest first, with their task, whether each can be continued (resumable), and the "
+            "continuation chain (continues, continued_by). To pick up a stopped job, continue the newest job of its "
+            "chain with subagent_message. resumable_only lists only stopped jobs nobody continued yet."
+        ),
+        "inputSchema": _schema({
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            "resumable_only": {"type": "boolean", "default": False},
+        }, []),
     },
     {
         "name": "subagent_accounts",
@@ -198,7 +205,7 @@ def summarize(status: dict[str, Any]) -> dict[str, Any]:
 
     keys = (
         "job_id", "runtime", "state", "outcome", "message", "account", "session_id",
-        "cwd", "progress", "cost_usd", "cost_note", "warnings", "override",
+        "cwd", "progress", "cost_usd", "cost_note", "warnings", "override", "continues",
     )
     summary = {key: status.get(key) for key in keys if status.get(key) not in (None, [], {})}
     notes = [*(status.get("warnings") or []), *(status.get("limit_notes") or [])]
@@ -366,7 +373,8 @@ def _call(name: str, arguments: dict[str, Any], progress=None, client: str | Non
     if name == "subagent_cancel":
         return summarize(jobs.cancel(_job_id(arguments)))
     if name == "subagent_list":
-        return {"jobs": jobs.list_jobs(int(arguments.get("limit") or 20))}
+        return {"jobs": jobs.list_jobs(int(arguments.get("limit") or 20),
+                                       resumable_only=bool(arguments.get("resumable_only")))}
     if name == "subagent_accounts":
         selected = arguments.get("runtime")
         reports = {"runtimes": [account_report(runtime) for runtime in offered_runtimes() if not selected or runtime == selected]}

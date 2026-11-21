@@ -41,7 +41,7 @@ from cli_subagents.fsutil import (
 )
 from cli_subagents.hosts import detect_host, host_context
 from cli_subagents.runtimes import get_runtime
-from cli_subagents.runtimes.base import ACCESS_LEVELS, CANCELLED, ERROR, LOST, JobSpec
+from cli_subagents.runtimes.base import ACCESS_LEVELS, CANCELLED, ERROR, LOST, SUCCESS, JobSpec
 
 ACTIVE_STATES = ("queued", "starting", "running")
 JOB_ID_CHARS = set("0123456789abcdefghijklmnopqrstuvwxyz-")
@@ -204,6 +204,7 @@ def _create_job(
         "job_id": spec.job_id,
         "runtime": runtime,
         "override": override,
+        "continues": resume_job or None,
         "state": "queued",
         "outcome": None,
         "cwd": spec.cwd,
@@ -466,20 +467,43 @@ def cancel(job_id: str) -> dict[str, Any]:
     return update_status(job_id, state="done", outcome=CANCELLED, message="cancelled", finished_at=time.time())
 
 
-def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
+def list_jobs(limit: int = 20, *, resumable_only: bool = False) -> list[dict[str, Any]]:
+    """Recent jobs, newest first, with what a caller needs to continue one.
+
+    `continues` names the job a continuation resumed and `continued_by` the newest job that
+    resumed this one, so the job to continue is the last one of its chain. With
+    `resumable_only`, only stopped jobs (any outcome but success) that have a conversation
+    to continue and that no later job continued.
+    """
+
     folder = jobs_dir()
     if not folder.is_dir():
         return []
-    ids = sorted((path.name for path in folder.iterdir() if path.is_dir()), reverse=True)[:limit]
+    every = sorted((path.name for path in folder.iterdir() if path.is_dir()), reverse=True)
+    continued_by: dict[str, str] = {}
+    for job_id in reversed(every):  # oldest first, so the newest continuation wins
+        status = read_json(folder / job_id / "status.json", {}) or {}
+        if isinstance(status, dict) and status.get("continues"):
+            continued_by[str(status["continues"])] = job_id
     jobs = []
-    for job_id in ids:
+    for job_id in every:
+        if len(jobs) >= limit:
+            break
         try:
             status = read_status(job_id)
+            point = None if status.get("state") in ACTIVE_STATES else resume_point(job_id)
         except ValueError:
             continue
-        jobs.append(
-            {key: status.get(key) for key in ("job_id", "runtime", "state", "outcome", "account", "created_at", "cwd", "override")}
-        )
+        entry = {key: status.get(key) for key in
+                 ("job_id", "runtime", "state", "outcome", "account", "created_at", "cwd", "override", "continues")}
+        spec = read_json(folder / job_id / "spec.json", {}) or {}
+        entry["model"] = spec.get("model")
+        entry["task"] = " ".join(str(spec.get("prompt") or "").split())[:100]
+        entry["resumable"] = point is not None
+        entry["continued_by"] = continued_by.get(job_id)
+        if resumable_only and (not point or status.get("outcome") == SUCCESS or entry["continued_by"]):
+            continue
+        jobs.append(entry)
     return jobs
 
 

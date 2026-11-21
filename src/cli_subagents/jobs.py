@@ -15,6 +15,7 @@ One folder per job under `~/.cli-subagents/jobs/<job_id>/`:
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import secrets
@@ -40,7 +41,7 @@ from cli_subagents.fsutil import (
 )
 from cli_subagents.hosts import detect_host, host_context
 from cli_subagents.runtimes import get_runtime
-from cli_subagents.runtimes.base import ACCESS_LEVELS, CANCELLED, ERROR, LOST, JobSpec
+from cli_subagents.runtimes.base import ACCESS_LEVELS, CANCELLED, ERROR, LOST, SUCCESS, JobSpec
 
 ACTIVE_STATES = ("queued", "starting", "running")
 JOB_ID_CHARS = set("0123456789abcdefghijklmnopqrstuvwxyz-")
@@ -134,12 +135,23 @@ def _create_job(
                 raise ValueError(
                     f"job {resume_job} is still running; wait for it to finish, or send it a follow-up with subagent_message"
                 )
-        resume_session = closed.get("session_id") or previous.get("session_id")
-        if not resume_session:
-            raise ValueError(f"job {resume_job} has no session to continue")
         if previous.get("runtime") != runtime:
             raise ValueError("resume_job belongs to a different runtime")
-        resume_account = closed.get("account") or previous.get("account")
+        point = resume_point(resume_job)
+        if point is None:
+            if _never_ran(previous):
+                raise ValueError(
+                    f"job {resume_job} never started its worker, so there is no conversation to continue. "
+                    "Start the same task again as a new job: nothing ran, so nothing is redone."
+                )
+            raise ValueError(
+                f"job {resume_job} has no session to continue: its worker stopped before it reported one. "
+                "Start the task again as a new job."
+            )
+        resume_session, resume_account = point
+        if override is None:
+            # The user authorized this work when it started; continuing it is the same work.
+            override = (read_json(job_dir(resume_job) / "spec.json", {}) or {}).get("override") or None
         resume_config = runtime_config.find(resume_account) if resume_account else None
         if resume_config and resume_config.explicit_only and account != resume_account:
             # Continuing a conversation that was started by naming this account names it again.
@@ -152,7 +164,13 @@ def _create_job(
             # The session lives in one account's folder and can't be moved: stay there.
             account = resume_account or account
 
-    admission = limits.admit(config, runtime, account=account, model=model, effort=effort, override=override) if start else None
+    try:
+        admission = limits.admit(config, runtime, account=account, model=model, effort=effort, override=override,
+                                 continuation=resume_job) if start else None
+    except limits.LimitError as exc:
+        if not resume_job:
+            raise
+        raise limits.LimitError(limits.continuation_refusal(str(exc), resume_job)) from None
     if admission is not None:
         effort = admission.effort
 
@@ -186,6 +204,7 @@ def _create_job(
         "job_id": spec.job_id,
         "runtime": runtime,
         "override": override,
+        "continues": resume_job or None,
         "state": "queued",
         "outcome": None,
         "cwd": spec.cwd,
@@ -224,6 +243,66 @@ def _runner_env() -> dict[str, str]:
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = package_root + (os.pathsep + existing if existing else "")
     return env
+
+
+def resume_point(job_id: str) -> tuple[str, str | None] | None:
+    """The worker conversation a finished or lost job left behind: (session id, account folder).
+
+    Looked up in order: the runner's final record (inbox-closed.json), the status, the
+    event log (a runner that died before it saved the id, e.g. the PC was switched off),
+    and, for a continuation that never ran, the conversation it was meant to continue.
+    None when the job never had a conversation.
+    """
+
+    folder = job_dir(job_id)
+    status = read_json(folder / "status.json", {}) or {}
+    closed = read_json(folder / "inbox-closed.json", {}) or {}
+    attempts = [item for item in status.get("attempts") or [] if isinstance(item, dict)]
+    last_account = next((item.get("account") for item in reversed(attempts) if item.get("account")), None)
+    account = closed.get("account") or status.get("account") or last_account
+    session = closed.get("session_id") or status.get("session_id")
+    if not session:
+        for item in reversed(attempts):
+            if item.get("session_id"):
+                session, account = item["session_id"], item.get("account") or account
+                break
+    if not session:
+        session = _session_from_events(folder, str(status.get("runtime") or ""))
+    if not session:
+        spec = read_json(folder / "spec.json", {}) or {}
+        if spec.get("resume_session"):
+            return str(spec["resume_session"]), spec.get("resume_account") or account
+        return None
+    return str(session), account
+
+
+def _session_from_events(folder: Path, runtime: str) -> str | None:
+    """The session id the worker announced in its event log, read with the runtime's own parser."""
+
+    path = folder / "events.jsonl"
+    if not path.exists() or not runtime:
+        return None
+    try:
+        parser = get_runtime(runtime).new_parser()
+        with path.open("rb") as handle:
+            for raw in handle:
+                try:
+                    event = json.loads(raw.decode("utf-8", errors="replace"))
+                    if isinstance(event, dict):
+                        parser.feed(event)
+                except Exception:
+                    continue  # one malformed line must not hide the rest
+    except Exception:
+        return None
+    session = getattr(parser, "session_id", None)
+    return str(session) if session else None
+
+
+def _never_ran(status: dict[str, Any]) -> bool:
+    """No attempt ever started a worker process (queued, cancelled or refused before it ran)."""
+
+    attempts = [item for item in status.get("attempts") or [] if isinstance(item, dict)]
+    return all(item.get("before_start", True) for item in attempts)
 
 
 def read_spec(job_id: str) -> JobSpec:
@@ -388,20 +467,43 @@ def cancel(job_id: str) -> dict[str, Any]:
     return update_status(job_id, state="done", outcome=CANCELLED, message="cancelled", finished_at=time.time())
 
 
-def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
+def list_jobs(limit: int = 20, *, resumable_only: bool = False) -> list[dict[str, Any]]:
+    """Recent jobs, newest first, with what a caller needs to continue one.
+
+    `continues` names the job a continuation resumed and `continued_by` the newest job that
+    resumed this one, so the job to continue is the last one of its chain. With
+    `resumable_only`, only stopped jobs (any outcome but success) that have a conversation
+    to continue and that no later job continued.
+    """
+
     folder = jobs_dir()
     if not folder.is_dir():
         return []
-    ids = sorted((path.name for path in folder.iterdir() if path.is_dir()), reverse=True)[:limit]
+    every = sorted((path.name for path in folder.iterdir() if path.is_dir()), reverse=True)
+    continued_by: dict[str, str] = {}
+    for job_id in reversed(every):  # oldest first, so the newest continuation wins
+        status = read_json(folder / job_id / "status.json", {}) or {}
+        if isinstance(status, dict) and status.get("continues"):
+            continued_by[str(status["continues"])] = job_id
     jobs = []
-    for job_id in ids:
+    for job_id in every:
+        if len(jobs) >= limit:
+            break
         try:
             status = read_status(job_id)
+            point = None if status.get("state") in ACTIVE_STATES else resume_point(job_id)
         except ValueError:
             continue
-        jobs.append(
-            {key: status.get(key) for key in ("job_id", "runtime", "state", "outcome", "account", "created_at", "cwd", "override")}
-        )
+        entry = {key: status.get(key) for key in
+                 ("job_id", "runtime", "state", "outcome", "account", "created_at", "cwd", "override", "continues")}
+        spec = read_json(folder / job_id / "spec.json", {}) or {}
+        entry["model"] = spec.get("model")
+        entry["task"] = " ".join(str(spec.get("prompt") or "").split())[:100]
+        entry["resumable"] = point is not None
+        entry["continued_by"] = continued_by.get(job_id)
+        if resumable_only and (not point or status.get("outcome") == SUCCESS or entry["continued_by"]):
+            continue
+        jobs.append(entry)
     return jobs
 
 

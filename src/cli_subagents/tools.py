@@ -98,14 +98,22 @@ DEFINITIONS = [
         "name": "subagent_message",
         "description": (
             "Send a message to a subagent. While it runs: a follow-up or an answer to its question "
-            "(set reply_to to the question's id). After it finished: continues the same conversation as a "
-            "new job and returns that job."
+            "(set reply_to to the question's id). After it stopped for any reason (finished, usage limit, cancel, "
+            "timeout, error, or lost when the PC or its runner died): continues the same worker conversation as a "
+            "new job and returns that job. Always continue a stopped job this way; never start a new job for the "
+            "same work. A continuation keeps the original job's override and waits for a free slot when a cap is full."
         ),
         "inputSchema": _schema(
             {
                 "job_id": JOB_ID,
                 "text": {"type": "string"},
                 "reply_to": {"type": "string", "description": "Id of the question you are answering."},
+                "override": {
+                    "type": "string", "minLength": 1, "pattern": "\\S",
+                    "description": "Only when continuing a stopped job: the user's own words authorizing it beyond "
+                    "csa's caps, replacing the original job's override. Same rules as on subagent_start; "
+                    "never on your own judgment.",
+                },
             },
             ["job_id", "text"],
         ),
@@ -130,8 +138,15 @@ DEFINITIONS = [
     },
     {
         "name": "subagent_list",
-        "description": "Recent jobs, newest first.",
-        "inputSchema": _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}}, []),
+        "description": (
+            "Recent jobs, newest first, with their task, whether each can be continued (resumable), and the "
+            "continuation chain (continues, continued_by). To pick up a stopped job, continue the newest job of its "
+            "chain with subagent_message. resumable_only lists only stopped jobs nobody continued yet."
+        ),
+        "inputSchema": _schema({
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            "resumable_only": {"type": "boolean", "default": False},
+        }, []),
     },
     {
         "name": "subagent_accounts",
@@ -190,9 +205,11 @@ def summarize(status: dict[str, Any]) -> dict[str, Any]:
 
     keys = (
         "job_id", "runtime", "state", "outcome", "message", "account", "session_id",
-        "cwd", "progress", "cost_usd", "cost_note", "warnings", "override",
+        "cwd", "progress", "cost_usd", "cost_note", "warnings", "override", "continues",
     )
     summary = {key: status.get(key) for key in keys if status.get(key) not in (None, [], {})}
+    if hint := resume_hint(status):
+        summary["resume"] = hint
     notes = [*(status.get("warnings") or []), *(status.get("limit_notes") or [])]
     if notes:
         summary["warnings"] = notes
@@ -322,21 +339,10 @@ def _call(name: str, arguments: dict[str, Any], progress=None, client: str | Non
         timeout = min(limit, max(1, int(arguments.get("timeout_seconds") or 1800)))
         return wait_any(list(job_ids), timeout, progress)
     if name == "subagent_message":
-        job_id = _job_id(arguments)
-        status = jobs.read_status(job_id)
-        text = str(arguments.get("text") or "")
-        if status.get("state") in jobs.ACTIVE_STATES:
-            record = messages.queue_for_worker(job_id, text, arguments.get("reply_to") or None)
-            if record is not None:
-                return {"job_id": job_id, "delivered": "queued for the running subagent", "message_id": record["id"]}
-        spec = jobs.read_spec(job_id)
-        # A job pinned to an account (explicit-only ones must be) continues on that account.
-        follow_up = jobs.create_job(
-            runtime=spec.runtime, prompt=text, cwd=spec.cwd, account=spec.account, model=spec.model, effort=spec.effort,
-            access=spec.access, max_turns=spec.max_turns, timeout_seconds=spec.timeout_seconds,
-            add_dirs=spec.add_dirs, resume_job=job_id,
+        return continue_job(
+            _job_id(arguments), str(arguments.get("text") or ""), reply_to=arguments.get("reply_to") or None,
+            override=arguments.get("override"), host=detect_host(client),
         )
-        return {"job_id": job_id, "delivered": "continued the finished conversation as a new job", "new_job": summarize(follow_up)}
     if name == "subagent_start":
         status = jobs.create_job(
             runtime=str(arguments.get("runtime") or "claude"),
@@ -369,7 +375,8 @@ def _call(name: str, arguments: dict[str, Any], progress=None, client: str | Non
     if name == "subagent_cancel":
         return summarize(jobs.cancel(_job_id(arguments)))
     if name == "subagent_list":
-        return {"jobs": jobs.list_jobs(int(arguments.get("limit") or 20))}
+        return {"jobs": jobs.list_jobs(int(arguments.get("limit") or 20),
+                                       resumable_only=bool(arguments.get("resumable_only")))}
     if name == "subagent_accounts":
         selected = arguments.get("runtime")
         reports = {"runtimes": [account_report(runtime) for runtime in offered_runtimes() if not selected or runtime == selected]}
@@ -377,6 +384,46 @@ def _call(name: str, arguments: dict[str, Any], progress=None, client: str | Non
             reports["room"] = room
         return reports
     raise ToolError(f"unknown tool: {name}")
+
+
+def continue_job(job_id: str, text: str, *, reply_to: str | None = None, override: str | None = None,
+                 timeout_seconds: int | None = None, host: str | None = None) -> dict[str, Any]:
+    """Deliver a message to a running job, or continue a stopped job's conversation as a new job.
+
+    The continuation keeps everything the original job was started with (runtime, folder,
+    account pin, model, effort, access) and its override, unless `override` replaces it.
+    """
+
+    status = jobs.read_status(job_id)
+    if status.get("state") in jobs.ACTIVE_STATES:
+        record = messages.queue_for_worker(job_id, text, reply_to)
+        if record is not None:
+            return {"job_id": job_id, "delivered": "queued for the running subagent", "message_id": record["id"]}
+    spec = jobs.read_spec(job_id)
+    # A job pinned to an account (explicit-only ones must be) continues on that account.
+    follow_up = jobs.create_job(
+        runtime=spec.runtime, prompt=text, cwd=spec.cwd, account=spec.account, model=spec.model, effort=spec.effort,
+        override=override, access=spec.access, max_turns=spec.max_turns,
+        timeout_seconds=int(timeout_seconds or spec.timeout_seconds), add_dirs=spec.add_dirs, resume_job=job_id,
+        host=host,
+    )
+    return {"job_id": job_id, "delivered": "continued the stopped conversation as a new job", "new_job": summarize(follow_up)}
+
+
+def resume_hint(status: dict[str, Any]) -> str | None:
+    """For a job that stopped before finishing: how to continue it instead of starting anew."""
+
+    job_id = status.get("job_id")
+    if not job_id or status.get("state") != "done" or status.get("outcome") == "success":
+        return None
+    try:
+        if jobs.resume_point(str(job_id)) is None:
+            return None
+    except ValueError:
+        return None
+    return (f"Continue job {job_id} (it keeps its conversation): SendMessage to its relay, subagent_message, "
+            f"`csa message {job_id}`, or, when the relay is gone, a new relay of the same type with the option "
+            f"line resume={job_id}. Never start a new job for the same work.")
 
 
 def _call_worker(job_id: str, name: str, arguments: dict[str, Any], progress=None) -> Any:

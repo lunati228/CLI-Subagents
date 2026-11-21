@@ -30,6 +30,30 @@ OVERRIDE_HINT = (
 )
 
 
+CONTINUATION_OVERRIDE_HINT = (
+    "Only if the user explicitly asked for more parallel jobs, send the follow-up again with override=<their words>; "
+    "otherwise ask the user (say how much of the 5-hour window is left)."
+)
+CONTINUATION_WAITS = (
+    "This continues job {job}, so it waits for a free slot instead of being refused ({reason}). "
+    "It needs nothing else: never start a new job for the same work."
+)
+
+
+def continue_later(job: str) -> str:
+    return (f"This continues job {job}: continue it later (SendMessage to its relay, `csa message {job}`, "
+            f"subagent_message, or a new relay with the option line resume={job}); never start a new job for "
+            "the same work, which would redo everything the worker already read.")
+
+
+def continuation_refusal(message: str, job: str) -> str:
+    """A refusal of a continuation: same reason, but continue later instead of starting anew."""
+
+    head, _, room = message.partition("\n")
+    head = head.replace(OVERRIDE_HINT, CONTINUATION_OVERRIDE_HINT)
+    return f"{head} {continue_later(job)}" + (f"\n{room}" if room else "")
+
+
 def validate_override(override: str | None) -> None:
     if override is not None and (not isinstance(override, str) or not override.strip()):
         raise ValueError("override must be a non-empty string containing the user's own words")
@@ -329,8 +353,14 @@ def admit(
     effort: str | None = None,
     override: str | None = None,
     now: float | None = None,
+    continuation: str | None = None,
 ) -> Admission:
-    """Raise LimitError if the job can't start now; else say which account is expected to take it."""
+    """Raise LimitError if the job can't start now; else say which account is expected to take it.
+
+    A `continuation` (the job id it resumes) is never refused by a job cap: it waits in the
+    runner for a free slot, like `when_full = "queue"`. Cooldowns, the usage ceiling, budgets
+    and model or spend rules still refuse it.
+    """
 
     from cli_subagents import usage_view
 
@@ -341,8 +371,15 @@ def admit(
         usage_view.refresh_codex(config)  # reads local files only
     counts = count_active(now)
     queue = runtime.when_full == "queue" and not override
+    continuing = bool(continuation) and not override
+    waits: list[str] = []
     name = NAMES.get(runtime_name, runtime_name)
-    if not queue and not override:
+    if continuing and not queue:
+        if config.max_jobs and counts.total >= config.max_jobs:
+            waits.append(f"csa's global limit, {counts.total} of {config.max_jobs} running")
+        if runtime.max_jobs and counts.by_runtime.get(runtime_name, 0) >= runtime.max_jobs:
+            waits.append(f"{name} limit, {counts.by_runtime.get(runtime_name, 0)} of {runtime.max_jobs} running")
+    elif not queue and not override:
         if config.max_jobs and counts.total >= config.max_jobs:
             raise _refusal(config, 
                 f"csa is at its global limit: {counts.total} of {config.max_jobs} subagents running "
@@ -357,7 +394,9 @@ def admit(
             )
     cap, left = quota.room_cap(runtime, now, model, pinned=account)
     running = counts.by_runtime.get(runtime_name, 0)
-    if not override and cap is not None and running >= cap:
+    if continuing and cap is not None and running >= cap:
+        waits.append(f"max_jobs_by_room allows {cap} at a time, {running} running")
+    elif not override and cap is not None and running >= cap:
         found = _alternatives(config, runtime_name, counts, now)
         detail = f"has {left:g}% of its quota left" if left is not None else "has no quota data"
         tail = (f"Run this on {' or '.join(NAMES[other] for other in found)}, or {WAIT}."
@@ -365,7 +404,7 @@ def admit(
         raise _refusal(config, f"{name} {detail}, so {cap} jobs at a time (max_jobs_by_room); {running} are running. {tail}")
     current = room(config, runtime_name, counts, pinned=account, model=model, now=now, override=override)
     admission = Admission(effort=effort)
-    if current.accounts:
+    if current.accounts and not waits:
         chosen, limits = current.accounts[0]
         admission.account = chosen.name
         capped = cap_effort(effort, limits)
@@ -398,6 +437,13 @@ def admit(
         where = f"account '{account}'" if account else "every account"
         raise _refusal(config, f"{pool.name.capitalize()} budget used up: {current.pool_budget_used} of {pool.weekly_jobs} jobs this week on {where} (weekly_jobs in pool {pool.name}). {tail}")
     if queue:
+        return admission  # the runner waits for a free slot
+    if continuing and (waits or current.pool_total_hit or current.pool_full or current.full):
+        if current.pool_total_hit or current.pool_full:
+            waits.append(f"pool {current.pool.name} is full")
+        elif current.full:
+            waits.append(f"{current.running} of {current.cap} running ({current.source})")
+        admission.warnings.append(CONTINUATION_WAITS.format(job=continuation, reason="; ".join(waits)))
         return admission  # the runner waits for a free slot
     where = f"{name} account '{account}'" if account else name
     found = [] if account else _alternatives(config, runtime_name, counts, now)

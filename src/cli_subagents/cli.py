@@ -73,6 +73,8 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
         if relay_file is None and args.prompt != "-":
             raise ValueError("--relay requires '-' to read the complete relay prompt from stdin")
         options, prompt = _relay_prompt(prompt)
+        if "resume" in options:
+            return _resume(args, options, prompt)
         for key, value in options.items():
             setattr(args, key, value)
     access = args.access or ("read" if relay and args.runtime != "claude" else "edit")
@@ -92,7 +94,35 @@ def _start(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
-_RELAY_KEYS = frozenset(("model", "effort", "access", "account", "cwd", "timeout", "window", "override"))
+_RELAY_KEYS = frozenset(("model", "effort", "access", "account", "cwd", "timeout", "window", "override", "resume"))
+# What a continuation takes from the job it resumes; a relay may not change these.
+_RESUME_FIXED = ("model", "effort", "access", "account", "cwd")
+
+
+def _resume(args: argparse.Namespace, options: dict[str, Any], text: str) -> dict[str, Any]:
+    """The relay option `resume=<job>`: continue that job's conversation (or message it while it runs).
+
+    For a relay that has no job of its own yet, e.g. after a PC restart or when the job's
+    first relay died. The task text is the follow-up; the job keeps its own settings.
+    """
+
+    job_id = options["resume"]
+    status = jobs.read_status(job_id)
+    runtime = status.get("runtime")
+    if runtime != args.runtime:
+        raise ValueError(f"job {job_id} ran in {runtime}; resume it with the cli-subagents-{runtime} relay "
+                         f"(or csa run --runtime {runtime})")
+    fixed = [key for key in _RESUME_FIXED if key in options]
+    if fixed:
+        raise ValueError(f"resume={job_id} continues that job with its own {', '.join(fixed)}; "
+                         f"remove the {', '.join(key + '=' for key in fixed)} line(s)")
+    for key in ("window", "override", "timeout"):
+        if key in options:
+            setattr(args, key, options[key])
+    result = tools.continue_job(job_id, text, override=options.get("override"),
+                                timeout_seconds=options.get("timeout"))
+    new_job = result.get("new_job")
+    return {"job_id": new_job["job_id"] if new_job else job_id}
 _RELAY_OPTION = re.compile(r"([a-zA-Z_][a-zA-Z0-9_-]*)(=|:[ \t]*)(.*)")
 
 
@@ -134,6 +164,8 @@ def _relay_prompt(text: str) -> tuple[dict[str, Any], str]:
             raise ValueError(f"relay option access must be one of {ACCESS_LEVELS}")
         elif key == "account" and not NAME_RE.fullmatch(value):
             raise ValueError("relay option account must be an account name")
+        elif key == "resume" and not re.fullmatch(r"[0-9a-z-]{1,64}", value):
+            raise ValueError("relay option resume must be a job id")
         options[key] = value
         position += len(line)
     task = text[position:]
@@ -476,7 +508,14 @@ def _message(args: argparse.Namespace) -> int:
         if args.text is None:
             raise ValueError("message text or --relay-file is required")
         text = _read_stdin() if args.text == "-" else args.text
-    result = tools.call("subagent_message", {"job_id": args.job_id, "text": text, "reply_to": args.reply_to})
+    override = args.override
+    if args.relay_file is not None and args.reply_to is None:
+        found, text = _message_override(text)
+        override = override or found
+    arguments = {"job_id": args.job_id, "text": text, "reply_to": args.reply_to}
+    if override:
+        arguments["override"] = override
+    result = tools.call("subagent_message", arguments)
     if args.follow:
         from cli_subagents.follow import follow
 
@@ -487,6 +526,20 @@ def _message(args: argparse.Namespace) -> int:
         return follow(job_id, start, args.max_wait, window=args.window, marker=_relay_marker(args))
     _print(result)
     return 0
+
+
+_MESSAGE_OVERRIDE = re.compile(r"override=([^\r\n]*)\r?\n(?:\r?\n)?")
+
+
+def _message_override(text: str) -> tuple[str | None, str]:
+    """A follow-up file may begin with one `override=USER_WORDS` line (then a blank line), for a
+    continuation the user authorized beyond the caps. Everything else stays message text."""
+
+    match = _MESSAGE_OVERRIDE.match(text)
+    if not match or not match[1].strip() or any(ord(char) < 32 or ord(char) == 127 for char in match[1]):
+        return None, text
+    rest = text[match.end():]
+    return (match[1], rest) if rest.strip() else (None, text)
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -510,10 +563,23 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def cmd_jobs(args: argparse.Namespace) -> int:
-    for job in jobs.list_jobs(args.limit):
+    listed = jobs.list_jobs(args.limit, resumable_only=getattr(args, "resumable", False))
+    for job in listed:
         created = time.strftime("%m-%d %H:%M", time.localtime(job.get("created_at") or 0))
         override = f"  override={json.dumps(job['override'], ensure_ascii=False)}" if job.get("override") else ""
-        print(f"{job['job_id']}  {created}  {job.get('runtime')}  {job.get('state')}/{job.get('outcome') or '-'}  {job.get('account') or '-'}{override}")
+        chain = ""
+        if job.get("continues"):
+            chain += f"  continues {job['continues']}"
+        if job.get("continued_by"):
+            chain += f"  continued by {job['continued_by']}"
+        elif job.get("resumable") and job.get("outcome") != "success":
+            chain += "  resumable"
+        task = f"  {json.dumps(job['task'][:60], ensure_ascii=False)}" if job.get("task") else ""
+        print(f"{job['job_id']}  {created}  {job.get('runtime')}  {job.get('state')}/{job.get('outcome') or '-'}  "
+              f"{job.get('account') or '-'}{override}{chain}{task}")
+    if getattr(args, "resumable", False) and listed:
+        print("Continue one with SendMessage to its relay, `csa message <job> <text>`, or a new relay "
+              "with the option line resume=<job>. Never start a new job for the same work.")
     return 0
 
 
@@ -662,6 +728,11 @@ def build_parser() -> argparse.ArgumentParser:
     message.add_argument("text", nargs="?", help="The message. Use '-' to read it from stdin.")
     message.add_argument("--relay-file", metavar="PATH", help="Consume and delete a UTF-8 csa inbox message file.")
     message.add_argument("--reply-to")
+    message.add_argument(
+        "--override", metavar="USER_WORDS",
+        help="Only when the message continues a stopped job: the user's own words authorizing it beyond csa's "
+        "caps (replaces the original job's override). Never on your own judgment.",
+    )
     message.add_argument("--follow", action="store_true",
                          help="Follow the running job or its new continuation, with an authenticated header and status.")
     message.add_argument("--from", dest="from_offset", type=int, metavar="OFFSET",
@@ -678,6 +749,8 @@ def build_parser() -> argparse.ArgumentParser:
                              f"(bare --window: {DEFAULT_WINDOW}; omitted: print every event, keep --max-wait behavior).")
     jobs_parser = sub.add_parser("jobs", help="List recent jobs.")
     jobs_parser.add_argument("--limit", type=int, default=20)
+    jobs_parser.add_argument("--resumable", action="store_true",
+                             help="Only stopped jobs that can be continued and that no later job continued.")
 
     launcher = sub.add_parser("launch", help="Open an interactive session on the best account with the shared setup.")
     launcher.add_argument("--runtime", default="claude", choices=RUNTIMES)

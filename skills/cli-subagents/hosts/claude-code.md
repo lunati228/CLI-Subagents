@@ -22,6 +22,10 @@ To stop the work, SendMessage "cancel" to the relay. It runs `csa cancel` on its
 
 If the relay is already gone, find the job in `subagent_list` by its runtime, `cwd` and start time. The list holds every session's jobs, so don't take the first running one. Then call `subagent_cancel` with that ID. In auto mode, Claude Code's safety check may refuse a cancel the user didn't clearly ask for, for example when they asked you to redo the work another way. Don't look for another route around the refusal: give the user the job ID and `csa cancel <ID>`, or ask them to confirm the cancel.
 
+## Continuing a job after a restart
+
+A worker runs detached, so it keeps running when Claude Code restarts; when the PC is switched off, it stops and `subagent_list` shows the job as `lost`. Either way the job keeps its conversation, but its relay is gone. Find the job with `subagent_list` (`resumable_only: true`) or `csa jobs --resumable`, by its task, runtime, `cwd` and start time, and start a new relay of the same type whose prompt begins with `resume=<JOB>`, then a blank line and the follow-up. The same works when a relay died while its worker kept running. Never start a new job for the same work.
+
 ## Where the shared setup lives
 
 Subagents on the user's other Claude accounts get everything from the main config folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). When you or the user add something new, put it there and every account has it on the next run:

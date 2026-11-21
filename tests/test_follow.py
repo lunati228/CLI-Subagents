@@ -343,7 +343,8 @@ class FollowTests(TempHome):
         self.assertEqual(FRAME_RE.search(lines[-1]).groups(), (current, token))
         self.assertTrue(lines[-1].startswith("[csa] FAILED"), text)
         self.assertIn("Invalid API key", lines[-1])
-        self.assertEqual(result_body(text), "")
+        # No worker text, only how to continue the job once the login is fixed.
+        self.assertTrue(result_body(text).startswith(f"Note from CLI Subagents: Continue job {current}"), text)
 
     def test_message_follow_running_job_keeps_offset_and_queues_follow_up(self):
         self.write_config(accounts=("a1",))

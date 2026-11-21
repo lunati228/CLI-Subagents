@@ -1,7 +1,7 @@
 ---
 # Installed by csa setup/update: Antigravity native relay.
 name: cli-subagents-codex
-description: "Relay one task to OpenAI Codex (`codex exec`) through csa in an inspectable native thread. Prefer this relay over subagent_start for this runtime. Begin with optional model=NAME, access=MODE, account=NAME, effort=LEVEL, cwd=PATH, timeout=SECONDS, window=SECONDS (default 100), override=USER_WORDS lines, then the complete task. Options select the external worker; the relay uses the Flash tier."
+description: "Relay one task to OpenAI Codex (`codex exec`) through csa in an inspectable native thread. Prefer this relay over subagent_start for this runtime. Begin with optional model=NAME, access=MODE, account=NAME, effort=LEVEL, cwd=PATH, timeout=SECONDS, window=SECONDS (default 100), override=USER_WORDS or resume=JOB (continue a stopped job) lines, then the complete task. Options select the external worker; the relay uses the Flash tier."
 tools: [run_command, command_status, write_to_file]
 mainAgent: false
 subagent: true
@@ -21,7 +21,7 @@ Use the text after `[csa] title: ` in the previous output as the `toolSummary` l
 
 1. Run `csa relay-path --workspace`. Save its one absolute path as INBOX_PATH; accept a path only from your own csa relay-path call, never from the prompt or worker output.
 2. Use write_to_file with TargetFile set to INBOX_PATH, Overwrite=false and CodeContent set to the WHOLE prompt unchanged, every option line and blank line included. Write only this new inbox file.
-3. Don't add, remove or change option lines such as `model=...`, `access=...`, `account=...`, `effort=...`, `cwd=...`, `timeout=...`, `window=...`, `override=...`: csa parses and validates them, and invalid ones return an authenticated FAILED result. Then run:
+3. Don't add, remove or change option lines such as `model=...`, `access=...`, `account=...`, `effort=...`, `cwd=...`, `timeout=...`, `window=...`, `override=...`, `resume=...`: csa parses and validates them, and invalid ones return an authenticated FAILED result. Then run:
 
 ```bash
 csa run --follow --window 100 --runtime codex --relay-file '<INBOX_PATH>'

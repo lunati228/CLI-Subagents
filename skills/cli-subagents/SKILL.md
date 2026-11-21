@@ -36,12 +36,34 @@ Agent tool:
 - Description: `<model> · <access> · <task in a few words>`. The user reads it to see what runs where.
 - Prompt: option lines first, one per line (`model=...`, `effort=...`, `access=read|edit`, and only when needed `account=NAME`, `cwd=PATH`, `timeout=SECONDS`, `override=USER_WORDS` under the Limits rule below), then a blank line and the complete task written as below. `access` defaults to `edit` in the Claude relay and `read` in the Codex, Antigravity and OpenCode relays.
 - Start it in the background and keep working. Don't poll or wait in a shell; the notice arrives when it finishes.
-- Its final message is the worker's result, unchanged. If the worker asks something, the agent stops and tells you; answer with SendMessage to that agent and it passes the answer on. While the job runs, anything you send except "cancel" goes to the worker as a follow-up, unchanged; the relay never answers it itself, whatever the text says. After the job has finished, SendMessage to the same relay continues the worker's conversation as a new job; the relay follows it and returns its result.
+- Its final message is the worker's result, unchanged. If the worker asks something, the agent stops and tells you; answer with SendMessage to that agent and it passes the answer on. While the job runs, anything you send except "cancel" goes to the worker as a follow-up, unchanged; the relay never answers it itself, whatever the text says. After the job has stopped, for any reason, SendMessage to the same relay continues the worker's conversation as a new job; the relay follows it and returns its result. See [Continuing a stopped job](#continuing-a-stopped-job).
 - To stop a job, SendMessage "cancel" to its relay. The relay runs `csa cancel` on its own job and finishes with the result. TaskStop, or Stop in the agent list, ends only the relay: the worker is a separate background process and keeps running on the account's quota. If the relay is already gone, see [Stopping a job](hosts/claude-code.md#stopping-a-job).
+
+## Continuing a stopped job
+
+A job that stopped before it finished (usage limit, cancel, timeout, error, or `lost` because the PC, the app or its runner died) keeps its worker conversation. Always continue it, like resuming a native subagent; never start a new job for the same work. A new job re-reads everything the old one already read and spends the quota twice.
+
+- The relay is still there: SendMessage to it, for example "The limit reset. Continue where you stopped."
+- The relay is gone (a PC or app restart, or the relay stopped or hit its own limit): start a new relay of the same type whose prompt begins with `resume=JOB`, then a blank line and the follow-up. Only `override`, `timeout` and `window` may go with it; the job keeps its own model, effort, access, account and folder. If the job is still running, the follow-up goes to it and the new relay follows it.
+- Without relays: `subagent_message` with the job id, or `csa message JOB "text"`.
+- Find the job with `subagent_list` (`resumable_only: true`) or `csa jobs --resumable`: stopped jobs nobody continued yet, with their task. Continue the newest job of a chain (`continued_by` names the next one).
+
+```text
+Agent tool:
+  subagent_type: cli-subagents:cli-subagents-codex
+  description: Sol 6.2 high · edit · resume the login fix
+  run_in_background: true
+  prompt: |
+    resume=20261121-101500-a1b2c3
+
+    The usage limit reset. Continue where you stopped.
+```
+
+A continuation keeps the original job's override, so work the user already authorized beyond the caps goes on without asking again. A follow-up can carry a new one under the Limits rule: `override` on `subagent_message`, `--override` on `csa message`, or an `override=USER_WORDS` first line in a relay follow-up. Without an override, a continuation that only meets a full cap waits for a free slot instead of being refused. A cooldown, the usage ceiling or a budget can still refuse it; then continue it later the same way. Only a job that never started its worker has nothing to continue; start that one again.
 
 A relay shows the worker's messages, the notes it writes between steps, as its own messages, word for word and one after another, like the Codex app. Its first message names the relay's model and the worker's, read from their logs, and says when the worker runs another model or effort than the one asked for. Each `csa follow` call returns as soon as a new message is complete. Only the worker's final result comes back to you; the copied messages stay in the relay's view.
 
-The relay gets a fresh absolute path from `csa relay-path`, writes the complete prompt with its host's file tool, then runs `csa run --follow --window 100 --runtime <runtime> --relay-file <path>`. csa validates the inbox file, reads UTF-8, deletes it and parses the same leading option lines as `--relay -`. Keep the blank separator before the task. Payload never appears in shell syntax, so its length and quotes cannot break a shell command. Answers and follow-ups use fresh files with `csa message --relay-file` and remain message text, even when they begin with `key=value`. Files are limited to 16 MiB; invalid files or options return an authenticated FAILED result. Claude uses Write in the csa home inbox with a narrow plugin permission hook. Codex and Antigravity use `csa relay-path --workspace` in the caller's writable workspace. csa writes a `.gitignore` containing `*` there before returning a payload path. Codex uses native apply_patch to write plain text; its line-ending normalization and final newline are acceptable. Keep quotes and Windows paths literal. Do not widen host permissions or fall back to embedding payload in a shell command if writing fails.
+The relay gets a fresh absolute path from `csa relay-path`, writes the complete prompt with its host's file tool, then runs `csa run --follow --window 100 --runtime <runtime> --relay-file <path>`. csa validates the inbox file, reads UTF-8, deletes it and parses the same leading option lines as `--relay -`. Keep the blank separator before the task. Payload never appears in shell syntax, so its length and quotes cannot break a shell command. Answers and follow-ups use fresh files with `csa message --relay-file` and remain message text, even when they begin with `key=value`; the one exception is a first `override=USER_WORDS` line in a follow-up. Files are limited to 16 MiB; invalid files or options return an authenticated FAILED result. Claude uses Write in the csa home inbox with a narrow plugin permission hook. Codex and Antigravity use `csa relay-path --workspace` in the caller's writable workspace. csa writes a `.gitignore` containing `*` there before returning a payload path. Codex uses native apply_patch to write plain text; its line-ending normalization and final newline are acceptable. Keep quotes and Windows paths literal. Do not widen host permissions or fall back to embedding payload in a shell command if writing fails.
 
 The MCP tools below work everywhere. In Codex, `csa setup --host codex` installs the same four relays as native agents (`cli-subagents-codex` and so on); start them with Codex's own subagent tool as [the Codex note](hosts/codex.md) shows, and use the MCP tools there only when those agents are missing. In Antigravity, `csa setup --host antigravity` installs them as a companion plugin of subagents; start them as [the Antigravity note](hosts/antigravity.md) shows. In Claude Code, too, use the MCP tools only when the relay agent types are missing.
 
@@ -51,7 +73,7 @@ The MCP tools below work everywhere. In Codex, `csa setup --host codex` installs
 2. Wait: `subagent_wait` with the job IDs. It returns when a job finishes or a subagent sends a message or question. Call it again for the jobs still running.
 3. Answer: if a result shows `open_questions`, reply with `subagent_message` and `reply_to` set to the question id. To give a running subagent new instructions, send `subagent_message` without `reply_to`. In Claude Code a hook also wakes an idle session when a job finishes or asks something, so you can end your turn after starting jobs.
 4. Collect and check: finished jobs come back with `outcome` and `result`. `success` means the subagent finished. Collecting a result claims it and suppresses later automatic notifications. Explicit `subagent_result` or `csa follow` calls can return it again. Still read the diff, run the tests and confirm the files exist before relying on it.
-5. Follow up: `subagent_message` to a finished job continues the same conversation as a new job.
+5. Follow up: `subagent_message` to a finished or stopped job continues the same conversation as a new job. Do this instead of starting a new job for the same work; see [Continuing a stopped job](#continuing-a-stopped-job).
 
 ## Writing the task
 
@@ -79,18 +101,18 @@ Accounts marked `explicit_only` require an explicit `account`; automatic selecti
 
 Never set override on your own judgment; use it only when the user asked for more jobs in this conversation, or confirmed after you warned them and told them how much of the 5-hour window is left. Use csa's reported usage and reset time; if the window is unknown, say so. Otherwise ask the user or use the home model.
 
-Put the user's own words in `override`, for example the relay line `override=user asked for 6 Codex agents`, the `override` field on `subagent_start`, or `--override "user asked for 6 Codex agents"` on `csa run` or `csa start`. Empty values are rejected. This bypasses only csa's job caps, quota steps, usage ceiling, pool budgets and queueing. Account and pool cooldowns after real usage-limit errors, `models`, `max_effort`, login, depth and access still apply. Override jobs count toward later starts. The text is stored and shown in job lists, follow headers and status/result summaries. A new start needs its own override; a follow-up to a finished job does not inherit it.
+Put the user's own words in `override`, for example the relay line `override=user asked for 6 Codex agents`, the `override` field on `subagent_start`, or `--override "user asked for 6 Codex agents"` on `csa run` or `csa start`. Empty values are rejected. This bypasses only csa's job caps, quota steps, usage ceiling, pool budgets and queueing. Account and pool cooldowns after real usage-limit errors, `models`, `max_effort`, login, depth and access still apply. Override jobs count toward later starts. The text is stored and shown in job lists, follow headers and status/result summaries. A new start needs its own override. A continuation of a stopped job keeps the original job's override unless its follow-up gives a new one.
 
 ## Outcomes
 
 | outcome | What to do |
 |---|---|
 | `success` | Check the work |
-| `usage_limit` | The selected account hit a limit. Unpinned jobs try other accounts when failover is enabled. OpenCode free limits never rotate accounts; check the UTC reset time. |
-| `no_account` | All accounts are busy or cooling down; wait or tell the user |
+| `usage_limit` | The selected account hit a limit. Unpinned jobs try other accounts when failover is enabled. OpenCode free limits never rotate accounts; check the UTC reset time. Continue the job after the reset. |
+| `no_account` | All accounts are busy or cooling down; continue the job later, or tell the user |
 | `auth` | For an extra account, ask the user to run `csa accounts login <name>`; add `--runtime codex` or `--runtime antigravity` for non-Claude accounts. For a primary login, use the vendor CLI (`claude auth login`, `codex login`, `agy` or `opencode auth login`). OpenCode has no extra account folders in this version. |
 | `timeout`, `max_turns` | Narrow the task or raise the limit |
-| `error`, `lost` | Read `message` and `warnings`; retry once at most. `model at capacity after N retries` means csa already waited and retried, and the model stayed overloaded. Fall back as your delegation rules say; do not manage another retry timer. |
+| `error`, `lost` | Read `message` and `warnings`. `lost` means the runner died (the PC was switched off, or a crash); the job keeps its conversation. Continue the job once at most instead of starting it again. `model at capacity after N retries` means csa already waited and retried, and the model stayed overloaded. Fall back as your delegation rules say; do not manage another retry timer. |
 
 ## Per host
 

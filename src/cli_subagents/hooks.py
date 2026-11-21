@@ -6,7 +6,8 @@
   stderr. It runs again after each subagent_message, so a job that woke the
   session with a question is watched again once it is answered.
 * `pending` (SessionStart on resume and compact): names finished jobs whose
-  result nobody collected yet.
+  result nobody collected yet, and jobs lost when their runner died (the PC was
+  switched off), with how to continue them.
 * `inbox` (PostToolUse inside a Claude worker): hands the worker follow-ups the
   main session sent, as additional context next to the tool result.
 * `relay-write` (PreToolUse on Write): allows only a known relay's new payload
@@ -29,7 +30,8 @@ from typing import Any, TextIO
 
 from cli_subagents import jobs, messages
 from cli_subagents.config import jobs_dir
-from cli_subagents.fsutil import try_lock, unlock
+from cli_subagents.fsutil import read_json, try_lock, unlock
+from cli_subagents.runtimes.base import LOST
 
 POLL_SECONDS = 2.0
 # hooks/hooks.json gives the hook 7200 s; wake the session a little before that.
@@ -179,18 +181,32 @@ def _same_dir(left: str, right: str) -> bool:
 
 
 def pending_jobs(cwd: str, limit: int = MAX_PENDING_JOBS) -> list[dict[str, Any]]:
-    """Finished jobs for `cwd` whose result was never delivered, newest first."""
+    """Finished jobs for `cwd` whose result was never delivered, newest first.
+
+    A job whose runner died (the PC was switched off) never wrote its delivery marker;
+    it counts too until someone collects it or continues it.
+    """
 
     folder = jobs_dir()
     if not folder.is_dir():
         return []
     found: list[dict[str, Any]] = []
+    continued: set[str] = set()
     for path in folder.iterdir():
-        if not path.is_dir() or not (path / jobs.NOTIFY_PENDING).exists():
+        if not path.is_dir():
             continue
+        status = read_json(path / "status.json", {}) or {}
+        if isinstance(status, dict) and status.get("continues"):
+            continued.add(str(status["continues"]))
+    for path in folder.iterdir():
+        if not path.is_dir() or (path / jobs.NOTIFY_CLAIMED).exists():
+            continue
+        marked = (path / jobs.NOTIFY_PENDING).exists()
         try:
             status = jobs.read_status(path.name)
         except ValueError:
+            continue
+        if not marked and (status.get("outcome") != LOST or path.name in continued):
             continue
         if status.get("state") == "done" and _same_dir(str(status.get("cwd") or ""), cwd):
             found.append(status)
@@ -199,6 +215,12 @@ def pending_jobs(cwd: str, limit: int = MAX_PENDING_JOBS) -> list[dict[str, Any]
         return float(status.get("finished_at") or status.get("updated_at") or status.get("created_at") or 0)
 
     return sorted(found, key=finished, reverse=True)[:limit]
+
+
+def resume_hint(status: dict[str, Any]) -> str | None:
+    from cli_subagents.tools import resume_hint as hint
+
+    return hint(status)
 
 
 def pending_context(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -211,6 +233,8 @@ def pending_context(payload: dict[str, Any]) -> dict[str, Any] | None:
         line = f"- {status['job_id']}: {status.get('outcome')}, finished {when}"
         if status.get("message"):
             line += f" ({str(status['message'])[:200]})"
+        if hint := resume_hint(status):
+            line += f". {hint}"
         lines.append(line)
     lines.append("Call subagent_result with a job_id to read one.")
     return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}

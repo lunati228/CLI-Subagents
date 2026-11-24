@@ -26,8 +26,8 @@ from cli_subagents.agy_review import write_context
 from cli_subagents.config import Account, RuntimeConfig, home, jobs_dir, state_dir
 from cli_subagents.fsutil import find_program, locate_program, make_private_dir, no_window_kwargs, python_executable, write_text
 from cli_subagents.runtimes.base import (
-    AUTH, ERROR, PARENT_SERVER, SUCCESS, USAGE_LIMIT, WORKER_TOOLS_NOTE,
-    AttemptResult, JobSpec, Launch, clean_environment, parent_server,
+    AUTH, ERROR, PARENT_SERVER, STATUS_NOTE, SUCCESS, USAGE_LIMIT, WORKER_TOOLS_NOTE,
+    AttemptResult, JobSpec, Launch, clean_environment, parent_server, thinks_aloud,
 )
 from cli_subagents.runtimes.reviewers import OPENCODE_REVIEW_BUDGET, build_chain
 
@@ -519,7 +519,7 @@ class OpenCodeRuntime:
         env["CLI_SUBAGENTS_DEPTH"] = str(spec.depth)
         env["CLI_SUBAGENTS_JOB_ID"] = spec.job_id
         gate_note = (SANDBOX_GATE_NOTE if spec.sandbox else GATE_NOTE) if spec.access in ("read", "edit") else ""
-        note = WORKER_NOTE + WORKER_TOOLS_NOTE + gate_note + "]\n\n"
+        note = WORKER_NOTE + (STATUS_NOTE if thinks_aloud(model) else "") + WORKER_TOOLS_NOTE + gate_note + "]\n\n"
         # OpenCode keeps its normal state and logins. Only shell invocations are wrapped.
         return Launch(argv=argv, env=env, stdin=note + prompt, session_id=spec.resume_session, warnings=warnings)
 

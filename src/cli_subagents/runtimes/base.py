@@ -68,6 +68,21 @@ DELEGATE_NOTE = (
     "subagent_wait and subagent_result) when that clearly helps. Your helpers can't start subagents, and "
     "can't get more access than you have. Choose their models by the user's delegation rules."
 )
+# DeepSeek writes its reasoning into the visible text between tool calls ("Let me check...
+# Actually..."), where Claude models keep it in thinking blocks: 56% of 1,343 paid DeepSeek
+# messages against 5% of 877 Opus 5.5 ones (2026-11-24). Relays copy that text, and
+# Anthropic's reasoning_extraction classifier refused relay turns over it (2026-11-22/23).
+STATUS_NOTE = (
+    " Between tool calls, write at most one short status line for the user, like \"Found the date bug "
+    "in parser.py; running its tests next.\" Keep your reasoning in your thinking: no \"Let me\", "
+    "\"Actually\", \"Wait\", self-corrections or repeated lines in what you write."
+)
+
+
+def thinks_aloud(model: str | None) -> bool:
+    """Workers that write their reasoning as visible text between steps: DeepSeek, paid or free."""
+
+    return "deepseek" in (model or "").lower()
 
 
 def clean_environment(source: dict[str, str] | None = None) -> dict[str, str]:

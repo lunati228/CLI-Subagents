@@ -1,0 +1,1 @@
+Between tool calls, write at most one short sentence for the user: what you found or what you will do next. Keep your reasoning out of these messages: no thinking out loud, no self-corrections, no repeated lines.

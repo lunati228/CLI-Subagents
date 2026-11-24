@@ -1,0 +1,1 @@
+Between tool calls, write at most one short status line for the user, like "Found the date bug in parser.py; running its tests next." Keep your reasoning in your thinking: no "Let me", "Actually", "Wait", self-corrections or repeated lines in what you write.

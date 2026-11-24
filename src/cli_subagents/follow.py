@@ -41,7 +41,7 @@ from typing import Any, Callable, TextIO
 from cli_subagents import identity, jobs, messages
 from cli_subagents.config import load_config
 from cli_subagents.fsutil import read_json, write_json
-from cli_subagents.runtimes.base import SUCCESS
+from cli_subagents.runtimes.base import SUCCESS, thinks_aloud
 
 POLL_SECONDS = 0.5
 DEFAULT_MAX_WAIT = 540.0  # keeps one Bash call under Claude Code's 10-minute ceiling
@@ -60,6 +60,13 @@ WORKER_PREFIX = "| "
 MESSAGES_RULE = "===== MESSAGES ====="
 MESSAGES_END_RULE = "===== END MESSAGES ====="
 COPY_LINE = "Now write the block below as your message, word for word, then run the command above."
+# Think-aloud workers (DeepSeek, runtimes.base.thinks_aloud) write their reasoning as messages. A
+# relay that copied it word for word was refused by Anthropic's reasoning_extraction classifier
+# (2026-11-22/23), so their messages are cut to status lines, batched, and posted, never re-asked.
+STATUS_COPY_LINE = "Post the status update below as your message, then run the command above."
+STATUS_MESSAGE_CHARS = 600
+STATUS_MIN_CALL_SECONDS = 45.0  # 276 messages in one 71-minute job ran a relay out of turns
+_FILLER = re.compile(r"(?:let me|let's|i'll|i will|i need to|now|ok(?:ay)?|wait|hmm|actually|so)\b", re.IGNORECASE)
 # The relay uses this as its next Bash description, so each row is titled with the start of the
 # newest message even when the relay doesn't copy it (relays filled the description in 56 of 56
 # calls in the 2026-11-03 transcript, against 1 of 67 free-text copies).
@@ -143,6 +150,26 @@ def title_text(value: str) -> str:
     value = re.sub(r"\b(?:csa-)?token\b\s*[:=]?\s*\S*", "", value, flags=re.IGNORECASE)
     value = re.sub(r"[0-9a-f]{32,}", "", value, flags=re.IGNORECASE)
     return short(" ".join(value.split("#", 1)[0].split()), TITLE_CHARS)
+
+
+def status_text(text: str) -> str:
+    """A think-aloud worker's message cut to status: no repeated or filler lines, short."""
+
+    kept: list[str] = []
+    seen: set[str] = set()
+    filler_kept = False
+    for line in text.split("\n"):
+        key = " ".join(line.split()).lower()
+        words = len(key.split())
+        filler = bool(key and words <= 8 and _FILLER.match(key))  # "Let me check the run status."
+        if key in seen or (filler and (words <= 4 or filler_kept)):
+            continue  # a repeat, a bare "Let me check.", or a second short think-aloud line
+        filler_kept = filler_kept or filler
+        if key:
+            seen.add(key)
+        kept.append(line)
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip("\n")
+    return text if len(text) <= STATUS_MESSAGE_CHARS else text[: STATUS_MESSAGE_CHARS - 3].rstrip() + "..."
 
 
 def display_text(value: str) -> str:
@@ -689,6 +716,8 @@ class Follower:
         self.describer = describer_for(self.spec.runtime)
         # Relay mode: print only the worker's messages and return once a new one is complete.
         self.relay = window is not None
+        self.quiet = self.relay and thinks_aloud(self.spec.model)  # status lines only (STATUS_COPY_LINE)
+        self.call_started = time.monotonic()
         self.markers = [name for name in (marker, job_id) if name]  # find the relay's own transcript
         self.record = identity.WorkerRecord(self.spec.runtime)
         self.identity_line: str | None = None
@@ -821,7 +850,8 @@ class Follower:
         return 0
 
     def add_news(self, texts: list[str], moved_on: bool) -> None:
-        texts = [text for text in map(display_text, texts) if text.strip()]
+        texts = [status_text(display_text(text)) if self.quiet else display_text(text) for text in texts]
+        texts = [text for text in texts if text.strip()]
         if texts:
             self.news += texts
             self.news_at = time.monotonic()
@@ -846,6 +876,8 @@ class Follower:
         """Relay mode: return now, so the relay can show what is new."""
 
         if self.news:
+            if self.quiet and time.monotonic() - self.call_started < STATUS_MIN_CALL_SECONDS:
+                return False  # batch a think-aloud worker's messages
             quiet = time.monotonic() - self.news_at
             return (self.moved_on and quiet >= SETTLE_SECONDS) or quiet >= QUIET_SECONDS
         return self.identity_line is not None
@@ -1100,9 +1132,9 @@ class Follower:
         self.emit("Keep watching with:", self.command(self.follow_command()))
         if self.relay and (self.news or self.identity_line):
             # Last before the status, so copying it is the relay's next step, not a detail it skips.
-            self.emit(COPY_LINE)
+            self.emit(STATUS_COPY_LINE if self.quiet else COPY_LINE)
         body = self.emit_messages()
-        if self.relay and body:
+        if self.relay and body and not self.quiet:
             self.remember_block(body)
         self.control(f"STILL RUNNING after {duration(self.elapsed())}")
         return 0
@@ -1143,7 +1175,8 @@ class Follower:
         self.status = jobs.read_status(self.job_id)
         self.header()
         self.catch_up()
-        if self.relay:
+        self.call_started = time.monotonic()
+        if self.relay and not self.quiet:
             missed = self.missed_block()
             if missed is not None:
                 return self.reask(missed)

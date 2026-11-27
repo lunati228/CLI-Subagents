@@ -122,7 +122,7 @@ class ResumeTests(TempHome):
 
     def test_cli_message_override_flag_and_relay_override_line(self):
         job = self.stopped_job()
-        args = cli.build_parser().parse_args(["message", job, "--override", NEW_WORDS, "go on"])
+        args = cli.parse_args(["message", job, "--override", NEW_WORDS, "go on"])
         with patch("cli_subagents.tools.call", return_value={"job_id": job}) as call, \
                 contextlib.redirect_stdout(io.StringIO()):
             cli._message(args)
@@ -132,7 +132,7 @@ class ResumeTests(TempHome):
         path = relay_input.fresh_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"override={NEW_WORDS}\n\ngo on", encoding="utf-8")
-        args = cli.build_parser().parse_args(["message", job, "--relay-file", str(path)])
+        args = cli.parse_args(["message", job, "--relay-file", str(path)])
         with patch("cli_subagents.tools.call", return_value={"job_id": job}) as call, \
                 contextlib.redirect_stdout(io.StringIO()):
             cli._message(args)

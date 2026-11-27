@@ -46,7 +46,7 @@ emit({"type": "turn.completed", "usage": {}})
 
 
 E = ReviewerEntry
-DEFAULTS = [E("claude", "haiku"), E("agy", "gemini-3.8-flash-low")]
+DEFAULTS = [E("claude", "haiku"), E("agy", "gemini-4-hydrogen-low")]
 
 
 class ReviewerConfigTests(OpenCodeHome):
@@ -71,10 +71,10 @@ class ReviewerConfigTests(OpenCodeHome):
     def test_shared_list_and_per_runtime_override(self):
         config = self.config_text(
             '[[review.reviewers]]\nprovider = "claude"\nmodel = "haiku"\n\n'
-            '[[review.reviewers]]\nprovider = "antigravity"\nmodel = "gemini-3.8-flash-low"\naccount = "google-2"\n\n'
+            '[[review.reviewers]]\nprovider = "antigravity"\nmodel = "gemini-4-hydrogen-low"\naccount = "google-2"\n\n'
             '[[opencode.reviewers]]\nprovider = "codex"\nmodel = "gpt-6-luna"\ntimeout = 30\n')
         self.assertEqual(self.chains(config), {
-            "antigravity": ([E("claude", "haiku"), E("agy", "gemini-3.8-flash-low", "google-2")], False),
+            "antigravity": ([E("claude", "haiku"), E("agy", "gemini-4-hydrogen-low", "google-2")], False),
             "opencode": ([E("codex", "gpt-6-luna", None, 30)], False),
         })
         config = self.config_text(review="reviewers = []")
@@ -140,7 +140,7 @@ class ReviewerLaunchTests(OpenCodeHome):
         self.assertEqual(claude["env"], {"CLAUDE_CONFIG_DIR": str(self.root / "parent-claude")})
         self.assertTrue(Path(claude["work_dir"]).is_dir())
         folder = self.home / "homes" / "antigravity" / ".reviewer" / "primary"
-        self.assertEqual((agy["kind"], agy["model"], agy["command"]), ("agy", "gemini-3.8-flash-low", self.FAKE_AGY))
+        self.assertEqual((agy["kind"], agy["model"], agy["command"]), ("agy", "gemini-4-hydrogen-low", self.FAKE_AGY))
         self.assertEqual(agy["env"], {"HOME": str(folder), "USERPROFILE": str(folder)})
         self.assertIn("agy_review", (folder / ".gemini" / "config" / "hooks.json").read_text(encoding="utf-8"))
         self.assertGreater(settings["reviewMs"], context["review_budget"] * 1000)
@@ -160,9 +160,9 @@ class ReviewerLaunchTests(OpenCodeHome):
         self.assertEqual((context["reviewers"], settings["reviewMs"]), ([], 10000))
         self.assertTrue(any("no reviewer is available" in warning for warning in launch.warnings))
         self.assertIn("1. claude haiku: skipped, the claude CLI isn't installed", lines)
-        self.assertIn("2. antigravity gemini-3.8-flash-low: skipped, the agy CLI isn't installed", lines)
+        self.assertIn("2. antigravity gemini-4-hydrogen-low: skipped, the agy CLI isn't installed", lines)
         with self.with_agy():
-            self.assertIn("2. antigravity gemini-3.8-flash-low: ready", "\n".join(chain_setup.describe_chain(self.config)))
+            self.assertIn("2. antigravity gemini-4-hydrogen-low: ready", "\n".join(chain_setup.describe_chain(self.config)))
 
     def test_configured_reviewers_that_cant_run_are_named(self):
         self.config.reviewers = [E("claude", "sonnet", "nobody"), E("agy"), E("claude", "sonnet")]

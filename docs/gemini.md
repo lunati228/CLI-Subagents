@@ -42,7 +42,7 @@ so check the resolved relay model and effort in the app. See
 ## Using it
 
 ```bash
-csa run --runtime antigravity --model gemini-3.8-flash-high --access read "Review src/auth.py for bugs"
+csa run --runtime antigravity --model gemini-4-hydrogen-high --access read "Review src/auth.py for bugs"
 ```
 
 From a host, pass `runtime: "antigravity"` to `subagent_start`. `agy models` lists the model IDs your account can use. `effort` maps to `--effort`, except for model IDs with an effort suffix (`-minimal`, `-low`, `-medium`, `-high`, `-xhigh`, `-max`) or a `claude-` or `gpt-` prefix. For those models, csa omits `--effort` and adds a warning.
@@ -122,7 +122,7 @@ The gate is a `PreToolUse` hook in the worker's folder. `agy` calls it before ev
 1. Fixed rules decide the clear cases at once, with no model call.
    - Approved: reads inside the project (`add_dirs` included), ordinary workspace edits in edit jobs, reading the instruction files and skill folders of the session that started the job (so a worker started from Claude Code can read your `CLAUDE.md`), the `csa-parent` tools and plainly read-only commands such as `git status` or `ls`. In edit jobs, sandboxed commands pass unless the rules flag something risky. Edits to instruction files, `settings.json`, `hooks.json`, `.mcp.json`, CI workflows and editor or container configuration go to review unless a deny rule applies.
    - Denied: logins, keys and tokens (`~/.ssh`, `.env`, `*.pem`, credential stores, agent login files), CLI Subagents' own state, edits to `.git` and to agent configuration (`.agents`, `.gemini`, `.claude`, `.codex`), force pushes, publishing and deploying, deletes outside the project, credential tools, and encoded or downloaded code. In read jobs: every edit.
-2. A chain of reviewers judges the rest. Each is a separate model call with no tools that sees the action, a few facts about the job and a written policy, never your task or the conversation, and answers with one JSON object. By default Claude Haiku goes first and Gemini 3.8 Flash (low) through `agy` second. The next reviewer is asked only when one gives no verdict (a limit, a missing login or CLI, an error, a timeout or an answer that isn't the JSON). A denial is final, and so is an approval rated high or critical risk, which counts as a denial. If no reviewer gives a verdict, the action is denied.
+2. A chain of reviewers judges the rest. Each is a separate model call with no tools that sees the action, a few facts about the job and a written policy, never your task or the conversation, and answers with one JSON object. By default Claude Haiku goes first and Gemini 4 Hydrogen (low) through `agy` second. The next reviewer is asked only when one gives no verdict (a limit, a missing login or CLI, an error, a timeout or an answer that isn't the JSON). A denial is final, and so is an approval rated high or critical risk, which counts as a denial. If no reviewer gives a verdict, the action is denied.
 
 A denial goes back to the worker with its reason, and the worker carries on another way. A shell command is reviewed every time it runs, because the scripts and manifests it runs may have changed since. Any other action is reviewed once per job, and a repeat with the same arguments (for an edit, the same content) reuses the answer.
 
@@ -156,7 +156,7 @@ Reads, ordinary workspace edits, read-only commands and sandboxed commands that 
 
 ### Settings
 
-The reviewer chain is shared with the OpenCode gate under `[review]`, or set for this gate alone with `[[antigravity.reviewers]]`. Each entry takes `provider` (`claude`, `antigravity` or `codex`), `model`, `account` and `timeout`. Claude Haiku first with Gemini Flash as the fallback, which is also the default:
+The reviewer chain is shared with the OpenCode gate under `[review]`, or set for this gate alone with `[[antigravity.reviewers]]`. Each entry takes `provider` (`claude`, `antigravity` or `codex`), `model`, `account` and `timeout`. Claude Haiku first with Gemini 4 Hydrogen as the fallback, which is also the default:
 
 ```toml
 [[review.reviewers]]
@@ -165,7 +165,7 @@ model = "haiku"
 
 [[review.reviewers]]
 provider = "antigravity"
-model = "gemini-3.8-flash-low"
+model = "gemini-4-hydrogen-low"
 ```
 
 The older `reviewer` (`"agy"`, `"claude"`, `"codex"` or `"off"`), `reviewer_model` and `reviewer_account` keys under `[antigravity]` still work as a one-entry chain. `sandbox = false` sends every non-read-only command to the reviewers. See [Review gate](configuration.md#review-gate) for the details, including how Codex runs as a reviewer.
@@ -181,11 +181,11 @@ The older `reviewer` (`"agy"`, `"claude"`, `"codex"` or `"off"`), `reviewer_mode
 
 ## Quota pools and Argon
 
-On Google AI Pro and Ultra, Gemini 4 Argon has a separate quota that resets weekly. Gemini 3.8 Flash uses the normal Gemini bucket, which refills every 5 hours until its weekly limit. An Argon limit should therefore leave Flash available on the same account.
+Quotas depend on the Google AI plan. Google's [plans page](https://antigravity.google/docs/plans) (checked 2026-11-27) says paid AI Pro gets a quota that refills every 5 hours until a weekly limit, with Gemini 4 Neon, Carbon, Argon and Hydrogen inside one shared Gemini quota. Free and AI Plus get a smaller quota that refreshes only weekly, with Gemini 4 Hydrogen (and Gemini 3.8 Flash until 2026-11-30). Google publishes no request counts; quota use follows the amount of work, so long or wordy jobs use more. On a weekly-only plan, keep Hydrogen jobs short and cap how many run at once.
 
-agy reports no remaining quota. csa knows only recorded job starts and usage-limit failures. Configure separate `argon` and `flash` pools to cap concurrency and track a rolling weekly job budget; see the [pool example](configuration.md#model-pools). These controls are off until configured. A pooled quota failure cools down only that account's pool, using a reported reset time or its configured cooldown. With failover enabled, the job moves to another account that has room in the pool.
+agy reports no remaining quota. csa knows only recorded job starts and usage-limit failures. Configure separate `argon` and `hydrogen` pools to cap concurrency and track a rolling weekly job budget; see the [pool example](configuration.md#model-pools). These controls are off until configured. A pooled quota failure cools down only that account's pool, using a reported reset time or its configured cooldown. With failover enabled, the job moves to another account that has room in the pool.
 
-The example matches `gemini-4-argon-*` and budgets 3 Argon jobs per account in 7 days, with at most 1 running on each account and 2 across accounts. Flash allows 6 across accounts. These are example caps, not Google's published job allowances. The assumed Argon IDs are `gemini-4-argon-low`, `gemini-4-argon-medium` and `gemini-4-argon-high`; use the IDs your agy version lists. They have not been tested live here.
+The example matches `gemini-4-argon-*` and budgets 3 Argon jobs per account in 7 days, with at most 1 running on each account and 2 across accounts. Hydrogen allows 6 across accounts; on AI Plus a lower cap such as 2 suits the weekly quota. These are example caps, not Google's published job allowances. The assumed Argon IDs are `gemini-4-argon-low`, `gemini-4-argon-medium` and `gemini-4-argon-high`; use the IDs your agy version lists. They have not been tested live here.
 
 `csa accounts --runtime antigravity`, `subagent_accounts`, doctor and the `Room:` line show each pool's running jobs, weekly count and cooldown. When every eligible account has used its Argon budget, the refusal names `weekly_jobs in pool argon` and suggests an available alternative.
 

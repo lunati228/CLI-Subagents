@@ -38,7 +38,7 @@ flowchart LR
 - Only the user can authorize more parallel jobs with `override=<their words>` (relay or MCP) or `--override "..."` (`csa run` / `csa start`). Never set override on your own judgment; use it only when the user asked for more jobs in this conversation, or confirmed after you warned them and told them how much of the 5-hour window is left. It bypasses csa's caps and queueing; real usage-limit cooldowns, model and effort restrictions, login, depth and access still apply. See [configuration](docs/configuration.md#a-user-authorized-override).
 - Optional delegation rules. Preview a template with model tiers with `csa rules`, then choose whether to install it. See [Delegation rules](docs/delegation.md).
 - Mixing CLIs. A Claude Code session can hand a task to Codex, Gemini (through Antigravity) or OpenCode. The subagent gets the parent's MCP servers and instruction-file paths. OpenCode v2 needs no csa setup: it becomes available when `opencode` is on PATH, unless `[opencode] enabled = false` turns it off. It keeps your OpenCode default model, or uses `opencode/deepseek-v4.1-flash-free` when none is set. Free models are for personal projects only; see [OpenCode](docs/opencode.md).
-- Safety checks. `read` jobs get read-only tools. Claude and Codex `edit` jobs use their own review modes. Gemini workers run behind csa's fixed rules plus a chain of separate reviewer models (Claude Haiku, then Gemini Flash, by default), with Antigravity's sandbox for `edit` jobs. On supported Windows, OpenCode `edit` workers' shell commands run in csa's [MXC sandbox](#sandbox); the review gate applies fixed rules, then the reviewer chain. Ordinary builds and tests inside the sandbox can pass the fixed rules; other commands need review. Skipping permissions is an explicit choice per job.
+- Safety checks. `read` jobs get read-only tools. Claude and Codex `edit` jobs use their own review modes. Gemini workers run behind csa's fixed rules plus a chain of separate reviewer models (Claude Haiku, then Gemini 4 Hydrogen, by default), with Antigravity's sandbox for `edit` jobs. On supported Windows, OpenCode `edit` workers' shell commands run in csa's [MXC sandbox](#sandbox); the review gate applies fixed rules, then the reviewer chain. Ordinary builds and tests inside the sandbox can pass the fixed rules; other commands need review. Skipping permissions is an explicit choice per job.
 - Credentials stay with the vendor CLI. Model calls use your own login or provider configuration, including OpenCode's anonymous free models. csa does not copy credentials between runtimes.
 - Nothing to install besides Python 3.11. Pure standard library, with its own small MCP server.
 
@@ -106,8 +106,8 @@ If you're the agent, do this. No slash commands are needed.
    Ask whether the user wants it and which home and try-first models they want for each tier. If they agree, preview and install with their choices; otherwise skip it. For example:
 
    ```bash
-   csa rules --show --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 medium"
-   csa rules --install --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 medium"
+   csa rules --show --target claude --home-high "Opus 5.5" --try-low "Gemini 4 Hydrogen medium" --try-medium "Sol 6.2 medium"
+   csa rules --install --target claude --home-high "Opus 5.5" --try-low "Gemini 4 Hydrogen medium" --try-medium "Sol 6.2 medium"
    ```
 
    Use the user's models and the host they want. Ask for work folders if the user wants to list them with `--work-folder`. Nothing installs these rules without `--install`.

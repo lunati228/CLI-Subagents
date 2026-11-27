@@ -22,7 +22,7 @@ from cli_subagents.runtimes.codex import CodexRuntime
 
 STEPS = [[75, 4], [50, 3], [25, 2], [5, 1], [0, 0]]
 ARGON = "gemini-4-argon-high"
-FLASH = "gemini-3.8-flash-high"
+HYDROGEN = "gemini-4-hydrogen-high"
 
 
 class QuotaTests(TempHome):
@@ -54,7 +54,7 @@ class QuotaTests(TempHome):
             from cli_subagents.config import Account
             item.accounts = [Account(name, self.root / "homes" / name) for name in accounts_list]
             item.pools = [QuotaPool("argon", ["gemini-4-argon-*"], per_account=1, total=2, weekly_jobs=3, cooldown_minutes=120),
-                          QuotaPool("flash", ["gemini-3.8-flash-*"], total=6)]
+                          QuotaPool("hydrogen", ["gemini-4-hydrogen-*"], total=6)]
         save_config(config)
         if extra:
             with (self.home / "config.toml").open("a", encoding="utf-8") as handle:
@@ -213,7 +213,7 @@ class QuotaTests(TempHome):
         item.pools.append(QuotaPool("all", ["*"]))
         self.assertEqual(quota.pool_for(item, None).name, "argon")
         self.assertEqual(quota.pool_for(item, "gemini-4-argon-low").name, "argon")
-        self.assertEqual(quota.pool_for(item, FLASH).name, "flash")
+        self.assertEqual(quota.pool_for(item, HYDROGEN).name, "hydrogen")
         self.assertEqual(quota.pool_for(item, "other").name, "all")
         item.pools.pop()
         self.assertIsNone(quota.pool_for(item, "other"))
@@ -224,7 +224,7 @@ class QuotaTests(TempHome):
         self.assertEqual(self.admit().account, "a2")
         with self.assertRaisesRegex(limits.LimitError, "per_account in pool argon"):
             self.admit(account="a1")
-        self.assertEqual(self.admit(model=FLASH, account="a1").account, "a1")
+        self.assertEqual(self.admit(model=HYDROGEN, account="a1").account, "a1")
 
     def test_pools_apply_to_every_runtime(self):
         for name in ("claude", "codex", "antigravity"):
@@ -255,7 +255,7 @@ class QuotaTests(TempHome):
         self.job_record(account="a2", active=True)
         with self.assertRaisesRegex(limits.LimitError, "2 jobs across accounts .total in pool argon"):
             self.admit()
-        self.assertEqual(self.admit(model=FLASH).account, "a1")
+        self.assertEqual(self.admit(model=HYDROGEN).account, "a1")
 
     def test_unmatched_jobs_keep_the_account_wide_cap(self):
         config = self.configure(pools=True)
@@ -327,9 +327,9 @@ class QuotaTests(TempHome):
                 blocked, _, busy = accounts.acquire(item, model=ARGON, pinned="a3")
                 self.assertIsNone(blocked)
                 self.assertTrue(busy)
-                flash, _, _ = accounts.acquire(item, model=FLASH, pinned="a1")
-                self.assertIsNotNone(flash)
-                flash.release()
+                hydrogen, _, _ = accounts.acquire(item, model=HYDROGEN, pinned="a1")
+                self.assertIsNotNone(hydrogen)
+                hydrogen.release()
             finally:
                 second.release()
         finally:
@@ -350,7 +350,7 @@ class QuotaTests(TempHome):
         item = self.configure(pools=True).runtime("antigravity")
         accounts.set_pool_cooldown("antigravity", "a1", "argon", self.now+1000, "quota")
         self.assertEqual(self.admit().account, "a2")
-        self.assertEqual(self.admit(model=FLASH, account="a1").account, "a1")
+        self.assertEqual(self.admit(model=HYDROGEN, account="a1").account, "a1")
         with self.assertRaisesRegex(limits.LimitError, "usage limit until"):
             self.admit(account="a1")
         lease, _, _ = accounts.acquire(item, model=ARGON)
@@ -410,7 +410,7 @@ class QuotaTests(TempHome):
         record = accounts.load_usage("antigravity")["a1"]
         self.assertIsNone(accounts.cooldown_until(record))
         self.assertIsNotNone(accounts.pool_cooldown_until(record, "argon"))
-        self.assertEqual(self.admit(model=FLASH, account="a1").account, "a1")
+        self.assertEqual(self.admit(model=HYDROGEN, account="a1").account, "a1")
 
     def test_usage_errors_preserve_reset_times(self):
         for fields in ({"reset_time": "2026-10-20T12:00:00Z"}, {"resets_at": 1792497600}):
@@ -458,7 +458,7 @@ class QuotaTests(TempHome):
         self.assertNotIn("\n", line)
         self.assertIn("2 jobs at a time (max_jobs_by_room, 28% left", line)
         self.assertIn("Argon: 1 running of 1, 2 of 3 this week", line)
-        self.assertIn("Flash:", line)
+        self.assertIn("Hydrogen:", line)
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             cli.cmd_doctor(argparse.Namespace(runtime="antigravity", live=False))

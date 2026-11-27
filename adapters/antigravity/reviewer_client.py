@@ -10,7 +10,7 @@ from typing import Any
 from agy_pty import clean_terminal_output, run_pty
 from hook_command import hook_command, python_command_prefix
 
-REVIEWER_MODEL = "gemini-3.8-flash-high"
+REVIEWER_MODEL = "gemini-4-hydrogen-high"
 REVIEWER_EFFORT = "high"
 MAX_OBJECTIVE_CHARS = 4_000
 MAX_ACTION_CHARS = 12_000

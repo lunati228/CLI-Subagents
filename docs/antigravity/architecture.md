@@ -66,7 +66,7 @@ Hosts may add a prefix, for example `mcp__antigravity_agents__antigravity_delega
 | Tool | Arguments and behavior |
 |---|---|
 | `antigravity_delegate_model` | `prompt`, exact `model`, absolute project `cwd`; optional `effort`, `timeout_seconds`, `mode`, `add_dirs`, `return_mode`, `summary_max_bullets`. Runs synchronously. |
-| `antigravity_delegate_gemini` | `prompt`, `cwd`, common options. Pins `gemini-3.8-flash-high` at `high` effort. |
+| `antigravity_delegate_gemini` | `prompt`, `cwd`, common options. Pins `gemini-4-hydrogen-high` at `high` effort. |
 | `antigravity_delegate_opus` | `prompt`, `cwd`, common options. Pins `claude-opus-4-6-thinking`; effort left unset. |
 | `antigravity_delegate_gemini_async` | Same as the Gemini shortcut, but starts a background job. |
 | `antigravity_delegate_opus_async` | Same as the Opus shortcut, but starts a background job. |

@@ -39,7 +39,7 @@ DEFAULT_RETURN_MODE = "file_summary"
 SUMMARY_MARKER = "SUMMARY:"
 DETAILS_MARKER = "DETAILS:"
 OPUS_MODEL = "claude-opus-4-6-thinking"
-GEMINI_MODEL = "gemini-3.8-flash-high"
+GEMINI_MODEL = "gemini-4-hydrogen-high"
 GEMINI_EFFORT = "high"
 ASYNC_JOBS: dict[str, dict[str, Any]] = {}
 ASYNC_JOBS_LOCK = threading.Lock()
@@ -544,7 +544,7 @@ def antigravity_delegate_gemini(
     return_mode: str = DEFAULT_RETURN_MODE,
     summary_max_bullets: int = 5,
 ) -> dict[str, Any]:
-    """Use Gemini 3.8 Flash High at high effort for lighter delegated work."""
+    """Use Gemini 4 Hydrogen High at high effort for lighter delegated work."""
 
     return _run_antigravity(
         prompt=prompt,
@@ -690,7 +690,7 @@ def antigravity_delegate_gemini_async(
     return_mode: str = DEFAULT_RETURN_MODE,
     summary_max_bullets: int = 5,
 ) -> dict[str, Any]:
-    """Start Gemini 3.8 Flash High at high effort in the background for lighter work."""
+    """Start Gemini 4 Hydrogen High at high effort in the background for lighter work."""
 
     return _start_async_job(
         prompt=prompt,

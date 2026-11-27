@@ -42,7 +42,7 @@ The table is an example. Order the pools so your paid quota goes last on work, a
 
 | Tier | Work | Personal projects |
 |---|---|---|
-| low | the cheap builder or a small model on `<your-second-codex-account>`; a fast search model after asking (section 9) | the fast search model (for example Gemini Flash), a small model on `<your-second-codex-account>`, or a free cheap builder |
+| low | the cheap builder or a small model on `<your-second-codex-account>`; a fast search model after asking (section 9) | quick lookups and checks: the fast search model (for example Gemini 4 Hydrogen medium), then a small model on `<your-second-codex-account>`; code edits: a free cheap builder, then the small model |
 | medium | the cheap builder loop (section 6), then a strong model from another vendor (for example Sol 6.2 medium), then the main vendor | the same as on work |
 | high | a feature to build: the cheap builder loop with a strong orchestrator (section 6). Everything else: your strongest model at high (for example Opus 5.5), or the other vendor's at high if it is as strong (for example Sol 6.2) | the same as on work; the cheap builder loop only when the user asks for it |
 | xhigh | your strongest model at xhigh (for example Opus 5.5), or the other vendor's at xhigh if it is as strong (for example Sol 6.2) | the same as on work |
@@ -62,7 +62,8 @@ The table is an example. Order the pools so your paid quota goes last on work, a
 - **The user asked for speed:** the main vendor. Record the other vendor's speed here, for example: Codex measured at about 4x slower. A cheap builder loop also takes longer than one strong worker.
 - **Two strong models of about equal strength** (for example Opus 5.5 and Sol 6.2 at the same effort): take whichever has more room, unless you prefer one for UI and for code review outside the loop. Write that preference here, as an example setting: "prefer Opus 5.5 for UI and for code review outside the loop".
 - **Context size:** free models in an OpenCode or Antigravity pool may have 200K, so give them short jobs. A paid model with 1M gets long build sessions, repo-wide read-only sweeps, big diffs and log analysis.
-- **Fast small models** such as Gemini Flash may often hallucinate: made-up sites, wrong research claims. Check the sources of any fact or link from one before relying on it.
+- **Fast small models** differ a lot in how often they hallucinate. Some guess and make up sites; Gemini 4 Hydrogen mostly says when it doesn't know. Check the sources of any fact or link from one before relying on it, and ask wordy models for short answers.
+- **Small quotas:** on a plan whose quota refreshes only weekly (for example Google AI Plus), give that model quick jobs only: a quick check on GitHub, a quick web lookup, a quick lookup in code, or one small fix the brief spells out. No big documents or investigations.
 - **Reports are claims.** Before relying on a subagent's result, check the key facts it rests on yourself. That's reading, not another agent.
 
 ## 5. Pools and how to start them
@@ -80,7 +81,7 @@ A review or investigation that needs to run tests or try things out shouldn't be
 | Cheap reviewer, API account | `cli-subagents:cli-subagents-claude` with `account=<your-api-account>`, `model=haiku` | Billed per token to your own key. Set your own caps, and read section 10 first |
 | Second vendor, strong model | `cli-subagents:cli-subagents-codex` with `model=gpt-6.2-sol`, `effort=medium`, `high` or `xhigh` | `<your second vendor's account>`; for example Sol 6.2 |
 | Second vendor, small model on a second account | `cli-subagents:cli-subagents-codex` with `account=<your-second-codex-account>`, `model=gpt-6-luna` | A second, free account of the same vendor, offering only the small model. A GPT model, so its search reaches Reddit and forums like the strong one's |
-| Fast search model | `cli-subagents:cli-subagents-antigravity` with `model=gemini-3.8-flash-high` | Fast and plentiful, see section 4; for example Gemini 3.8 Flash |
+| Fast search model | `cli-subagents:cli-subagents-antigravity` with `model=gemini-4-hydrogen-medium` | See section 4; for example Gemini 4 Hydrogen. Mind the plan's quota |
 | Cheap builder, free | `cli-subagents:cli-subagents-opencode` with `model=opencode/deepseek-v4.1-flash-free`, `effort=max` | 200K context. A small daily limit per IP address, shared by parallel jobs, reset at UTC midnight. Use only this free model. CLI Subagents' docs call free models personal-only: check the terms before using one for work |
 | Cheap builder, a pool you pay for | examples: an OpenCode plan (`cli-subagents:cli-subagents-opencode` with `model=<your-plan-model>`); a second account of a CLI you pay for; or a pay-per-token key run inside Claude Code (`cli-subagents:cli-subagents-claude` with `account=<your-cheap-model-account>`, `model=<provider/model>`, `effort=max`), for example through OpenRouter | Context and limits are the plan's or the model's. With a key inside Claude Code, always name the model, never `opus`: without the account line the job then fails instead of running real Opus |
 
@@ -95,8 +96,8 @@ A review or investigation that needs to run tests or try things out shouldn't be
 - **GPT-6 Luna** (`gpt-6-luna`): a small, fast GPT model with the same Reddit and forum reach as Sol. Quick lookups and low work.
 - **Sonnet 5.5:** near-Opus results on well-scoped work at a lower cost per task, at medium only.
 - **Haiku 5.5:** cheap and fast, the weakest model of the main vendor.
-- **DeepSeek V4.1 Flash:** working alone, about Sonnet's level on routine coding, above Haiku and Gemini Flash. Nearly free.
-- **Gemini 3.8 Flash** (`gemini-3.8-flash-high`): fast and plentiful, often hallucinates.
+- **DeepSeek V4.1 Flash:** working alone, about Sonnet's level on routine coding, above Haiku. Nearly free.
+- **Gemini 4 Hydrogen** (`gemini-4-hydrogen-medium`, `-high`): Google's fast model, replacing Gemini 3.8 Flash. Low hallucination rate, very wordy, not a frontier model.
 
 ## 6. A cheap model building code
 
@@ -129,7 +130,7 @@ When a cheap model builds or changes code, the work runs as described in the `lo
 
 For a quick lookup of your own, the main vendor's WebFetch and WebSearch come first, with the `playwright-cli` fallback, as your global instructions say. Use a second-vendor CLI for web research: finding facts, whether a tool or project already exists, how an app grew or marketed itself, what people say on Reddit or forums. Their search reaches sites such as Reddit that block the main vendor's web tools and automated browsers. Always `access=read`, and ask for sources with URLs and dates.
 
-- Quick lookups (one fact, a few links, what one page or thread says): the fast search model (for example Gemini Flash), or the small model on your second-vendor account. Prefer the one whose search reaches Reddit and forums when the answer is there. Check whatever you rely on against the URLs. If one is refused, use the other.
+- Quick lookups (one fact, a few links, what one page or thread says): the fast search model (for example Gemini 4 Hydrogen), or the small model on your second-vendor account. Prefer the one whose search reaches Reddit and forums when the answer is there. Check whatever you rely on against the URLs. If one is refused, use the other.
 - Important, deep or many-source research: your strong second-vendor model at `high` (for example Sol 6.2). Never the fast search model for this.
 - YouTube: a fast search model finds videos and reads their title, channel, date and description, but can't watch them or read transcripts. Don't rely on it for what a video says.
 - Deciding how to build something from that research stays with the main vendor.

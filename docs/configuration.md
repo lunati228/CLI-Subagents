@@ -39,18 +39,18 @@ Antigravity and OpenCode `read` and `edit` jobs run behind csa's review gate. Fi
 
 The reviewers are tried in order. csa asks the next one only when the previous one gave no verdict: a usage limit, a missing login, binary or account, an error, a timeout or an answer that isn't the expected JSON. A verdict ends the chain. A denial is final, and so is an approval rated high or critical risk, which counts as a denial. When no reviewer gives a verdict, the action is denied. Each reviewer gets an even share of the time left for that check: 80 seconds per check for Antigravity (agy gives its hook 90) and 240 seconds per tool call for OpenCode (its plugin waits 300). Each reviewer is also capped at its own `timeout`, 75 seconds by default. The job's `review.jsonl` records which reviewer decided and why the ones before it didn't. The per-job decision cache remembers which reviewer gave each answer.
 
-The default chain is Claude Haiku first, then Gemini 3.8 Flash (low) through Antigravity. If a default reviewer's CLI isn't installed or set up, csa leaves it out without a warning. `csa doctor --runtime antigravity` and `--runtime opencode` list each reviewer as ready or skipped, with the reason. The same chain written out:
+The default chain is Claude Haiku first, then Gemini 4 Hydrogen (low) through Antigravity. If a default reviewer's CLI isn't installed or set up, csa leaves it out without a warning. `csa doctor --runtime antigravity` and `--runtime opencode` list each reviewer as ready or skipped, with the reason. The same chain written out:
 
 ```toml
 [[review.reviewers]]          # shared by the Antigravity and OpenCode gates
 provider = "claude"           # "claude", "antigravity" or "codex"
-model = "haiku"               # optional; defaults: haiku, gemini-3.8-flash-low, Codex's own default model
+model = "haiku"               # optional; defaults: haiku, gemini-4-hydrogen-low, Codex's own default model
 # account = "max-2"           # optional: an account of that provider (default: the primary)
 # timeout = 40                # optional: seconds for this reviewer (default 75, cut to its share of the time left)
 
 [[review.reviewers]]
 provider = "antigravity"
-model = "gemini-3.8-flash-low"
+model = "gemini-4-hydrogen-low"
 ```
 
 To give one gate its own chain, put the tables under that runtime instead, for example `[[opencode.reviewers]]`. Per-runtime tables replace the shared list for that gate. `reviewers = []` under `[review]` or a runtime turns the reviewers off. Only the fixed rules decide then, and everything they would hand to a reviewer is denied.
@@ -307,8 +307,8 @@ weekly_jobs = 3
 cooldown_minutes = 10080
 
 [[antigravity.pools]]
-name = "flash"
-models = ["gemini-3.8-flash-*"]
+name = "hydrogen"
+models = ["gemini-4-hydrogen-*"]
 total = 6
 ```
 

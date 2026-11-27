@@ -131,9 +131,9 @@ class ReviewerEntry:
         return "antigravity" if self.kind == "agy" else self.kind
 
 
-# Claude Haiku first, then Gemini 3.8 Flash (low) through Antigravity. Entries whose CLI
+# Claude Haiku first, then Gemini 4 Hydrogen (low) through Antigravity. Entries whose CLI
 # isn't installed or set up are skipped quietly (`csa doctor` lists them).
-DEFAULT_REVIEWERS = (ReviewerEntry("claude", "haiku"), ReviewerEntry("agy", "gemini-3.8-flash-low"))
+DEFAULT_REVIEWERS = (ReviewerEntry("claude", "haiku"), ReviewerEntry("agy", "gemini-4-hydrogen-low"))
 
 
 @dataclass

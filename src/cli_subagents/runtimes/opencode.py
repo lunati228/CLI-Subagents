@@ -357,7 +357,7 @@ class OpenCodeRuntime:
         reviewers: list[dict[str, Any]] = []
         if spec.access in ("read", "edit"):
             # The reviewer chain for what the fixed rules can't settle (default: Claude Haiku, then
-            # Gemini 3.8 Flash through agy on its own account's bare reviewer folder).
+            # Gemini 4 Hydrogen through agy on its own account's bare reviewer folder).
             reviewers = build_chain(config, job, warnings)
             parent = spec.parent or {}
             # The gate and reviewers are on the host, outside every command grant.

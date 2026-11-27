@@ -58,7 +58,7 @@ Quote model text that contains spaces. It can include an effort level.
 For example:
 
 ```bash
-csa rules --show --target claude --home-high "Opus 5.5" --try-low "Gemini 3.8 Flash high" --try-medium "Sol 6.2 medium" --try-high "Sol 6.2 high" --try-max none
+csa rules --show --target claude --home-high "Opus 5.5" --try-low "Gemini 4 Hydrogen medium" --try-medium "Sol 6.2 medium" --try-high "Sol 6.2 high" --try-max none
 ```
 
 These model names are examples. Choose models available in your CLIs.

@@ -38,7 +38,7 @@ class ThinksAloudTests(unittest.TestCase):
     def test_deepseek_models_paid_and_free_think_aloud(self):
         for model in (DEEPSEEK, "opencode/deepseek-v4.1-flash-free", "DeepSeek-V4"):
             self.assertTrue(thinks_aloud(model), model)
-        for model in (None, "", "claude-opus-5-5", "gpt-6.2-sol", "gemini-3.8-flash-high"):
+        for model in (None, "", "claude-opus-5-5", "gpt-6.2-sol", "gemini-4-hydrogen-high"):
             self.assertFalse(thinks_aloud(model), model)
 
     def test_status_text_collapses_a_repetition_loop(self):

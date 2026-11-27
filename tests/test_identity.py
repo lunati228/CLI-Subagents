@@ -177,9 +177,9 @@ class IdentityFollowTests(TempHome):
             self.assertIsNone(identity.relay_identity([INBOX]))  # only an old mention: not this call's relay
 
     def test_relay_found_by_job_id_on_later_calls_and_unknown_elsewhere(self):
-        job = self.job("antigravity", [{"event": "init", "init": {"model": "gemini-3.8-flash-high"}}])
+        job = self.job("antigravity", [{"event": "init", "init": {"model": "gemini-4-hydrogen-high"}}])
         [line] = self.first_block(job, marker=None)
-        self.assertEqual(line, "| I'm the relay agent for Antigravity gemini-3.8-flash-high. Read from the worker's "
+        self.assertEqual(line, "| I'm the relay agent for Antigravity gemini-4-hydrogen-high. Read from the worker's "
                                "start event. My own model isn't visible from here.")
         os.environ.pop("CLAUDE_CODE_SESSION_ID")
         self.assertIsNone(identity.relay_identity([INBOX]))

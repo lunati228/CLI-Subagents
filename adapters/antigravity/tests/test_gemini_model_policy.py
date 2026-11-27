@@ -28,22 +28,22 @@ def server_docstring(name):
 
 
 class GeminiModelPolicyTests(unittest.TestCase):
-    def test_delegate_uses_gemini_38_flash_high(self):
-        self.assertEqual(server_constant("GEMINI_MODEL"), "gemini-3.8-flash-high")
+    def test_delegate_uses_gemini_4_hydrogen_high(self):
+        self.assertEqual(server_constant("GEMINI_MODEL"), "gemini-4-hydrogen-high")
         self.assertEqual(server_constant("GEMINI_EFFORT"), "high")
 
-    def test_delegate_tool_descriptions_name_gemini_38_flash_high(self):
+    def test_delegate_tool_descriptions_name_gemini_4_hydrogen_high(self):
         self.assertIn(
-            "Gemini 3.8 Flash High at high effort",
+            "Gemini 4 Hydrogen High at high effort",
             server_docstring("antigravity_delegate_gemini"),
         )
         self.assertIn(
-            "Gemini 3.8 Flash High at high effort",
+            "Gemini 4 Hydrogen High at high effort",
             server_docstring("antigravity_delegate_gemini_async"),
         )
 
-    def test_fail_closed_reviewer_uses_gemini_38_flash_high(self):
-        self.assertEqual(REVIEWER_MODEL, "gemini-3.8-flash-high")
+    def test_fail_closed_reviewer_uses_gemini_4_hydrogen_high(self):
+        self.assertEqual(REVIEWER_MODEL, "gemini-4-hydrogen-high")
         self.assertEqual(REVIEWER_EFFORT, "high")
 
 

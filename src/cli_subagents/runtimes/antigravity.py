@@ -75,7 +75,7 @@ from cli_subagents.runtimes.reviewers import (  # noqa: F401
 MAX_PROMPT_CHARS = 24_000  # the prompt travels as one command-line argument
 
 # agy rejects --effort for third-party models ("--effort is not supported for model ...", checked with
-# claude-sonnet-4-6 in agy 1.4.0), and ids like gemini-3.8-flash-high or gpt-oss-120b-medium carry their level.
+# claude-sonnet-4-6 in agy 1.4.0), and ids like gemini-4-hydrogen-high or gpt-oss-120b-medium carry their level.
 EFFORT_SUFFIX_RE = re.compile(r"-(minimal|low|medium|high|xhigh|max)$")
 
 

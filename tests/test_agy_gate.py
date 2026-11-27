@@ -58,7 +58,7 @@ class GateJobTests(AgyHome):
         self.assertIn("--tools", claude_calls[0]["argv"])
         self.assertEqual(len(self.reviewer_records()), 1)
         entry = self.review_log(status)[0]
-        self.assertEqual((entry["source"], entry["reviewer"]), ("reviewer", "agy/gemini-3.8-flash-low"))
+        self.assertEqual((entry["source"], entry["reviewer"]), ("reviewer", "agy/gemini-4-hydrogen-low"))
         self.assertEqual(entry["failed"][0]["reviewer"], "claude/haiku")
 
     def review_log(self, status):
@@ -94,7 +94,7 @@ class GateJobTests(AgyHome):
         self.assertEqual(reviews[0]["env"].get("AGY_REVIEW_ROLE"), "reviewer")
         self.assertNotIn("AGY_REVIEW_CONTEXT", reviews[0]["env"])
         self.assertEqual(reviews[0]["argv"][reviews[0]["argv"].index("--mode") + 1], "plan")
-        self.assertIn("gemini-3.8-flash-low", reviews[0]["argv"])
+        self.assertIn("gemini-4-hydrogen-low", reviews[0]["argv"])
         # The reviewer runs from its own bare folder: gate-only hooks, no MCP servers.
         reviewer_home = self.home / "homes" / "antigravity" / ".reviewer" / "primary"
         self.assertEqual(Path(reviews[0]["env"]["HOME"]), reviewer_home)

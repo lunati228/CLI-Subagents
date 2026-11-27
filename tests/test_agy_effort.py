@@ -12,7 +12,7 @@ class TakesEffortTests(unittest.TestCase):
         self.assertTrue(takes_effort("gemini-4-argon"))
 
     def test_ids_with_a_level_do_not(self):
-        for model in ("gemini-3.8-flash-high", "gemini-4-argon-medium", "gpt-oss-120b-medium", "gemini-3.8-flash-low"):
+        for model in ("gemini-4-hydrogen-high", "gemini-4-argon-medium", "gpt-oss-120b-medium", "gemini-4-hydrogen-low"):
             self.assertFalse(takes_effort(model), model)
 
     def test_third_party_models_do_not(self):

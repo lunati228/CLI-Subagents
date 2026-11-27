@@ -20,7 +20,7 @@ from cli_subagents.fsutil import make_private_dir
 
 REVIEW_TIMEOUT = 75  # seconds for one reviewer call, before the chain's time budget cuts it
 CLAUDE_REVIEWER_MODEL = "haiku"
-AGY_REVIEWER_MODEL = "gemini-3.8-flash-low"
+AGY_REVIEWER_MODEL = "gemini-4-hydrogen-low"
 # Seconds the whole chain may take for one gate check. agy gives its hook 90 s
 # (agy_review.install.HOOK_TIMEOUT); OpenCode's plugin waits REVIEW_HOOK_SECONDS.
 AGY_REVIEW_BUDGET = 80

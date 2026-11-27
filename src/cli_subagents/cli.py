@@ -772,6 +772,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse csa's arguments the same way on every supported Python."""
+
+    parser = build_parser()
+    args, unknown = parser.parse_known_args(argv)
+    # Python 3.11's argparse fills `message`'s optional text before later options, so in
+    # `csa message JOB --follow -` the trailing text comes back unparsed. Take it back here.
+    if (args.command == "message" and args.text is None and len(unknown) == 1
+            and (unknown[0] == "-" or not unknown[0].startswith("-"))):
+        args.text = unknown.pop()
+    if unknown:
+        parser.error("unrecognized arguments: " + " ".join(unknown))
+    return args
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     for stream in (sys.stdout, sys.stderr):
@@ -782,15 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["launch"] and "--" in argv:
         index = argv.index("--")
         argv, extra = argv[:index], argv[index + 1 :]
-    parser = build_parser()
-    args, unknown = parser.parse_known_args(argv)
-    # Python 3.11's argparse fills `message`'s optional text before later options, so in
-    # `csa message JOB --follow -` the trailing text comes back unparsed. Take it back here.
-    if (args.command == "message" and args.text is None and len(unknown) == 1
-            and (unknown[0] == "-" or not unknown[0].startswith("-"))):
-        args.text = unknown.pop()
-    if unknown:
-        parser.error("unrecognized arguments: " + " ".join(unknown))
+    args = parse_args(argv)
     if getattr(args, "csa_home", None):
         os.environ["CLI_SUBAGENTS_HOME"] = args.csa_home
     if args.command == "hook":

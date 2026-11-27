@@ -62,7 +62,7 @@ The table is an example. Order the pools so your paid quota goes last on work, a
 - **The user asked for speed:** the main vendor. Record the other vendor's speed here, for example: Codex measured at about 4x slower. A cheap builder loop also takes longer than one strong worker.
 - **Two strong models of about equal strength** (for example Opus 5.5 and Sol 6.2 at the same effort): take whichever has more room, unless you prefer one for UI and for code review outside the loop. Write that preference here, as an example setting: "prefer Opus 5.5 for UI and for code review outside the loop".
 - **Context size:** free models in an OpenCode or Antigravity pool may have 200K, so give them short jobs. A paid model with 1M gets long build sessions, repo-wide read-only sweeps, big diffs and log analysis.
-- **Fast small models** differ a lot in how often they hallucinate. Some guess and make up sites; Gemini 4 Hydrogen mostly says when it doesn't know. Check the sources of any fact or link from one before relying on it, and ask wordy models for short answers.
+- **Fast small models** differ a lot in how often they hallucinate. Some guess and make up sites; Gemini 4 Hydrogen mostly says when it doesn't know. Check the sources of any fact or link from one before relying on it.
 - **Small quotas:** on a plan whose quota refreshes only weekly (for example Google AI Plus), give that model quick jobs only: a quick check on GitHub, a quick web lookup, a quick lookup in code, or one small fix the brief spells out. No big documents or investigations.
 - **Reports are claims.** Before relying on a subagent's result, check the key facts it rests on yourself. That's reading, not another agent.
 
@@ -97,7 +97,7 @@ A review or investigation that needs to run tests or try things out shouldn't be
 - **Sonnet 5.5:** near-Opus results on well-scoped work at a lower cost per task, at medium only.
 - **Haiku 5.5:** cheap and fast, the weakest model of the main vendor.
 - **DeepSeek V4.1 Flash:** working alone, about Sonnet's level on routine coding, above Haiku. Nearly free.
-- **Gemini 4 Hydrogen** (`gemini-4-hydrogen-medium`, `-high`): Google's fast model, replacing Gemini 3.8 Flash. Low hallucination rate, very wordy, not a frontier model.
+- **Gemini 4 Hydrogen** (`gemini-4-hydrogen-medium`, `-high`): Google's fast model, replacing Gemini 3.8 Flash. Low hallucination rate, not a frontier model.
 
 ## 6. A cheap model building code
 

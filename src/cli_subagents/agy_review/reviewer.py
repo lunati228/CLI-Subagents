@@ -207,6 +207,8 @@ def ask_claude(config: dict[str, Any], prompt: str) -> str:
     ]
     if config.get("model"):
         argv += ["--model", str(config["model"])]
+    if config.get("effort"):
+        argv += ["--effort", str(config["effort"])]
     timeout = float(config.get("timeout") or DEFAULT_TIMEOUT)
     output = _run(argv, env=reviewer_env(config), cwd=str(config.get("work_dir") or os.getcwd()), stdin=prompt, timeout=timeout)
     start = output.find("{")
@@ -237,7 +239,7 @@ def codex_argv(config: dict[str, Any]) -> list[str]:
     argv = [
         *config.get("command"), "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
         "--ignore-rules", "-s", "read-only", "-c", 'approval_policy="never"', "-c", 'web_search="disabled"',
-        "-c", 'model_reasoning_effort="low"', "-c", "mcp_servers={}",
+        "-c", f'model_reasoning_effort="{config.get("effort") or "low"}"', "-c", "mcp_servers={}",
     ]
     for feature in CODEX_OFF_FEATURES:
         argv += ["-c", f"features.{feature}=false"]

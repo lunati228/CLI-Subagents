@@ -70,6 +70,8 @@ def build_prompt(request: dict[str, Any], policy: str | None = None) -> str:
         "access": request.get("access"),
         "platform": request.get("platform"),
         "workspace folders": request.get("workspaces"),
+        **({"the agent's own scratch folder (its notes and the scripts it wrote, not agent settings)": request["scratch"]}
+           if request.get("scratch") else {}),
         "commands run in an OS sandbox": request.get("sandboxed"),
         **({"command network if approved": request["network_if_approved"]} if "network_if_approved" in request else {}),
         **({"readable git configuration (may contain tokens)": request["readable_git_configs"]}

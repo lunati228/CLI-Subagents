@@ -226,18 +226,34 @@ def _command(args: dict[str, Any], scope: Scope) -> Verdict:
     if reason:
         return deny(f"this command is not allowed: {reason}")
     named = commands.path_words(line)
+    # A word that only starts like a network path (\\server\share) is never opened. One that names a
+    # server or device is refused; separators alone (`//`, `'\\'`) name nothing; anything else (a
+    # regular expression such as '\\\.tmp\\') goes to the reviewer.
+    odd_network = False
     for word in named:
+        kind = paths.network_kind(word)
+        if kind == "share" and not paths.inside_any(word, [*scope.workspaces, *scope.artifacts, *scope.read_paths]):
+            return deny(f"the command names a path that is off limits: {paths.NETWORK_REASON}")
+        if kind in ("empty", "odd"):
+            odd_network = odd_network or kind == "odd"
+            continue
         _resolved, secret = scope.check(word, base=cwd)
         if secret:
             return deny(f"the command names a path that is off limits: {secret}")
     # A wildcard that matches a secret file (cat .en*) is not plainly safe: the reviewer decides.
-    wildcard_secret = any(scope.check(match, base=cwd)[1] for match in commands.path_words(line, cwd) if match not in named)
+    wildcard_secret = any(scope.check(match, base=cwd)[1] for match in commands.path_words(line, cwd)
+                          if match not in named and paths.network_kind(match) is None)
     reason = commands.destructive_delete(line, cwd=cwd, inside_workspace=scope.writable)
     if reason:
         return deny(f"this command is not allowed: {reason}")
-    suspicious = commands.suspicious(line) or ("a wildcard in it matches a key or secrets file" if wildcard_secret else None)
+    suspicious = (commands.suspicious(line)
+                  or ("a wildcard in it matches a key or secrets file" if wildcard_secret else None)
+                  or ("it contains text that looks like a Windows network path (\\\\server\\share)" if odd_network else None))
 
     def path_ok(value: str) -> bool:
+        kind = paths.network_kind(value)
+        if kind is not None:
+            return kind == "empty"
         resolved, secret = scope.check(value, base=cwd)
         return secret is None and scope.readable(resolved)
 
@@ -261,7 +277,7 @@ def _command(args: dict[str, Any], scope: Scope) -> Verdict:
     if sandboxed and scope.access == "edit" and not suspicious:
         if not scope.writable(cwd):
             return review("the command runs outside the workspace")
-        if commands.touches_protected(line):
+        if commands.touches_protected(_without_folders(line, scope.artifacts)):
             return review("the command names git internals, hooks or agent settings, which the sandbox doesn't protect")
         return approve("runs in agy's sandbox (no network, writes only to the workspace and temp folders)")
     if _bypass(args) and scope.sandbox:
@@ -269,6 +285,21 @@ def _command(args: dict[str, Any], scope: Scope) -> Verdict:
     if suspicious:
         return review(f"the command looks risky: {suspicious}")
     return review("the command isn't plainly read-only" + ("" if scope.access == "edit" else " and this is a read-only job"))
+
+
+def _without_folders(line: str, folders: list[str]) -> str:
+    """The command with every mention of these folders taken out (any slash style or case).
+
+    The worker's own scratch folder lies under its agent home (`...\\.gemini\\antigravity-cli\\brain\\<id>`),
+    so its path contains `.gemini`; a script the worker saved there is its own, not agent settings.
+    """
+
+    for folder in folders:
+        if not folder:
+            continue
+        pattern = re.escape(folder.replace("\\", "/")).replace("/", r"[\\/]+")
+        line = re.sub(pattern, " ", line, flags=re.IGNORECASE)
+    return line
 
 
 def _bypass(args: dict[str, Any]) -> bool:

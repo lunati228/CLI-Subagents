@@ -222,6 +222,31 @@ def network_path(path: str) -> bool:
 
 NETWORK_REASON = "it is a network or device path, which the gate doesn't open"
 
+# \\server\share (any number of leading separators, a host name after them) and the device
+# namespaces \\?\, \\.\ and \??\. Folded text, as network_path makes it.
+_SHARE_RE = re.compile(r"^\\{2,}[\w$][\w.$-]*(\\|$)")
+_DEVICE_RE = re.compile(r"^(\\\\[?.](\\|$)|\\\?\?\\)")
+
+
+def network_kind(path: str) -> str | None:
+    """How a word that network_path flags looks, for the command rule (None when it isn't flagged).
+
+    "share": it names a server or device (\\\\server\\share, \\\\?\\..., \\??\\...).
+    "empty": only separators, such as `//` (floor division) or `'\\\\'` (an escaped backslash):
+    no server is named, so nothing can be reached.
+    "odd": anything else that starts like one, such as a regular expression (`\\\\\\.tmp\\\\`).
+    File tools refuse every kind; a command word of kind "odd" goes to the reviewer instead.
+    """
+
+    if not network_path(path):
+        return None
+    text = str(path).strip().strip("\"'").replace("/", "\\").casefold()
+    if not text.strip("\\"):
+        return "empty"
+    if _DEVICE_RE.match(text) or _SHARE_RE.match(text):
+        return "share"
+    return "odd"
+
 
 def check(value: str, *, base: str | None, homes: Iterable[str],
           trusted: Iterable[str] = ()) -> tuple[str, str, str | None]:

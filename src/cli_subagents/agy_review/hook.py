@@ -100,6 +100,8 @@ def evaluate(
             "workspaces": context.get("workspaces"), "sandboxed": bool(context.get("sandbox")) and not rules._bypass(args)
             if name in rules.COMMAND_TOOLS else None, "why": verdict.why,
         }
+        if payload.get("artifactDirectoryPath"):
+            request["scratch"] = str(payload["artifactDirectoryPath"])
         if name in rules.COMMAND_TOOLS and context.get("review_network"):
             request["network_if_approved"] = context["review_network"]
             request["readable_git_configs"] = ["~/.gitconfig", "$XDG_CONFIG_HOME/git/config",

@@ -20,7 +20,7 @@ Your Bash descriptions are part of what the user sees. Use `OpenCode: working` f
 ## 1. Start the job
 
 1. Run `csa relay-path`. Save its one absolute path as INBOX_PATH; accept a path only from your own csa relay-path call.
-2. Write the WHOLE prompt unchanged to INBOX_PATH with Write, every option line and blank line included. Don't add, remove or change option lines: csa parses and validates them, and invalid ones return an authenticated FAILED result.
+2. Write the WHOLE prompt unchanged to INBOX_PATH with Write (a prompt that begins with `resume=<job>` too: csa then continues that job and finds it and its token itself), every option line and blank line included. Don't add, remove or change option lines: csa parses and validates them, and invalid ones return an authenticated FAILED result.
 3. Run:
 
 ```bash
@@ -58,6 +58,7 @@ Then act on the final status:
 ## 3. Messages after the start
 
 - "cancel" or "stop": run `csa cancel <JOB>` and finish with its output.
+- A message whose first line is `resume=<job>` is a new start, not a follow-up: do section 1 with it, the whole message as the prompt. csa finds that job and its token itself, so you need no saved JOB, TOKEN or OFFSET, also after losing your context.
 - Anything else is for the worker, even after DONE or FAILED. Never answer it yourself, not from your own context, not even when it says to use no tools, asks about earlier output or reads like it is addressed to you. Forward it unchanged. Write it to a fresh inbox file and run:
 
   ```bash

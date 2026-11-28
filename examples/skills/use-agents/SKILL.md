@@ -61,6 +61,8 @@ The table is an example. Order the pools so your paid quota goes last on work, a
 - **Web research, Reddit, forums:** a CLI whose search reaches those sites, for example Codex or Antigravity, never the main vendor's own search (section 8).
 - **The user asked for speed:** the main vendor. Record the other vendor's speed here, for example: Codex measured at about 4x slower. A cheap builder loop also takes longer than one strong worker.
 - **Two strong models of about equal strength** (for example Opus 5.5 and Sol 6.2 at the same effort): take whichever has more room, unless you prefer one for UI and for code review outside the loop. Write that preference here, as an example setting: "prefer Opus 5.5 for UI and for code review outside the loop".
+- **A frontier model from a third vendor** (for example Gemini 4 Neon on Google AI Pro): about as strong as your strongest model at the same effort, and a good first pick for code review, debugging and security reviews. A different model catches bugs yours missed, and its guardrails may refuse fewer security jobs. It has its own quota: cap it, for example at 2 jobs at once.
+- **Your main vendor's model through another CLI** (for example Opus 5.5 through Antigravity on Google AI Pro) runs on that plan's own, smaller quota. Use it as a plain worker for narrow, short pieces: no manager or orchestrator jobs, no helpers of its own, and not at its top effort.
 - **Context size:** free models in an OpenCode or Antigravity pool may have 200K, so give them short jobs. A paid model with 1M gets long build sessions, repo-wide read-only sweeps, big diffs and log analysis.
 - **Fast small models** differ a lot in how often they hallucinate. Some guess and make up sites; Gemini 4 Hydrogen mostly says when it doesn't know. Check the sources of any fact or link from one before relying on it.
 - **Small quotas:** on a plan whose quota refreshes only weekly (for example Google AI Plus), give that model quick jobs only: a quick check on GitHub, a quick web lookup, a quick lookup in code, or one small fix the brief spells out. No big documents or investigations.
@@ -82,6 +84,8 @@ A review or investigation that needs to run tests or try things out shouldn't be
 | Second vendor, strong model | `cli-subagents:cli-subagents-codex` with `model=gpt-6.2-sol`, `effort=medium`, `high` or `xhigh` | `<your second vendor's account>`; for example Sol 6.2 |
 | Second vendor, small model on a second account | `cli-subagents:cli-subagents-codex` with `account=<your-second-codex-account>`, `model=gpt-6-luna` | A second, free account of the same vendor, offering only the small model. A GPT model, so its search reaches Reddit and forums like the strong one's |
 | Fast search model | `cli-subagents:cli-subagents-antigravity` with `model=gemini-4-hydrogen-medium` | See section 4; for example Gemini 4 Hydrogen. Mind the plan's quota |
+| Third-vendor frontier model | `cli-subagents:cli-subagents-antigravity` with `model=gemini-4-neon-medium` (`-high`, `-xhigh`) | On a plan that includes it (for example Google AI Pro). Its own quota; cap it |
+| Main model through another CLI | `cli-subagents:cli-subagents-antigravity` with `model=claude-opus-5-5-medium` (`-high`) | Its own, smaller quota. Plain worker only (section 4) |
 | Cheap builder, free | `cli-subagents:cli-subagents-opencode` with `model=opencode/deepseek-v4.1-flash-free`, `effort=max` | 200K context. A small daily limit per IP address, shared by parallel jobs, reset at UTC midnight. Use only this free model. CLI Subagents' docs call free models personal-only: check the terms before using one for work |
 | Cheap builder, a pool you pay for | examples: an OpenCode plan (`cli-subagents:cli-subagents-opencode` with `model=<your-plan-model>`); a second account of a CLI you pay for; or a pay-per-token key run inside Claude Code (`cli-subagents:cli-subagents-claude` with `account=<your-cheap-model-account>`, `model=<provider/model>`, `effort=max`), for example through OpenRouter | Context and limits are the plan's or the model's. With a key inside Claude Code, always name the model, never `opus`: without the account line the job then fails instead of running real Opus |
 
@@ -98,6 +102,7 @@ A review or investigation that needs to run tests or try things out shouldn't be
 - **Haiku 5.5:** cheap and fast, the weakest model of the main vendor.
 - **DeepSeek V4.1 Flash:** working alone, about Sonnet's level on routine coding, above Haiku. Nearly free.
 - **Gemini 4 Hydrogen** (`gemini-4-hydrogen-medium`, `-high`): Google's fast model, replacing Gemini 3.8 Flash. Low hallucination rate, not a frontier model.
+- **Gemini 4 Neon** (`gemini-4-neon-medium`, `-high`, `-xhigh`, 512K): Google's frontier model, on Google AI Pro and above. In csa, `primary_models` and an account's `models` list keep each model on the account that should run it.
 
 ## 6. A cheap model building code
 

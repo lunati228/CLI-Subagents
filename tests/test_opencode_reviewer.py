@@ -107,7 +107,7 @@ class ReviewerConfigTests(OpenCodeHome):
             ({"oc": 'reviewer = "gpt"'}, "reviewer must be one of"),
             ({"rest": '[[opencode.reviewers]]\nprovider = "opencode"'}, "OpenCode can't be a reviewer"),
             ({"rest": '[[review.reviewers]]\nprovider = "gemini"'}, "provider must be"),
-            ({"rest": '[[review.reviewers]]\nprovider = "claude"\neffort = "low"'}, "unknown keys"),
+            ({"rest": '[[review.reviewers]]\nprovider = "claude"\ntemperature = 0'}, "unknown keys"),
             ({"rest": '[[review.reviewers]]\nprovider = "claude"\ntimeout = 5'}, "timeout"),
             ({"review": 'reviewer = "claude"'}, "takes only reviewers"),
             ({"rest": '[[claude.reviewers]]\nprovider = "claude"'}, "no review gate"),
@@ -192,6 +192,17 @@ class ReviewerLaunchTests(OpenCodeHome):
         self.assertEqual((entry["kind"], entry["model"], entry["timeout"], entry["command"], entry["args"]),
                          ("codex", "gpt-6-luna", 30, fake, []))
         self.assertEqual(entry["env"], {"CODEX_HOME": str(codex_home)})
+        self.assertNotIn("effort", entry)
+
+    def test_reviewer_effort_reaches_the_gate_context(self):
+        (self.root / "parent-codex").mkdir()
+        fake = [sys.executable, "fake-codex.py"]
+        self.config.reviewers = [E("claude", "haiku", None, None, "medium"), E("codex", "gpt-6-luna", None, None, "medium")]
+        with patch.dict(os.environ, {"CLI_SUBAGENTS_CODEX_COMMAND": json.dumps(fake)}):
+            context, _settings = self.context_of(self.launch(access="edit"))
+        claude, codex = context["reviewers"]
+        self.assertEqual((claude["kind"], claude["effort"]), ("claude", "medium"))
+        self.assertEqual((codex["kind"], codex["effort"]), ("codex", "medium"))
 
 
 class GateBase(OpenCodeHome):

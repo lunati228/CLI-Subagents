@@ -58,6 +58,8 @@ def _claude(entry: ReviewerEntry, base: dict[str, Any], *, home: str | None, uns
     if home:
         env.update(HOME=home, USERPROFILE=home)
     result = {**base, "command": command, "model": entry.model or CLAUDE_REVIEWER_MODEL, "env": env}
+    if entry.effort:
+        result["effort"] = entry.effort
     unset = list(unset_env)
     if unset:
         result["unset_env"] = unset
@@ -115,6 +117,8 @@ def _codex(entry: ReviewerEntry, base: dict[str, Any], *, home: str | None, unse
     result = {**base, "command": command, "args": runtime._auth_args(account), "env": env}
     if entry.model:
         result["model"] = entry.model
+    if entry.effort:
+        result["effort"] = entry.effort
     unset = [key for key in unset_env if key != "CODEX_HOME"]
     if unset:
         result["unset_env"] = unset

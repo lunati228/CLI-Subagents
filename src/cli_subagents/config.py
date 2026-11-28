@@ -125,11 +125,14 @@ class ReviewerEntry:
     model: str | None = None  # None: the provider's reviewer default
     account: str | None = None  # an account of that provider; None: the primary (agy in an Antigravity job: the job's own)
     timeout: int | None = None  # seconds for this reviewer; None: an even share of the gate's time
+    effort: str | None = None  # claude and codex only; None: the reviewer's default (claude's CLI default, codex low)
 
     @property
     def provider(self) -> str:
         return "antigravity" if self.kind == "agy" else self.kind
 
+
+REVIEW_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
 
 # Claude Haiku first, then Gemini 4 Hydrogen (low) through Antigravity. Entries whose CLI
 # isn't installed or set up are skipped quietly (`csa doctor` lists them).
@@ -394,13 +397,13 @@ def _account_spend(runtime: str, account: str, item: dict[str, Any]) -> dict[str
 
 
 def _reviewer_entries(section: str, value: Any) -> list[ReviewerEntry]:
-    """[[<section>.reviewers]] tables: provider (claude, antigravity or codex), optional model, account, timeout."""
+    """[[<section>.reviewers]] tables: provider (claude, antigravity or codex), optional model, account, timeout, effort."""
 
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
         raise ValueError(f"[{section}] reviewers must be a list of tables ([[{section}.reviewers]])")
     entries = []
     for index, item in enumerate(value, 1):
-        unknown = set(item) - {"provider", "model", "account", "timeout"}
+        unknown = set(item) - {"provider", "model", "account", "timeout", "effort"}
         if unknown:
             raise ValueError(f"[{section}] reviewer {index}: unknown keys {sorted(unknown)}")
         provider = str(item.get("provider") or "").strip().lower()
@@ -410,8 +413,16 @@ def _reviewer_entries(section: str, value: Any) -> list[ReviewerEntry]:
         timeout = item.get("timeout")
         if timeout is not None and (type(timeout) is not int or timeout < 10):
             raise ValueError(f"[{section}] reviewer {index}: timeout must be a whole number of seconds, at least 10")
+        effort = _opt_text(item.get("effort"))
+        if effort is not None:
+            effort = effort.lower()
+            if provider == "antigravity":
+                raise ValueError(f"[{section}] reviewer {index}: antigravity reviewers take their level from the "
+                                 "model ID (for example gemini-4-hydrogen-medium), not from effort")
+            if effort not in REVIEW_EFFORTS:
+                raise ValueError(f"[{section}] reviewer {index}: effort must be one of {', '.join(REVIEW_EFFORTS)}")
         entries.append(ReviewerEntry(REVIEW_PROVIDERS[provider], _opt_text(item.get("model")),
-                                     _opt_text(item.get("account")), timeout))
+                                     _opt_text(item.get("account")), timeout, effort))
     return entries
 
 
@@ -625,7 +636,8 @@ def _reviewer_lines(section: str, entries: list[ReviewerEntry]) -> list[str]:
     lines: list[str] = []
     for entry in entries:
         lines += ["", f"[[{section}.reviewers]]", f"provider = {_toml_value(entry.provider)}"]
-        for key, value in (("model", entry.model), ("account", entry.account), ("timeout", entry.timeout)):
+        for key, value in (("model", entry.model), ("account", entry.account), ("timeout", entry.timeout),
+                           ("effort", entry.effort)):
             if value is not None:
                 lines.append(f"{key} = {_toml_value(value)}")
     return lines

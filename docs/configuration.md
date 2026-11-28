@@ -47,6 +47,8 @@ provider = "claude"           # "claude", "antigravity" or "codex"
 model = "haiku"               # optional; defaults: haiku, gemini-4-hydrogen-low, Codex's own default model
 # account = "max-2"           # optional: an account of that provider (default: the primary)
 # timeout = 40                # optional: seconds for this reviewer (default 75, cut to its share of the time left)
+# effort = "medium"           # optional, claude and codex only: reasoning level (default: claude's CLI default, codex low).
+#                             # Antigravity reviewers take it from the model ID, e.g. gemini-4-hydrogen-medium
 
 [[review.reviewers]]
 provider = "antigravity"

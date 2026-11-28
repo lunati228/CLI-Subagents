@@ -18,7 +18,8 @@ environment. Keys:
     trusted_mcp_servers  MCP servers whose tools need no review
     reviewers            the review chain, tried in order: [{"kind": "agy"|"claude"|"codex", "command": [...],
                           "args": [...], "model": ..., "account": ..., "env": {...}, "unset_env": [...],
-                          "timeout": 75, "work_dir": ...}, ...]; empty = no reviewer
+                          "timeout": 75, "effort": "medium", "work_dir": ...}, ...]; empty = no reviewer
+                          (effort: claude and codex only, one of EFFORTS)
     reviewer             the older one-reviewer form ({"kind": "off"} or one entry), used without `reviewers`
     review_budget        seconds the whole chain may take for one check (default 80, inside agy's 90 s hook limit)
     log, cache           files for the decision log and the decision cache
@@ -29,6 +30,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+
+# Reasoning levels a claude or codex reviewer may be given (the package's config validates the same list).
+EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
 
 VERSION = 1
 MAX_BYTES = 256 * 1024
@@ -71,6 +75,8 @@ def validate(data: Any) -> dict[str, Any]:
         _strings(item.get("args"), "reviewer.args")
         if not isinstance(item.get("env") or {}, dict):
             raise ContextError("reviewer.env must be an object")
+        if item.get("effort") is not None and item.get("effort") not in EFFORTS:
+            raise ContextError("reviewer.effort must be one of " + ", ".join(EFFORTS))
     if any(item.get("kind") == "off" for item in chain):
         raise ContextError("reviewers can't contain kind off; use an empty list")
     budget = data.get("review_budget")

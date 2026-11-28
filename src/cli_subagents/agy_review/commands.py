@@ -293,6 +293,9 @@ MAX_GLOB_MATCHES = 200
 GLOB_SAFE_PROGRAMS = {"ls", "dir", "gci", "get-childitem"}
 
 
+WEB_URL_RE = re.compile(r"^https?://[^/\\\s]", re.IGNORECASE)
+
+
 def path_words(command: str, cwd: str | None = None) -> list[str]:
     """Every word of a command that may name a file (for the secret check), quoted or not.
 
@@ -309,7 +312,11 @@ def path_words(command: str, cwd: str | None = None) -> list[str]:
                 if not value:
                     continue
                 candidates = [value]
-                if ":" in value and not re.match(r"^[a-zA-Z]:[\\/]", value):
+                # `rev:path` adds the path part. A web URL's part after the colon is `//host/...`,
+                # which reads as a Windows share (\\host\share) and would be refused, so an http(s)
+                # URL written with forward slashes stays whole. smb://, file:// and backslash
+                # spellings still add it, and those stay refused.
+                if ":" in value and not re.match(r"^[a-zA-Z]:[\\/]", value) and not WEB_URL_RE.match(value):
                     candidates.append(value.split(":", 1)[1])
                 for candidate in candidates:
                     if candidate:

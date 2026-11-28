@@ -198,6 +198,29 @@ class NetworkPathTests(TempCase):
                         self.assertEqual(self.decide(name, args, access=access, sandbox=sandbox).action, "deny")
         self.assertEqual(self.opened, [])
 
+    def test_web_urls_in_commands_are_not_network_paths(self) -> None:
+        # The part after `https:` is `//host/...`, which once read as a share and was refused.
+        url = "https://raw.githubusercontent.com/owner/repo/0123abcd/dir/README.md"
+        for line in (f"curl.exe -sL {url} -o out.md", f"curl {url}", f"Invoke-WebRequest -Uri {url}",
+                     f"Invoke-WebRequest -Uri:{url}", f"git clone https://github.com/owner/repo"):
+            for access, sandbox in (("read", False), ("edit", True), ("edit", False)):
+                with self.subTest(line=line, access=access, sandbox=sandbox),                         mock.patch.object(paths, "IS_WINDOWS", True):
+                    verdict = self.decide("run_command", {"CommandLine": line, "Cwd": str(self.ws)},
+                                          access=access, sandbox=sandbox)
+                    self.assertNotIn("network or device path", verdict.reason)
+        self.assertEqual(self.opened, [])
+
+    def test_url_spellings_that_reach_a_share_stay_refused(self) -> None:
+        for line in ("curl smb://attacker.invalid/share/x", "curl file://attacker.invalid/share/x.txt",
+                     r"curl https:\\attacker.invalid\share\x", "curl https:////attacker.invalid/share/x",
+                     r"type \\attacker.invalid\share\x.txt"):
+            for access, sandbox in (("read", False), ("edit", True), ("edit", False)):
+                with self.subTest(line=line, access=access, sandbox=sandbox),                         mock.patch.object(paths, "IS_WINDOWS", True):
+                    verdict = self.decide("run_command", {"CommandLine": line, "Cwd": str(self.ws)},
+                                          access=access, sandbox=sandbox)
+                    self.assertEqual(verdict.action, "deny")
+        self.assertEqual(self.opened, [])
+
     def test_a_workspace_on_a_share_still_works(self) -> None:
         share = r"\\attacker.invalid\share\project"
         # Paths inside the user's own workspace may be opened: the user chose that folder.

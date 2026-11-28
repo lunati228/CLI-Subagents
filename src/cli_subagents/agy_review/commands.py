@@ -137,7 +137,10 @@ _DENY_PATTERNS: list[tuple[str, str]] = [
      "it creates a scheduled task, service or other persistence"),
     (r"\binvoke-expression\b|\biex\b|-encodedcommand\b|frombase64string"
      r"|\b(powershell|pwsh)(\.exe)?\b[^|]*\s-(e|ec|en|enc|enco|encod|encode|encoded)\s"
-     r"|\b(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]*\|\s*(sh|bash|zsh|python[0-9.]*|node|iex|pwsh|powershell)\b",
+     # A download piped into an interpreter runs it, unless the interpreter gets its own script
+     # inline (`| python -c "import json; ..."`): then the download is only data on stdin.
+     r"|\b(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]*\|\s*"
+     r"(iex|(sh|bash|zsh|python([0-9]+(\.[0-9]+)?)?|py|node|pwsh|powershell)\b(?!(\.exe)?\s+-(c|e|command)\b))",
      "it runs hidden or downloaded code"),
 ]
 DENY_RES = [(re.compile(pattern), reason) for pattern, reason in _DENY_PATTERNS]
@@ -293,7 +296,8 @@ MAX_GLOB_MATCHES = 200
 GLOB_SAFE_PROGRAMS = {"ls", "dir", "gci", "get-childitem"}
 
 
-WEB_URL_RE = re.compile(r"^https?://[^/\\\s]", re.IGNORECASE)
+# The text before a colon ends in the scheme of a web URL (`https`, `'https`, `-Uri:http`).
+WEB_SCHEME_END_RE = re.compile(r"(?:^|[^a-z0-9+.-])https?$", re.IGNORECASE)
 
 
 def path_words(command: str, cwd: str | None = None) -> list[str]:
@@ -314,10 +318,14 @@ def path_words(command: str, cwd: str | None = None) -> list[str]:
                 candidates = [value]
                 # `rev:path` adds the path part. A web URL's part after the colon is `//host/...`,
                 # which reads as a Windows share (\\host\share) and would be refused, so an http(s)
-                # URL written with forward slashes stays whole. smb://, file:// and backslash
+                # URL written with forward slashes stays whole, also inside a longer quoted script
+                # (powershell -Command "... -Uri 'https://...'"). smb://, file:// and backslash
                 # spellings still add it, and those stay refused.
-                if ":" in value and not re.match(r"^[a-zA-Z]:[\\/]", value) and not WEB_URL_RE.match(value):
-                    candidates.append(value.split(":", 1)[1])
+                if ":" in value and not re.match(r"^[a-zA-Z]:[\\/]", value):
+                    before, after = value.split(":", 1)
+                    web_url = after.startswith("//") and not after.startswith(("///", "//\\"))
+                    if not (web_url and WEB_SCHEME_END_RE.search(before)):
+                        candidates.append(after)
                 for candidate in candidates:
                     if candidate:
                         found.append(candidate)
